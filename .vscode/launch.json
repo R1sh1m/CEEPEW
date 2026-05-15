@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ESP32: Attach (idf.py gdb / gdbstub)",
+      "type": "cppdbg",
+      "request": "launch",
+      "description": "Requires gdbstub enabled in menuconfig. Run 'idf: gdb' task FIRST in terminal, then attach here.",
+      "program": "${workspaceFolder}/build/ceepew.elf",
+      "cwd": "${workspaceFolder}",
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:\\Espressif\\tools\\xtensa-esp-elf-gdb\\16.3_20250913\\xtensa-esp-elf-gdb\\bin\\xtensa-esp32-elf-gdb.exe",
+      "miDebuggerArgs": ["-ex", "set serial baud 115200"],
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Connect to gdbstub on COM5",
+          "text": "target remote COM5",
+          "ignoreFailures": false
+        }
+      ]
+    }
+  ]
+}

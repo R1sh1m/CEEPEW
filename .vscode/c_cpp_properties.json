@@ -1,0 +1,28 @@
+{
+  "configurations": [
+    {
+      "name": "ESP32 (CEE-PEW)",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/main",
+        "${workspaceFolder}/components/**",
+        "${workspaceFolder}/build",
+        "C:\\esp\\v6.0.1\\esp-idf\\components/**",
+        "C:\\Espressif\\tools\\xtensa-esp-elf\\esp-15.2.0_20251204\\xtensa-esp-elf\\include",
+        "C:\\Espressif\\tools\\xtensa-esp-elf\\esp-15.2.0_20251204\\xtensa-esp-elf\\xtensa-esp-elf\\include"
+      ],
+      "defines": [
+        "ESP_PLATFORM",
+        "IDF_VER=\"6.0.1\"",
+        "CEEPEW_PROJECT"
+      ],
+      "compilerPath": "C:\\Espressif\\tools\\xtensa-esp-elf\\esp-15.2.0_20251204\\xtensa-esp-elf\\bin\\xtensa-esp32-elf-gcc.exe",
+      "intelliSenseMode": "gcc-x64",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "configurationProvider": "ms-vscode.cmake-tools"
+    }
+  ],
+  "version": 4
+}
