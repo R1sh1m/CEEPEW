@@ -1,4 +1,9 @@
 idf_component_register(
-    SRCS "*.c"
-    INCLUDE_DIRS "."
+    SRCS
+        "compress_huffman.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_common
+        log
 )

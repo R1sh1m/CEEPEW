@@ -1,5 +1,17 @@
 idf_component_register(
-    SRCS "*.c"
-    INCLUDE_DIRS "."
-    REQUIRES hal crypto ecc
+    SRCS
+        "transport_espnow.c"
+        "transport_replay.c"
+        "transport_esl.c"
+        "transport_stream.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        ceepew_hal
+        crypto
+        ecc
+        mem
+        esp_wifi
+        log
+        esp_common
 )

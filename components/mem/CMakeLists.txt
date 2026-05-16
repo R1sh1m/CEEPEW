@@ -1,4 +1,10 @@
 idf_component_register(
-    SRCS "*.c"
-    INCLUDE_DIRS "."
+    SRCS
+       
+        "ceepew_pipeline.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_common
+        log
 )

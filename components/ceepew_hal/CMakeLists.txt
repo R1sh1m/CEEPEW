@@ -1,0 +1,25 @@
+idf_component_register(
+    SRCS
+        "hal_pins.c"
+        "hal_adc.c"
+        "hal_oled.c"
+        "hal_input.c"
+        "hal_radio.c"
+        "hal_rng.c"
+       
+        "hal_timer.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_driver_gpio
+        esp_adc
+        esp_timer
+        esp_wifi
+        esp_netif
+        esp_event
+        nvs_flash
+        log
+        freertos
+        esp_common
+)

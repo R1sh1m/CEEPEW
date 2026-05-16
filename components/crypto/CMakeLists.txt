@@ -1,4 +1,17 @@
 idf_component_register(
-    SRCS "*.c"
-    INCLUDE_DIRS "."
+    SRCS
+        "crypto_ascon.c"
+        "crypto_ecdh.c"
+        "crypto_eddsa.c"
+        "crypto_hkdf.c"
+        "crypto_sha256.c"
+        "crypto_rng.c"
+        "crypto_pad.c"
+    INCLUDE_DIRS
+        "."
+        "${CMAKE_SOURCE_DIR}/mbedtls"
+    REQUIRES
+        ceepew_hal
+        mbedtls
+        log
 )

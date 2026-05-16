@@ -1,0 +1,27 @@
+# sdkconfig.defaults — CEE-PEW development build
+# Secure Boot and Flash Encryption are DISABLED here.
+# These are production-only features that cannot be enabled
+# until the firmware is complete and ready for final flash.
+# Re-enable them only for the production release build.
+
+# Target lock — belt-and-suspenders alongside CMakeLists.txt
+CONFIG_IDF_TARGET="esp32"
+
+# Explicitly select GCC toolchain — prevents Clang being picked up
+CONFIG_IDF_TOOLCHAIN="gcc"
+
+# Watchdog — keep crypto task alive
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Stack protector (safe to enable early)
+CONFIG_COMPILER_STACK_CHECK_MODE_STRONG=y
+
+# No C++ exceptions — we use error codes
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+
+# Heap poisoning — catches heap misuse/corruption in development builds
+CONFIG_HEAP_POISONING_LIGHT=y
+
+# FreeRTOS tick rate
+CONFIG_FREERTOS_HZ=1000

@@ -3,33 +3,41 @@
 #include "crypto_rng.h"
 #include "../../main/ceepew_assert.h"
 #include "../../main/ceepew_config.h"
+#include "esp_system.h"
+#include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
-#include "esp_system.h"  /* esp_fill_random */
+#define CEEPEW_RNG_CHUNK_BYTES 32U
 
-#define CEEPEW_RNG_SAMPLE_BYTES 16U
-#define CEEPEW_RNG_MAX_BYTES 512U
+static CeePewErr_t rng_fill_esp(uint8_t *buf, uint32_t len)
+{
+    CEEPEW_ASSERT(buf != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len > 0U && len <= CEEPEW_REGION_POOL_BYTES, CEEPEW_ERR_BOUNDS);
+
+    uint32_t offset = 0U;
+    /* loop bound: len validated <= CEEPEW_REGION_POOL_BYTES */
+    for (; offset < len; offset += CEEPEW_RNG_CHUNK_BYTES)
+    {
+        uint32_t remain = len - offset;
+        uint32_t chunk = (remain < CEEPEW_RNG_CHUNK_BYTES) ? remain : CEEPEW_RNG_CHUNK_BYTES;
+        esp_fill_random(&buf[offset], (size_t)chunk);
+    }
+
+    uint8_t non_zero_acc = 0U;
+    /* loop bound: len validated <= CEEPEW_REGION_POOL_BYTES */
+    for (uint32_t i = 0U; i < len; i++)
+    {
+        non_zero_acc |= buf[i];
+    }
+    CEEPEW_ASSERT(non_zero_acc != 0U, CEEPEW_ERR_CRYPTO);
+
+    return CEEPEW_OK;
+}
 
 CeePewErr_t crypto_rng_fill(uint8_t *buf, uint32_t len)
 {
     CEEPEW_ASSERT(buf != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(len > 0U && len <= CEEPEW_RNG_MAX_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(len > 0U && len <= CEEPEW_REGION_POOL_BYTES, CEEPEW_ERR_BOUNDS);
 
-    esp_fill_random(buf, (size_t)len);
-
-    /* Verify not all-zero on first sample bytes */
-    uint8_t acc = 0U;
-    uint32_t sample = (len < CEEPEW_RNG_SAMPLE_BYTES) ? len : CEEPEW_RNG_SAMPLE_BYTES;
-    /* Compile-time bounded loop up to CEEPEW_RNG_SAMPLE_BYTES to satisfy loop-bound rule */
-    for (uint32_t i = 0U; i < CEEPEW_RNG_SAMPLE_BYTES; i++) {
-        if (i >= sample) { break; }
-        acc |= buf[i];
-    }
-
-    if (acc == 0U) {
-        return CEEPEW_ERR_CRYPTO;
-    }
-
-    return CEEPEW_OK;
+    return rng_fill_esp(buf, len);
 }

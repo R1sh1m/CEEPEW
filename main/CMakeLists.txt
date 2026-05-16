@@ -1,5 +1,17 @@
 idf_component_register(
-    SRCS "ceepew_assert.c"
-    INCLUDE_DIRS "."
+    SRCS
+        "main.c"
+    INCLUDE_DIRS
+        "."
     REQUIRES
+        ceepew_hal
+        crypto
+        ecc
+        compress
+        transport
+        mem
+        tools
+        esp_event
+        freertos
+        log
 )

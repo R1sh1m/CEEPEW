@@ -1,23 +1,19 @@
-# ESP-IDF build artifacts
 build/
 .cache/
 sdkconfig
-sdkconfig.old
-
-# Keys — NEVER commit
+sdkconfig.defaults
+sdkconfig.production
 keys/
 *.pem
 *.key
 *.p12
-
-# IDE
-.vscode/ipch/
-*.orig
-
-# macOS
-.DS_Store
-
-# Python
+.vscode/
 __pycache__/
 *.pyc
 venv/
+Research/
+.github/
+.vcode/
+.gitignore
+.editorconfig
+.cspell/

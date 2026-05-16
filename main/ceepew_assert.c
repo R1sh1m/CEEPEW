@@ -5,6 +5,36 @@
 
 static const char *TAG = "CEEPEW";
 
+static const char *ceepew_err_to_str(CeePewErr_t code)
+{
+    switch (code)
+    {
+        case CEEPEW_OK: return "CEEPEW_OK";
+        case CEEPEW_ERR_NULL_PTR: return "CEEPEW_ERR_NULL_PTR";
+        case CEEPEW_ERR_BOUNDS: return "CEEPEW_ERR_BOUNDS";
+        case CEEPEW_ERR_PARAM: return "CEEPEW_ERR_PARAM";
+        case CEEPEW_ERR_NONCE_EXHAUSTED: return "CEEPEW_ERR_NONCE_EXHAUSTED";
+        case CEEPEW_ERR_CRYPTO: return "CEEPEW_ERR_CRYPTO";
+        case CEEPEW_ERR_TRANSPORT: return "CEEPEW_ERR_TRANSPORT";
+        case CEEPEW_ERR_FEC: return "CEEPEW_ERR_FEC";
+        case CEEPEW_ERR_PINS: return "CEEPEW_ERR_PINS";
+        case CEEPEW_ERR_ALLOC: return "CEEPEW_ERR_ALLOC";
+        case CEEPEW_ERR_INTERNAL: return "CEEPEW_ERR_INTERNAL";
+        case CEEPEW_ERR_TIMEOUT: return "CEEPEW_ERR_TIMEOUT";
+        case CEEPEW_ERR_OVERFLOW: return "CEEPEW_ERR_OVERFLOW";
+        case CEEPEW_ERR_UNSUPPORTED: return "CEEPEW_ERR_UNSUPPORTED";
+        case CEEPEW_ERR_BUSY: return "CEEPEW_ERR_BUSY";
+        case CEEPEW_ERR_HW: return "CEEPEW_ERR_HW";
+        case CEEPEW_ERR_NOENT: return "CEEPEW_ERR_NOENT";
+        case CEEPEW_ERR_REPLAY: return "CEEPEW_ERR_REPLAY";
+        case CEEPEW_ERR_SIG_FAIL: return "CEEPEW_ERR_SIG_FAIL";
+        case CEEPEW_ERR_MAX_RETRIES: return "CEEPEW_ERR_MAX_RETRIES";
+        case CEEPEW_ERR_AUTH_FAIL: return "CEEPEW_ERR_AUTH_FAIL";
+        case CEEPEW_ERR_FEC_UNCORRECT: return "CEEPEW_ERR_FEC_UNCORRECT";
+        default: return "CEEPEW_ERR_UNKNOWN";
+    }
+}
+
 void ceepew_log_assert(const char *expr, const char *file, int line, CeePewErr_t code)
 {
     /* Two guard assertions as required */
@@ -12,12 +42,12 @@ void ceepew_log_assert(const char *expr, const char *file, int line, CeePewErr_t
     CEEPEW_ASSERT_VOID(expr != NULL);
 
     /* Log using ESP_LOGE with the exact required format */
-    ESP_LOGE(TAG, "[CEEPEW ASSERT] %s:%d — %s (err=%d)",
-             file, line, expr, (int)code);
+    ESP_LOGE(TAG, "[CEEPEW ASSERT] %s:%d - %s (err=%s:%d)",
+             file, line, expr, ceepew_err_to_str(code), (int)code);
 
 #ifdef CEEPEW_DEBUG_SERIAL
     /* Duplicate to serial logger when debugging enabled */
-    ESP_LOGE(TAG, "[CEEPEW ASSERT] %s:%d — %s (err=%d)",
-             file, line, expr, (int)code);
+    ESP_LOGE(TAG, "[CEEPEW ASSERT] %s:%d - %s (err=%s:%d)",
+             file, line, expr, ceepew_err_to_str(code), (int)code);
 #endif
 }
