@@ -1,7 +1,7 @@
 /* components/ceepew_hal/hal_oled.c */
 
 #include "hal_oled.h"
-#include "hal_pins.h"
+#include "../hal/hal_pins.h"
 #include "../../main/ceepew_config.h"
 #include "../../main/ceepew_assert.h"
 
@@ -23,16 +23,12 @@
 
 static const char *TAG = "hal_oled";
 
-typedef struct
-{
+typedef struct {
     bool initialised;
     uint8_t framebuffer[CEEPEW_OLED_FB_BYTES];
 } OledState_t;
 
-static OledState_t s_state = {
-    .initialised = false,
-    .framebuffer = {0U},
-};
+static OledState_t s_state = { .initialised = false, .framebuffer = {0U},};
 
 static const uint8_t s_glyph_question[5] = {0x02U, 0x01U, 0x59U, 0x09U, 0x06U};
 static const uint8_t s_glyph_space[5] = {0U, 0U, 0U, 0U, 0U};
@@ -84,15 +80,10 @@ static const uint8_t s_glyph_X[5] = {0x63U, 0x14U, 0x08U, 0x14U, 0x63U};
 static const uint8_t s_glyph_Y[5] = {0x03U, 0x04U, 0x78U, 0x04U, 0x03U};
 static const uint8_t s_glyph_Z[5] = {0x61U, 0x51U, 0x49U, 0x45U, 0x43U};
 
-static const uint8_t *oled_glyph_for_char(char ch)
-{
-    if ((ch >= 'a') && (ch <= 'z'))
-    {
-        ch = (char)(ch - ('a' - 'A'));
-    }
+static const uint8_t *oled_glyph_for_char(char ch) {
+    if ((ch >= 'a') && (ch <= 'z')) { ch = (char)(ch - ('a' - 'A')); }
 
-    switch (ch)
-    {
+    switch (ch) {
     case ' ':
         return s_glyph_space;
     case '!':
@@ -192,67 +183,43 @@ static const uint8_t *oled_glyph_for_char(char ch)
     }
 }
 
-static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on)
-{
+static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on) {
     const uint16_t index = (uint16_t)x + (uint16_t)((uint16_t)y / 8U) * (uint16_t)CEEPEW_OLED_WIDTH_PX;
     const uint8_t bit = (uint8_t)(1U << (y & 7U));
-    if (on)
-    {
+    if (on) {
         s_state.framebuffer[index] = (uint8_t)(s_state.framebuffer[index] | bit);
     }
-    else
-    {
+    else {
         s_state.framebuffer[index] = (uint8_t)(s_state.framebuffer[index] & (uint8_t)~bit);
     }
 }
 
-static CeePewErr_t oled_write_cmd1(uint8_t cmd)
-{
+static CeePewErr_t oled_write_cmd1(uint8_t cmd) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-
     const uint8_t packet[2] = {0x00U, cmd};
-    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT,
-                                              CEEPEW_OLED_I2C_ADDR,
-                                              packet,
-                                              sizeof(packet),
-                                              pdMS_TO_TICKS(50U));
+    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT, CEEPEW_OLED_I2C_ADDR, packet, sizeof(packet), pdMS_TO_TICKS(50U));
     return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
 }
 
-static CeePewErr_t oled_write_cmd2(uint8_t cmd, uint8_t arg)
-{
+static CeePewErr_t oled_write_cmd2(uint8_t cmd, uint8_t arg) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-
     const uint8_t packet[3] = {0x00U, cmd, arg};
-    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT,
-                                              CEEPEW_OLED_I2C_ADDR,
-                                              packet,
-                                              sizeof(packet),
-                                              pdMS_TO_TICKS(50U));
+    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT, CEEPEW_OLED_I2C_ADDR, packet, sizeof(packet), pdMS_TO_TICKS(50U));
     return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
 }
 
-static CeePewErr_t oled_send_page(uint8_t page)
-{
+static CeePewErr_t oled_send_page(uint8_t page) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(page < CEEPEW_OLED_PAGE_COUNT, CEEPEW_ERR_BOUNDS);
-
     uint8_t packet[1U + CEEPEW_OLED_WIDTH_PX];
     packet[0] = 0x40U;
     memcpy(&packet[1], &s_state.framebuffer[(uint16_t)page * (uint16_t)CEEPEW_OLED_WIDTH_PX], CEEPEW_OLED_WIDTH_PX);
-
-    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT,
-                                              CEEPEW_OLED_I2C_ADDR,
-                                              packet,
-                                              sizeof(packet),
-                                              pdMS_TO_TICKS(50U));
+    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT, CEEPEW_OLED_I2C_ADDR, packet, sizeof(packet), pdMS_TO_TICKS(50U));
     return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
 }
 
-static CeePewErr_t oled_configure_display(void)
-{
+static CeePewErr_t oled_configure_display(void) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-
     CeePewErr_t err = oled_write_cmd1(0xAEU); /* display off */
     if (err != CEEPEW_OK) { return err; }
     err = oled_write_cmd2(0xD5U, 0x80U);
@@ -285,83 +252,61 @@ static CeePewErr_t oled_configure_display(void)
     if (err != CEEPEW_OK) { return err; }
     err = oled_write_cmd1(0xAFU); /* display on */
     if (err != CEEPEW_OK) { return err; }
-
     return CEEPEW_OK;
 }
 
-static void oled_draw_glyph(uint8_t x, uint8_t y, const uint8_t *glyph)
-{
+static void oled_draw_glyph(uint8_t x, uint8_t y, const uint8_t *glyph){
     CEEPEW_ASSERT_VOID(glyph != NULL);
-    CEEPEW_ASSERT_VOID(x <= (uint8_t)(CEEPEW_OLED_WIDTH_PX - CEEPEW_OLED_TEXT_GLYPH_W) &&
-                       y <= (uint8_t)(CEEPEW_OLED_HEIGHT_PX - CEEPEW_OLED_TEXT_GLYPH_H));
-
-    for (uint8_t row = 0U; row < 7U; row++)
-    {
-        for (uint8_t col = 0U; col < 5U; col++)
-        {
+    CEEPEW_ASSERT_VOID(x <= (uint8_t)(CEEPEW_OLED_WIDTH_PX - CEEPEW_OLED_TEXT_GLYPH_W) && y <= (uint8_t)(CEEPEW_OLED_HEIGHT_PX - CEEPEW_OLED_TEXT_GLYPH_H));
+    for (uint8_t row = 0U; row < 8U; row++) {
+        for (uint8_t col = 0U; col < 5U; col++) {
             const bool on = ((glyph[col] >> row) & 0x01U) != 0U;
             oled_set_pixel_unchecked((uint8_t)(x + col), (uint8_t)(y + row), on);
         }
     }
 }
 
-CeePewErr_t hal_oled_init(void)
-{
+CeePewErr_t hal_oled_init(void){
     CEEPEW_ASSERT(!s_state.initialised, CEEPEW_ERR_BUSY);
-    CEEPEW_ASSERT(GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SDA) && GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SCL),
-                  CEEPEW_ERR_PINS);
-
+    CEEPEW_ASSERT(GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SDA) && GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SCL), CEEPEW_ERR_PINS);
     CEEPEW_ASSERT(CEEPEW_OLED_WIDTH_PX == 128U && CEEPEW_OLED_HEIGHT_PX == 64U, CEEPEW_ERR_PARAM);
-
+    /* Disable automatic internal pull-ups here to avoid platform-specific
+       "input-only pad has no internal PU" errors on some chips; rely on board
+       external pull-ups or configure pull-ups explicitly elsewhere if needed. */
     i2c_config_t cfg = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = CEEPEW_PIN_I2C_SDA,
         .scl_io_num = CEEPEW_PIN_I2C_SCL,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .sda_pullup_en = GPIO_PULLUP_DISABLE,
+        .scl_pullup_en = GPIO_PULLUP_DISABLE,
         .master.clk_speed = CEEPEW_I2C_FREQ_HZ,
     };
-
     esp_err_t rc = i2c_param_config(CEEPEW_I2C_PORT, &cfg);
-    if (rc != ESP_OK)
-    {
-        return CEEPEW_ERR_HW;
-    }
+    if (rc != ESP_OK){ return CEEPEW_ERR_HW;}
+    /* Install driver with default buffer sizes (no RX/TX buffers for master). */
     rc = i2c_driver_install(CEEPEW_I2C_PORT, I2C_MODE_MASTER, 0, 0, 0);
-    if (rc != ESP_OK)
-    {
-        return CEEPEW_ERR_HW;
-    }
-
+    if (rc != ESP_OK){ return CEEPEW_ERR_HW;}
     s_state.initialised = true;
     memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
-
     rc = oled_configure_display();
-    if (rc != CEEPEW_OK)
-    {
+    if (rc != CEEPEW_OK){
         (void)i2c_driver_delete(CEEPEW_I2C_PORT);
         s_state.initialised = false;
         return rc;
     }
-
     ESP_LOGI(TAG, "OLED initialised");
     return hal_oled_clear();
 }
 
-CeePewErr_t hal_oled_clear(void)
-{
+CeePewErr_t hal_oled_clear(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-
     memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
     return hal_oled_flush();
 }
 
-CeePewErr_t hal_oled_flush(void)
-{
+CeePewErr_t hal_oled_flush(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-
-    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++)
-    {
+    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++){
         CeePewErr_t err = oled_write_cmd1((uint8_t)(0xB0U | page));
         if (err != CEEPEW_OK) { return err; }
         err = oled_write_cmd1(0x00U);
@@ -371,25 +316,20 @@ CeePewErr_t hal_oled_flush(void)
         err = oled_send_page(page);
         if (err != CEEPEW_OK) { return err; }
     }
-
     return CEEPEW_OK;
 }
 
-CeePewErr_t hal_oled_draw_pixel(uint8_t x, uint8_t y, bool on)
-{
+CeePewErr_t hal_oled_draw_pixel(uint8_t x, uint8_t y, bool on){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(x < CEEPEW_OLED_WIDTH_PX && y < CEEPEW_OLED_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
-
     oled_set_pixel_unchecked(x, y, on);
     return CEEPEW_OK;
 }
 
-CeePewErr_t hal_oled_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool on)
-{
+CeePewErr_t hal_oled_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool on) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(x0 < CEEPEW_OLED_WIDTH_PX && y0 < CEEPEW_OLED_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(x1 < CEEPEW_OLED_WIDTH_PX && y1 < CEEPEW_OLED_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
-
     int32_t dx = (x1 > x0) ? (int32_t)(x1 - x0) : (int32_t)(x0 - x1);
     int32_t sx = (x0 < x1) ? 1 : -1;
     int32_t dy = -((y1 > y0) ? (int32_t)(y1 - y0) : (int32_t)(y0 - y1));
@@ -397,102 +337,62 @@ CeePewErr_t hal_oled_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, b
     int32_t err = dx + dy;
     int32_t x = (int32_t)x0;
     int32_t y = (int32_t)y0;
-
-    for (uint32_t i = 0U; i < ((uint32_t)CEEPEW_OLED_WIDTH_PX + (uint32_t)CEEPEW_OLED_HEIGHT_PX); i++)
-    {
+    for (uint32_t i = 0U; i < ((uint32_t)CEEPEW_OLED_WIDTH_PX + (uint32_t)CEEPEW_OLED_HEIGHT_PX); i++) {
         oled_set_pixel_unchecked((uint8_t)x, (uint8_t)y, on);
-        if ((x == (int32_t)x1) && (y == (int32_t)y1))
-        {
-            break;
-        }
-
+        if ((x == (int32_t)x1) && (y == (int32_t)y1)) { break;}
         const int32_t twice_err = (int32_t)(2 * err);
-        if (twice_err >= dy)
-        {
+        if (twice_err >= dy){
             err += dy;
-            x += sx;
-        }
-        if (twice_err <= dx)
-        {
+            x += sx;}
+        if (twice_err <= dx){
             err += dx;
             y += sy;
         }
     }
-
     return CEEPEW_OK;
 }
 
-CeePewErr_t hal_oled_fill_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, bool on)
-{
+CeePewErr_t hal_oled_fill_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, bool on) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(x < CEEPEW_OLED_WIDTH_PX && y < CEEPEW_OLED_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(w > 0U && h > 0U, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(w <= (uint8_t)(CEEPEW_OLED_WIDTH_PX - x) && h <= (uint8_t)(CEEPEW_OLED_HEIGHT_PX - y),
-                  CEEPEW_ERR_BOUNDS);
-
-    for (uint8_t yy = 0U; yy < CEEPEW_OLED_HEIGHT_PX; yy++)
-    {
-        if (yy >= h)
-        {
-            break;
-        }
-        for (uint8_t xx = 0U; xx < CEEPEW_OLED_WIDTH_PX; xx++)
-        {
-            if (xx >= w)
-            {
-                break;
-            }
+    CEEPEW_ASSERT(w <= (uint8_t)(CEEPEW_OLED_WIDTH_PX - x) && h <= (uint8_t)(CEEPEW_OLED_HEIGHT_PX - y), CEEPEW_ERR_BOUNDS);
+    for (uint8_t yy = 0U; yy < CEEPEW_OLED_HEIGHT_PX; yy++) {
+        if (yy >= h) { break; }
+        for (uint8_t xx = 0U; xx < CEEPEW_OLED_WIDTH_PX; xx++){
+            if (xx >= w){ break;}
             oled_set_pixel_unchecked((uint8_t)(x + xx), (uint8_t)(y + yy), on);
         }
     }
-
     return CEEPEW_OK;
 }
 
-CeePewErr_t hal_oled_draw_char(uint8_t x, uint8_t y, char ch)
-{
+CeePewErr_t hal_oled_draw_char(uint8_t x, uint8_t y, char ch) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(x <= (uint8_t)(CEEPEW_OLED_WIDTH_PX - CEEPEW_OLED_TEXT_GLYPH_W), CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(y <= (uint8_t)(CEEPEW_OLED_HEIGHT_PX - CEEPEW_OLED_TEXT_GLYPH_H), CEEPEW_ERR_BOUNDS);
-
-    for (uint8_t row = 0U; row < CEEPEW_OLED_TEXT_GLYPH_H; row++)
-    {
-        for (uint8_t col = 0U; col < CEEPEW_OLED_TEXT_GLYPH_W; col++)
-        {
+    for (uint8_t row = 0U; row < CEEPEW_OLED_TEXT_GLYPH_H; row++) {
+        for (uint8_t col = 0U; col < CEEPEW_OLED_TEXT_GLYPH_W; col++) {
             oled_set_pixel_unchecked((uint8_t)(x + col), (uint8_t)(y + row), false);
         }
     }
-
     oled_draw_glyph(x, y, oled_glyph_for_char(ch));
     return CEEPEW_OK;
 }
 
-CeePewErr_t hal_oled_draw_text(uint8_t x, uint8_t y, const char *text)
-{
+CeePewErr_t hal_oled_draw_text(uint8_t x, uint8_t y, const char *text) {
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(text != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(x < CEEPEW_OLED_WIDTH_PX, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(y <= (uint8_t)(CEEPEW_OLED_HEIGHT_PX - CEEPEW_OLED_TEXT_GLYPH_H), CEEPEW_ERR_BOUNDS);
-
     uint8_t cursor_x = x;
-    for (uint8_t i = 0U; i < CEEPEW_OLED_MAX_TEXT_CHARS; i++)
-    {
+    for (uint8_t i = 0U; i < CEEPEW_OLED_MAX_TEXT_CHARS; i++) {
         const char ch = text[i];
-        if (ch == '\0')
-        {
-            break;
-        }
-        if (cursor_x > (uint8_t)(CEEPEW_OLED_WIDTH_PX - CEEPEW_OLED_TEXT_GLYPH_W))
-        {
-            break;
-        }
+        if (ch == '\0') { break;}
+        if (cursor_x > (uint8_t)(CEEPEW_OLED_WIDTH_PX - CEEPEW_OLED_TEXT_GLYPH_W)) { break;}
         CeePewErr_t err = hal_oled_draw_char(cursor_x, y, ch);
-        if (err != CEEPEW_OK)
-        {
-            return err;
-        }
+        if (err != CEEPEW_OK) { return err;}
         cursor_x = (uint8_t)(cursor_x + CEEPEW_OLED_TEXT_GLYPH_W);
     }
-
     return CEEPEW_OK;
 }
