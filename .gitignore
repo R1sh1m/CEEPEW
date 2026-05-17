@@ -1,7 +1,9 @@
 build/
 .cache/
 sdkconfig
+
 sdkconfig.defaults
+
 sdkconfig.production
 keys/
 *.pem
@@ -11,9 +13,14 @@ keys/
 __pycache__/
 *.pyc
 venv/
-Research/
 .github/
+.git/
+.venv/
 .vcode/
 .gitignore
 .editorconfig
 .cspell/
+.cspell.json
+eim_config.toml
+project_snapshot.ps1
+project_snapshot_md.ps1
