@@ -9,7 +9,6 @@ keys/
 __pycache__/
 *.pyc
 venv/
-.github/
 .git/
 .venv/
 .vcode/
@@ -22,3 +21,5 @@ project_snapshot.ps1
 project_snapshot_md.ps1
 Research/
 sdkconfig.defaults
+sdkconfig.old
+.github/
