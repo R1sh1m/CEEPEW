@@ -19,7 +19,9 @@ venv/
 eim_config.toml
 project_snapshot.ps1
 project_snapshot_md.ps1
-Research/
+
 sdkconfig.defaults
 sdkconfig.old
 .github/
+.clangd
+sdkconfig.production
