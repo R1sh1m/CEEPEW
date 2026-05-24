@@ -18,7 +18,7 @@
    current screen, animation state, and user input. Each screen state calls
    its corresponding render function. Transitions between screens are driven
    by completion flags and user input. This architecture allows all 9 screen
-   types (Sprints 8-12) to coexist in one efficient state machine. */
+   types to coexist in one efficient state machine. */
 
 /* Weak reference to BLE context; actual definition lives in transport_ble.c
    but a weak symbol here allows building/linking in configurations where the
@@ -37,8 +37,7 @@ static bool s_ui_manager_initialised = false;
 static CeePewErr_t render_fingerprint_confirm(void);
 static CeePewErr_t render_error(void);
 
-CeePewErr_t ui_manager_init(void)
-{
+CeePewErr_t ui_manager_init(void){
     CEEPEW_ASSERT(!s_ui_manager_initialised, CEEPEW_ERR_BUSY);
 
     memset(&g_ui_ctx, 0U, sizeof(UIContext_t));
@@ -136,10 +135,7 @@ static void draw_circle(int16_t cx, int16_t cy, uint8_t r)
  * angle defined by endpoint (ex, ey) from centre (cx, cy).
  * r_near..r_far: the radial band to fill (for trail gradient effect).
  * Implemented as a line segment from the near point to the far point. */
-static void draw_radial_segment(int16_t cx, int16_t cy,
-                                int16_t ex, int16_t ey,
-                                uint8_t r_near, uint8_t r_far)
-{
+static void draw_radial_segment(int16_t cx, int16_t cy, int16_t ex, int16_t ey, uint8_t r_near, uint8_t r_far){
     /* Interpolate near point along the (cx,cy)→(ex,ey) vector */
     /* Full length is r_far (outer ring radius) */
     /* near point: r_near/r_far fraction along the arm */
@@ -152,8 +148,7 @@ static void draw_radial_segment(int16_t cx, int16_t cy,
 }
 
 /* RSSI dBm → bar count 1–5 */
-static uint8_t rssi_to_bars(int8_t rssi)
-{
+static uint8_t rssi_to_bars(int8_t rssi){
     if (rssi >= -50) { return 5U; }
     if (rssi >= -60) { return 4U; }
     if (rssi >= -70) { return 3U; }
@@ -256,7 +251,7 @@ static void draw_rect_outline(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
 /*   [============================          ] 47%                             */
 /*    ^bar_x+1                    ^fill_w    ^bar_x + w + 4                  */
 /* ────────────────────────────────────────────────────────────────────────── */
-static void draw_progress_bar(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t pct)
+static __attribute__((unused)) void draw_progress_bar(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t pct)
 {
     if (pct > 100U) { pct = 100U; }
     if (w < 4U || h < 3U) { return; }   /* minimum usable size */
@@ -290,7 +285,7 @@ static void draw_progress_bar(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_
 /* HELPER: safe scrolling text (wraps a static string into a 22-char window) */
 /* ────────────────────────────────────────────────────────────────────────── */
 #define SCROLL_BUF_LEN  22U
-static void draw_scroll_text(uint8_t x, uint8_t y,
+static __attribute__((unused)) void draw_scroll_text(uint8_t x, uint8_t y,
                               const char *src, uint8_t src_len,
                               uint32_t now_ms, uint32_t step_ms)
 {

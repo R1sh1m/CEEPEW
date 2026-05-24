@@ -23,8 +23,10 @@
 #include "esp_err.h"
 #endif
 
+#ifdef CONFIG_BT_ENABLED
 static const char *TAG = "transport_ble";
 static BlePeerRecord_t s_discovered_peer = {0};
+#endif
 
 #ifdef CONFIG_BT_ENABLED
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
