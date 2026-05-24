@@ -96,8 +96,13 @@ CeePewErr_t transport_ble_init(void)
 
 CeePewErr_t transport_ble_start_advertising(void)
 {
-    CEEPEW_ASSERT(g_ble_ctx.state == BLE_IDLE, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    /* Allow re-entry if already in discovery loop */
+    if (g_ble_ctx.state != BLE_IDLE &&
+        g_ble_ctx.state != BLE_ADVERTISING &&
+        g_ble_ctx.state != BLE_SCANNING) {
+        return CEEPEW_ERR_BUSY;
+    }
 
 #ifdef CONFIG_BT_ENABLED
     esp_err_t err;
@@ -142,6 +147,14 @@ CeePewErr_t transport_ble_start_advertising(void)
         ESP_LOGE(TAG, "esp_ble_gap_start_advertising failed: %d", err);
         return CEEPEW_ERR_HW;
     }
+
+    /* Also start scanning so we find peers simultaneously (best-effort). */
+    err = esp_ble_gap_start_scanning(0); /* continuous */
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_ble_gap_start_scanning failed: %d", err);
+    } else {
+        ESP_LOGI(TAG, "BLE scanning started (simultaneous)");
+    }
 #else
     /* Bluetooth not enabled in sdkconfig; we still update state for higher-level logic */
     (void)0;
@@ -155,11 +168,16 @@ CeePewErr_t transport_ble_start_advertising(void)
 
 CeePewErr_t transport_ble_start_scan(void)
 {
-    CEEPEW_ASSERT(g_ble_ctx.state == BLE_IDLE, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    /* Allow starting scan while advertising (ESP32 supports simultaneous roles) */
+    if (g_ble_ctx.state != BLE_IDLE &&
+        g_ble_ctx.state != BLE_ADVERTISING &&
+        g_ble_ctx.state != BLE_SCANNING) {
+        return CEEPEW_ERR_BUSY;
+    }
 
 #ifdef CONFIG_BT_ENABLED
-    esp_err_t err = esp_ble_gap_start_scanning(30); /* scan for 30 seconds */
+    esp_err_t err = esp_ble_gap_start_scanning(0); /* continuous */
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gap_start_scanning failed: %d", err);
         return CEEPEW_ERR_HW;
@@ -316,47 +334,113 @@ CeePewErr_t transport_ble_deinit(void)
 #ifdef CONFIG_BT_ENABLED
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
-    /* Minimal handler: observe advertisements and record discovered peer entries. */
     switch (event) {
-        case ESP_GAP_BLE_SCAN_RESULT_EVT: {
-            esp_ble_gap_cb_param_t *p = param;
-            if (p && p->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES) {
-                /* Record first discovered peer (non-invasive). */
-                memcpy(s_discovered_peer.peer_mac, p->scan_rst.bda, 6);
-                s_discovered_peer.rssi = p->scan_rst.rssi;
-                s_discovered_peer.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
-                /* Extract name if present (max 15 chars) from AD structures (TLV) */
-                if (p->scan_rst.adv_data_len > 0 && p->scan_rst.adv_data) {
-                    const uint8_t *adv = p->scan_rst.adv_data;
-                    uint8_t adv_len = p->scan_rst.adv_data_len;
-                    uint8_t idx2 = 0;
-                    while (idx2 + 1 < adv_len) {
-                        uint8_t field_len = adv[idx2];
-                        if (field_len == 0) { break; }
-                        if (idx2 + 1 + field_len > adv_len) { break; }
-                        uint8_t field_type = adv[idx2 + 1];
-                        /* AD types 0x09 = Complete Local Name, 0x08 = Shortened Local Name */
-                        if (field_type == 0x09U || field_type == 0x08U) {
-                            uint8_t name_len = (uint8_t)(field_len - 1U);
-                            if (name_len > 15U) { name_len = 15U; }
-                            memcpy(g_ble_ctx.peer_name, &adv[idx2 + 2], name_len);
-                            g_ble_ctx.peer_name_len = name_len;
-                            /* Ensure NUL-termination in fixed buffer (optional) */
-                            if (name_len < sizeof(g_ble_ctx.peer_name)) {
-                                g_ble_ctx.peer_name[name_len] = '\0';
-                            }
-                            break;
-                        }
-                        idx2 += (uint8_t)(field_len + 1U);
-                    }
-                }
 
-                /* Mark discovered and notify UI manager to switch to discovery screen */
-                g_ble_ctx.discovered = true;
-                g_ble_ctx.peer_rssi = (int8_t)p->scan_rst.rssi;
-                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+        /* Advertising data configured: now start advertising and scanning */
+        case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT: {
+            esp_ble_adv_params_t adv_params = {
+                .adv_int_min       = 0x20,
+                .adv_int_max       = 0x40,
+                .adv_type          = ADV_TYPE_IND,
+                .own_addr_type     = BLE_ADDR_TYPE_PUBLIC,
+                .channel_map       = ADV_CHNL_ALL,
+                .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+            };
+            esp_err_t e = esp_ble_gap_start_advertising(&adv_params);
+            if (e != ESP_OK) {
+                ESP_LOGW(TAG, "start_advertising failed: %d", e);
+            } else {
+                ESP_LOGI(TAG, "BLE advertising started");
+                g_ble_ctx.state = BLE_ADVERTISING;
+            }
+
+            /* Also start scanning so we find peers simultaneously */
+            e = esp_ble_gap_start_scanning(0);   /* 0 = continuous */
+            if (e != ESP_OK) {
+                ESP_LOGW(TAG, "start_scanning failed: %d", e);
+            } else {
+                ESP_LOGI(TAG, "BLE scanning started (simultaneous)");
             }
         } break;
+
+        /* Scan result: only accept other CEEPEW devices */
+        case ESP_GAP_BLE_SCAN_RESULT_EVT: {
+            if (!param) { break; }
+            if (param->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) { break; }
+
+            /* Extract device name from AD structures */
+            const uint8_t *adv    = param->scan_rst.adv_data;
+            uint8_t        adv_len = param->scan_rst.adv_data_len;
+            char           found_name[17] = {0};
+            uint8_t        found_name_len = 0U;
+
+            uint8_t idx = 0U;
+            while (idx + 1U < adv_len) {
+                uint8_t field_len  = adv[idx];
+                if (field_len == 0U) { break; }
+                if ((uint16_t)idx + 1U + field_len > adv_len) { break; }
+                uint8_t field_type = adv[idx + 1U];
+
+                if (field_type == 0x09U || field_type == 0x08U) {   /* complete/shortened name */
+                    found_name_len = (uint8_t)(field_len - 1U);
+                    if (found_name_len > 16U) { found_name_len = 16U; }
+                    memcpy(found_name, &adv[idx + 2U], found_name_len);
+                    found_name[found_name_len] = '\0';
+                    break;
+                }
+                idx = (uint8_t)(idx + field_len + 1U);
+            }
+
+            /* Only accept peers whose name begins with "CEEPEW" */
+            bool is_ceepew_peer = (found_name_len >= 6U &&
+                                   memcmp(found_name, "CEEPEW", 6U) == 0);
+
+            if (!is_ceepew_peer) {
+                /* Ignore non-CEEPEW devices */
+                break;
+            }
+
+            /* Avoid re-processing the same peer we already found */
+            if (g_ble_ctx.discovered &&
+                memcmp(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U) == 0) {
+                break;  /* already logged this peer */
+            }
+
+            ESP_LOGI(TAG, "CEEPEW peer found: %02X:%02X:%02X:%02X:%02X:%02X  RSSI=%d  name=%s",
+                     param->scan_rst.bda[0], param->scan_rst.bda[1],
+                     param->scan_rst.bda[2], param->scan_rst.bda[3],
+                     param->scan_rst.bda[4], param->scan_rst.bda[5],
+                     param->scan_rst.rssi,
+                     found_name);
+
+            /* Record the peer */
+            memcpy(s_discovered_peer.peer_mac, param->scan_rst.bda, 6U);
+            s_discovered_peer.rssi    = (int8_t)param->scan_rst.rssi;
+            s_discovered_peer.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
+            s_discovered_peer.name_len = found_name_len;
+            memcpy(s_discovered_peer.name, found_name, found_name_len);
+            s_discovered_peer.name[found_name_len] = '\0';
+
+            memcpy(g_ble_ctx.peer_mac,   param->scan_rst.bda,  6U);
+            memcpy(g_ble_ctx.peer_name,  found_name,          found_name_len);
+            g_ble_ctx.peer_name_len  = found_name_len;
+            g_ble_ctx.peer_rssi      = (int8_t)param->scan_rst.rssi;
+            g_ble_ctx.discovered     = true;
+            g_ble_ctx.discovery_start_ts = (uint32_t)(esp_timer_get_time() / 1000000LL);
+
+            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+        } break;
+
+        case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
+            ESP_LOGI(TAG, "Scan start complete, status=%d",
+                     param ? param->scan_start_cmpl.status : -1);
+            break;
+
+        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+            ESP_LOGI(TAG, "Adv start complete, status=%d",
+                     param ? param->adv_start_cmpl.status : -1);
+            break;
+
         default:
             break;
     }
