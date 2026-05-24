@@ -209,6 +209,18 @@ static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on) {
     }
 }
 
+/* Helper: reverse bits in a byte (8-bit width). Loop bound: 8 iterations. */
+static inline uint8_t reverse_bits8(uint8_t b)
+{
+    uint8_t r = 0U;
+    /* loop bound: 8U */
+    for (uint8_t i = 0U; i < 8U; i++) {
+        r = (uint8_t)((r << 1U) | (uint8_t)(b & 1U));
+        b = (uint8_t)(b >> 1U);
+    }
+    return r;
+}
+
 static void oled_release_resources(void)
 {
     if (s_state.panel_handle != NULL) {
@@ -384,15 +396,24 @@ CeePewErr_t hal_oled_flush(void){
     
     uint8_t transposed[CEEPEW_OLED_FB_BYTES];
     
-    /* For each 8x8 block, transpose rows and columns */
+    /* Build transposed buffer. Additionally apply a 180-degree rotation so that
+       displays wired upside-down render correctly (segment remap + COM scan remap).
+       Mapping: pixel (x, y) -> (127 - x, 63 - y). Framebuffer is arranged as
+       bytes per column per page: src_idx = x + page*WIDTH, src_byte holds bits for y=page*8..page*8+7.
+       We map each src_byte into dst at dst_page = (PAGE_COUNT-1 - page), dst_x = (WIDTH-1 - x)
+       with bits reversed inside the byte. Loop bounds are fixed and small. */
     for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++) {
         for (uint8_t x = 0U; x < CEEPEW_OLED_WIDTH_PX; x++) {
-            /* Original: byte at [x + page * 128] contains bits for (x, page*8 + 0..7) */
             const uint8_t src_byte = s_state.framebuffer[x + (uint16_t)page * CEEPEW_OLED_WIDTH_PX];
-            
-            /* Destination: we need to write this byte to the page addressing location */
-            const uint16_t dst_idx = (uint16_t)page * CEEPEW_OLED_WIDTH_PX + x;
-            transposed[dst_idx] = src_byte;
+
+            /* Reverse bit order within the byte to map y -> 7 - y */
+            const uint8_t rev = reverse_bits8(src_byte);
+
+            const uint8_t dst_page = (uint8_t)(CEEPEW_OLED_PAGE_COUNT - 1U - page);
+            const uint8_t dst_x = (uint8_t)(CEEPEW_OLED_WIDTH_PX - 1U - x);
+            const uint16_t dst_idx = (uint16_t)dst_page * CEEPEW_OLED_WIDTH_PX + dst_x;
+
+            transposed[dst_idx] = rev;
         }
     }
     
