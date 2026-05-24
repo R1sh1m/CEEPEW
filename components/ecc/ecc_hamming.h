@@ -3,8 +3,8 @@
 #ifndef ECC_HAMMING_H
 #define ECC_HAMMING_H
 
-#include "../../main/ceepew_config.h"
-#include "../../main/ceepew_assert.h"
+#include "ceepew_config.h"
+#include "ceepew_assert.h"
 #include <stdint.h>
 #include <stdbool.h>
 

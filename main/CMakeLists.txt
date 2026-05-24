@@ -1,6 +1,18 @@
 idf_component_register(
     SRCS
         "main.c"
+        "ceepew_assert.c"
+        "ceepew_security_utils.c"
+        "session_fsm.c"
+        "session_msgstore.c"
+        "session_send.c"
+        "task_ui.c"
+        "task_session.c"
+        "integration_test_e2e.c"
+        "test_pipeline_memory.c"
+        "test_replay.c"
+        "test_power.c"
+        "test_hop.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -11,7 +23,10 @@ idf_component_register(
         transport
         mem
         tools
+        esp_system
+        esp_wifi
         esp_event
+        esp_timer
         freertos
         log
 )

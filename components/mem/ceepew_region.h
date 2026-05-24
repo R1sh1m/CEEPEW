@@ -3,8 +3,8 @@
 #ifndef CEEPEW_REGION_H
 #define CEEPEW_REGION_H
 
-#include "../../main/ceepew_config.h"
-#include "../../main/ceepew_assert.h"
+#include "ceepew_config.h"
+#include "ceepew_assert.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -12,15 +12,13 @@
 #define CEEPEW_REGION_ALIGN 8U
 #define CEEPEW_REGION_MAX_ALLOCS 256U
 
-typedef struct
-{
+typedef struct {
     uint32_t offset; /* byte offset from pool base */
     uint32_t size;   /* allocation size in bytes */
     bool in_use;     /* bookkeeping */
 } RegionAlloc_t;
 
-typedef struct
-{
+typedef struct {
     uint8_t pool[CEEPEW_REGION_POOL_BYTES];
     uint32_t bump; /* next free offset */
     uint32_t hwm;  /* high-water mark */

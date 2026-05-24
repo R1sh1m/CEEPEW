@@ -1,13 +1,17 @@
 /* components/ceepew_hal/hal_oled.c */
 
 #include "hal_oled.h"
-#include "../hal/hal_pins.h"
-#include "../../main/ceepew_config.h"
-#include "../../main/ceepew_assert.h"
+#include "hal_pins.h"
+#include "ceepew_config.h"
+#include "ceepew_assert.h"
 
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_io_i2c.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_panel_ssd1306.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,10 +29,21 @@ static const char *TAG = "hal_oled";
 
 typedef struct {
     bool initialised;
+    i2c_master_bus_handle_t bus_handle;
+    esp_lcd_panel_io_handle_t io_handle;
+    esp_lcd_panel_handle_t panel_handle;
+    uint8_t active_addr;
     uint8_t framebuffer[CEEPEW_OLED_FB_BYTES];
 } OledState_t;
 
-static OledState_t s_state = { .initialised = false, .framebuffer = {0U},};
+static OledState_t s_state = {
+    .initialised = false,
+    .bus_handle = NULL,
+    .io_handle = NULL,
+    .panel_handle = NULL,
+    .active_addr = 0U,
+    .framebuffer = {0U},
+};
 
 static const uint8_t s_glyph_question[5] = {0x02U, 0x01U, 0x59U, 0x09U, 0x06U};
 static const uint8_t s_glyph_space[5] = {0U, 0U, 0U, 0U, 0U};
@@ -194,64 +209,75 @@ static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on) {
     }
 }
 
-static CeePewErr_t oled_write_cmd1(uint8_t cmd) {
-    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-    const uint8_t packet[2] = {0x00U, cmd};
-    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT, CEEPEW_OLED_I2C_ADDR, packet, sizeof(packet), pdMS_TO_TICKS(50U));
-    return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
+static void oled_release_resources(void)
+{
+    if (s_state.panel_handle != NULL) {
+        (void)esp_lcd_panel_del(s_state.panel_handle);
+        s_state.panel_handle = NULL;
+    }
+    if (s_state.io_handle != NULL) {
+        (void)esp_lcd_panel_io_del(s_state.io_handle);
+        s_state.io_handle = NULL;
+    }
+    if (s_state.bus_handle != NULL) {
+        (void)i2c_del_master_bus(s_state.bus_handle);
+        s_state.bus_handle = NULL;
+    }
+    s_state.active_addr = 0U;
 }
 
-static CeePewErr_t oled_write_cmd2(uint8_t cmd, uint8_t arg) {
-    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-    const uint8_t packet[3] = {0x00U, cmd, arg};
-    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT, CEEPEW_OLED_I2C_ADDR, packet, sizeof(packet), pdMS_TO_TICKS(50U));
-    return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
-}
+static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
+{
+    esp_lcd_panel_io_i2c_config_t io_config = {
+        .dev_addr = addr,
+        .scl_speed_hz = CEEPEW_I2C_FREQ_HZ,
+        .control_phase_bytes = 1U,
+        .dc_bit_offset = 6U,
+        .lcd_cmd_bits = 8,
+        .lcd_param_bits = 8,
+        .flags = {
+            .dc_low_on_data = 0U,
+            .disable_control_phase = 0U,
+        },
+    };
+    esp_err_t rc = esp_lcd_new_panel_io_i2c(s_state.bus_handle, &io_config, &s_state.io_handle);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
 
-static CeePewErr_t oled_send_page(uint8_t page) {
-    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-    CEEPEW_ASSERT(page < CEEPEW_OLED_PAGE_COUNT, CEEPEW_ERR_BOUNDS);
-    uint8_t packet[1U + CEEPEW_OLED_WIDTH_PX];
-    packet[0] = 0x40U;
-    memcpy(&packet[1], &s_state.framebuffer[(uint16_t)page * (uint16_t)CEEPEW_OLED_WIDTH_PX], CEEPEW_OLED_WIDTH_PX);
-    esp_err_t rc = i2c_master_write_to_device(CEEPEW_I2C_PORT, CEEPEW_OLED_I2C_ADDR, packet, sizeof(packet), pdMS_TO_TICKS(50U));
-    return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
-}
+    esp_lcd_panel_ssd1306_config_t ssd1306_config = {
+        .height = (uint8_t)CEEPEW_OLED_HEIGHT_PX,
+    };
+    esp_lcd_panel_dev_config_t panel_config = {
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
+        .bits_per_pixel = 1U,
+        .reset_gpio_num = -1,
+        .flags = {
+            .reset_active_high = 0U,
+        },
+        .vendor_config = &ssd1306_config,
+    };
 
-static CeePewErr_t oled_configure_display(void) {
-    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-    CeePewErr_t err = oled_write_cmd1(0xAEU); /* display off */
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0xD5U, 0x80U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0xA8U, 0x3FU);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0xD3U, 0x00U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd1(0x40U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0x8DU, 0x14U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0x20U, 0x02U); /* page addressing */
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd1(0xA1U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd1(0xC8U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0xDAU, 0x12U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0x81U, 0x7FU); /* contrast */
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0xD9U, 0xF1U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd2(0xDBU, 0x40U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd1(0xA4U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd1(0xA6U);
-    if (err != CEEPEW_OK) { return err; }
-    err = oled_write_cmd1(0xAFU); /* display on */
-    if (err != CEEPEW_OK) { return err; }
+    rc = esp_lcd_new_panel_ssd1306(s_state.io_handle, &panel_config, &s_state.panel_handle);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
+
+    rc = esp_lcd_panel_reset(s_state.panel_handle);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
+    rc = esp_lcd_panel_init(s_state.panel_handle);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
+    rc = esp_lcd_panel_disp_on_off(s_state.panel_handle, true);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
+
+    s_state.active_addr = addr;
     return CEEPEW_OK;
 }
 
@@ -270,53 +296,84 @@ CeePewErr_t hal_oled_init(void){
     CEEPEW_ASSERT(!s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SDA) && GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SCL), CEEPEW_ERR_PINS);
     CEEPEW_ASSERT(CEEPEW_OLED_WIDTH_PX == 128U && CEEPEW_OLED_HEIGHT_PX == 64U, CEEPEW_ERR_PARAM);
-    /* Disable automatic internal pull-ups here to avoid platform-specific
-       "input-only pad has no internal PU" errors on some chips; rely on board
-       external pull-ups or configure pull-ups explicitly elsewhere if needed. */
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
+    memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
+
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = CEEPEW_I2C_PORT,
         .sda_io_num = CEEPEW_PIN_I2C_SDA,
         .scl_io_num = CEEPEW_PIN_I2C_SCL,
-        .sda_pullup_en = GPIO_PULLUP_DISABLE,
-        .scl_pullup_en = GPIO_PULLUP_DISABLE,
-        .master.clk_speed = CEEPEW_I2C_FREQ_HZ,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7U,
+        .intr_priority = 0,
+        .trans_queue_depth = 0U,
+        .flags = {
+            .enable_internal_pullup = 1U,
+            .allow_pd = 0U,
+        },
     };
-    esp_err_t rc = i2c_param_config(CEEPEW_I2C_PORT, &cfg);
-    if (rc != ESP_OK){ return CEEPEW_ERR_HW;}
-    /* Install driver with default buffer sizes (no RX/TX buffers for master). */
-    rc = i2c_driver_install(CEEPEW_I2C_PORT, I2C_MODE_MASTER, 0, 0, 0);
-    if (rc != ESP_OK){ return CEEPEW_ERR_HW;}
-    s_state.initialised = true;
-    memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
-    rc = oled_configure_display();
-    if (rc != CEEPEW_OK){
-        (void)i2c_driver_delete(CEEPEW_I2C_PORT);
-        s_state.initialised = false;
-        return rc;
+    esp_err_t rc = i2c_new_master_bus(&bus_config, &s_state.bus_handle);
+    if (rc != ESP_OK) {
+        oled_release_resources();
+        return CEEPEW_ERR_HW;
     }
-    ESP_LOGI(TAG, "OLED initialised");
-    return hal_oled_clear();
+
+    const uint8_t addr_candidates[2] = {
+        CEEPEW_OLED_I2C_ADDR,
+        CEEPEW_OLED_I2C_ADDR_FB,
+    };
+    CeePewErr_t err = CEEPEW_ERR_HW;
+    for (uint8_t i = 0U; i < 2U; i++) {
+        err = oled_init_panel_at_addr(addr_candidates[i]);
+        if (err == CEEPEW_OK) {
+            break;
+        }
+        oled_release_resources();
+        if (i == 0U) {
+            rc = i2c_new_master_bus(&bus_config, &s_state.bus_handle);
+            if (rc != ESP_OK) {
+                break;
+            }
+        }
+    }
+
+    if (err != CEEPEW_OK) {
+        oled_release_resources();
+        return err;
+    }
+
+    s_state.initialised = true;
+    ESP_LOGI(TAG, "OLED initialised at 0x%02X", (unsigned)s_state.active_addr);
+    err = hal_oled_clear();
+    if (err != CEEPEW_OK) {
+        oled_release_resources();
+        s_state.initialised = false;
+        return err;
+    }
+    err = hal_oled_flush();
+    if (err != CEEPEW_OK) {
+        oled_release_resources();
+        s_state.initialised = false;
+        return err;
+    }
+    return CEEPEW_OK;
 }
 
 CeePewErr_t hal_oled_clear(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
-    return hal_oled_flush();
+    return CEEPEW_OK;
 }
 
 CeePewErr_t hal_oled_flush(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++){
-        CeePewErr_t err = oled_write_cmd1((uint8_t)(0xB0U | page));
-        if (err != CEEPEW_OK) { return err; }
-        err = oled_write_cmd1(0x00U);
-        if (err != CEEPEW_OK) { return err; }
-        err = oled_write_cmd1(0x10U);
-        if (err != CEEPEW_OK) { return err; }
-        err = oled_send_page(page);
-        if (err != CEEPEW_OK) { return err; }
-    }
-    return CEEPEW_OK;
+    CEEPEW_ASSERT(s_state.panel_handle != NULL, CEEPEW_ERR_HW);
+    esp_err_t rc = esp_lcd_panel_draw_bitmap(s_state.panel_handle,
+                                             0,
+                                             0,
+                                             (int)CEEPEW_OLED_WIDTH_PX,
+                                             (int)CEEPEW_OLED_HEIGHT_PX,
+                                             s_state.framebuffer);
+    return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
 }
 
 CeePewErr_t hal_oled_draw_pixel(uint8_t x, uint8_t y, bool on){

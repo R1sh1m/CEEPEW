@@ -5,8 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef enum
-{
+typedef enum{
     CEEPEW_OK = 0,
     CEEPEW_ERR_NULL_PTR = 1,
     CEEPEW_ERR_BOUNDS = 2,

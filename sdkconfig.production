@@ -1,0 +1,33 @@
+# CEE-PEW Production Configuration
+# Phase 4: Release-grade security and hardening
+#
+# This configuration enables secure boot v2 and flash encryption in release mode.
+# DO NOT use for development builds — requires pre-generated secure keys.
+#
+# Key generation (one-time):
+#   idf.py secure-padding-generate-key keys/secure_boot_signing_key.pem
+#   idf.py generate-flash-encryption-key keys/flash_encryption_key.bin
+#
+# Resulting keys MUST be added to .gitignore to prevent credential leakage:
+#   echo "keys/" >> .gitignore
+#   git rm --cached keys/ && git commit -m "Remove keys from repo"
+#
+# For more information, see:
+#   https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32/security/secure-boot-v2.html
+
+include sdkconfig.defaults
+
+# Secure Boot v2 (Release mode)
+# Requires signing key at keys/secure_boot_signing_key.pem
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="keys/secure_boot_signing_key.pem"
+CONFIG_SECURE_BOOT_ALLOW_ROM_BASIC=n
+
+# Flash Encryption (Release mode)
+# Requires encryption key at keys/flash_encryption_key.bin
+CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED=y
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
+
+# Disable ROM debug to prevent UART access in release builds
+CONFIG_SECURE_BOOT_ALLOW_JTAG=n
+CONFIG_SECURE_BOOT_ALLOW_JTAG_DL=n

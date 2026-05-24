@@ -4,7 +4,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "../../main/ceepew_assert.h"
+#include "ceepew_assert.h"
 
 CeePewErr_t hal_oled_init(void);
 CeePewErr_t hal_oled_clear(void);

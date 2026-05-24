@@ -1,25 +1,38 @@
 idf_component_register(
     SRCS
         "hal_pins.c"
+        "hal_gpio.c"
         "hal_adc.c"
+        "esp_adc_cal.c"
         "hal_oled.c"
         "hal_input.c"
+        "hal_input_additions.c"
         "hal_radio.c"
+        "hal_rgb.c"
         "hal_rng.c"
-       
         "hal_timer.c"
+        "hal_ui.c"
+        "ui_manager.c"
+        "ui_manager_test.c"
+        "task_arch.c"
+        "hal_power.c"
     INCLUDE_DIRS
+        "../hal"
         "."
+        "../../main"
     REQUIRES
-        driver
         esp_driver_gpio
+        esp_driver_ledc
         esp_adc
         esp_timer
         esp_wifi
         esp_netif
         esp_event
+        esp_lcd
         nvs_flash
         log
         freertos
         esp_common
+        esp_system
+        efuse
 )

@@ -3,8 +3,8 @@
 #ifndef CRYPTO_RNG_H
 #define CRYPTO_RNG_H
 
-#include "../../main/ceepew_config.h"
-#include "../../main/ceepew_assert.h"
+#include "ceepew_config.h"
+#include "ceepew_assert.h"
 #include <stdint.h>
 
 CeePewErr_t crypto_rng_fill(uint8_t *buf, uint32_t len);

@@ -1,11 +1,13 @@
 idf_component_register(
     SRCS
-       
-       
+        "ecc_hamming.c"
+        "ecc_crc32.c"
         "ecc_arq.c"
     INCLUDE_DIRS
         "."
+        "../../main"
     REQUIRES
         esp_common
+        transport
         log
 )

@@ -3,6 +3,7 @@ idf_component_register(
         "digital_sum.c"
     INCLUDE_DIRS
         "."
+        "../../main"
     REQUIRES
         esp_common
         mem

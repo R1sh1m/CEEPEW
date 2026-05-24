@@ -1,9 +1,10 @@
 idf_component_register(
     SRCS
-       
         "ceepew_pipeline.c"
+        "ceepew_region.c"
     INCLUDE_DIRS
         "."
+        "../../main"
     REQUIRES
         esp_common
         log

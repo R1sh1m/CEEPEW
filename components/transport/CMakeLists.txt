@@ -4,14 +4,17 @@ idf_component_register(
         "transport_replay.c"
         "transport_esl.c"
         "transport_stream.c"
+        "transport_ble.c"
+        "transport_hop.c"
     INCLUDE_DIRS
         "."
+        "../../main"
     REQUIRES
         ceepew_hal
         crypto
-        ecc
         mem
         esp_wifi
+        esp_timer
         log
         esp_common
 )
