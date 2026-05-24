@@ -7,6 +7,8 @@
 #include "esp_log.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
+#include "session_memory.h"
+#include "ceepew_pipeline.h"
 #include "task_ui.h"
 #include "task_session.h"
 #include "session_fsm.h"
@@ -85,6 +87,20 @@ void app_main(void){
     err = ui_manager_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "ui_manager_init failed: %d", (int)err);
+        return;
+    }
+
+    /* CRITICAL: Initialize region allocator before any pipeline or session use */
+    err = region_init(&g_region);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "region_init failed: %d", (int)err);
+        return;
+    }
+
+    /* CRITICAL: Initialize pipeline before session can deinit it */
+    err = ceepew_pipeline_init();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "ceepew_pipeline_init failed: %d", (int)err);
         return;
     }
 

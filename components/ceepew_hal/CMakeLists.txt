@@ -19,8 +19,8 @@ idf_component_register(
     INCLUDE_DIRS
         "../hal"
         "."
-        "../../main"
     REQUIRES
+        main
         esp_driver_gpio
         esp_driver_ledc
         esp_adc

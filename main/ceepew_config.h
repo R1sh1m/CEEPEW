@@ -161,11 +161,11 @@
 /* SECURITY: Even when CEEPEW_DEBUG_SERIAL is defined, the following are      */
 /* NEVER printed: key material, plaintext content, peer MAC during pairing.   */
 /* -------------------------------------------------------------------------- */
-/* #define CEEPEW_DEBUG_SERIAL */   /* Uncomment for development builds ONLY  */
+#define CEEPEW_DEBUG_SERIAL   /* Uncomment for development builds ONLY  */
 
 #ifdef CEEPEW_DEBUG_SERIAL
     #define CEEPEW_LOG(tag, fmt, ...) \
-        do { ESP_LOGI((tag), (fmt), ##__VA_ARGS__); } while(0)
+        do { ESP_LOGI(tag, fmt, ##__VA_ARGS__); } while(0)
 #else
     #define CEEPEW_LOG(tag, fmt, ...) do {} while(0)
 #endif

@@ -4,8 +4,8 @@ idf_component_register(
         "ceepew_region.c"
     INCLUDE_DIRS
         "."
-        "../../main"
     REQUIRES
+        main
         esp_common
         log
 )

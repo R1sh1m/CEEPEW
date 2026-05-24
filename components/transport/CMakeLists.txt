@@ -8,8 +8,8 @@ idf_component_register(
         "transport_hop.c"
     INCLUDE_DIRS
         "."
-        "../../main"
     REQUIRES
+        main
         ceepew_hal
         crypto
         mem

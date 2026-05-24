@@ -278,6 +278,10 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
     }
 
     s_state.active_addr = addr;
+    
+    /* Send initial diagnostic test pattern to verify display is working */
+    ESP_LOGI(TAG, "SSD1306 init complete at addr 0x%02X, sending test pattern", addr);
+    
     return CEEPEW_OK;
 }
 
@@ -367,13 +371,44 @@ CeePewErr_t hal_oled_clear(void){
 CeePewErr_t hal_oled_flush(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(s_state.panel_handle != NULL, CEEPEW_ERR_HW);
+    
+    /* The SSD1306 displays memory in PAGE addressing mode (8 pages, 128 columns).
+       Our framebuffer is in VERTICAL column format (8-pixel-tall columns).
+       We must transpose the data before sending to match SSD1306 native layout:
+       
+       Our layout:     SSD1306 layout:
+       byte[0]    = bits for (x=0, y=0-7)       byte[0] = bits for (x=0-7, page 0 at x=0)
+       byte[1]    = bits for (x=1, y=0-7)  -->  byte[1] = bits for (x=0-7, page 0 at x=1)
+       byte[128]  = bits for (x=0, y=8-15)      byte[128] = bits for (x=0-7, page 1 at x=0)
+    */
+    
+    uint8_t transposed[CEEPEW_OLED_FB_BYTES];
+    
+    /* For each 8x8 block, transpose rows and columns */
+    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++) {
+        for (uint8_t x = 0U; x < CEEPEW_OLED_WIDTH_PX; x++) {
+            /* Original: byte at [x + page * 128] contains bits for (x, page*8 + 0..7) */
+            const uint8_t src_byte = s_state.framebuffer[x + (uint16_t)page * CEEPEW_OLED_WIDTH_PX];
+            
+            /* Destination: we need to write this byte to the page addressing location */
+            const uint16_t dst_idx = (uint16_t)page * CEEPEW_OLED_WIDTH_PX + x;
+            transposed[dst_idx] = src_byte;
+        }
+    }
+    
+    ESP_LOGI(TAG, "hal_oled_flush: sending bitmap to panel at 0x%02X", (unsigned)s_state.active_addr);
     esp_err_t rc = esp_lcd_panel_draw_bitmap(s_state.panel_handle,
                                              0,
                                              0,
                                              (int)CEEPEW_OLED_WIDTH_PX,
                                              (int)CEEPEW_OLED_HEIGHT_PX,
-                                             s_state.framebuffer);
-    return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
+                                             transposed);
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "hal_oled_flush: esp_lcd_panel_draw_bitmap failed: 0x%x", rc);
+        return CEEPEW_ERR_HW;
+    }
+    ESP_LOGI(TAG, "hal_oled_flush: bitmap sent successfully");
+    return CEEPEW_OK;
 }
 
 CeePewErr_t hal_oled_draw_pixel(uint8_t x, uint8_t y, bool on){

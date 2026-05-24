@@ -5,6 +5,7 @@
 #include "hal_power.h"
 
 #include <stdint.h>
+#include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "driver/gpio.h"

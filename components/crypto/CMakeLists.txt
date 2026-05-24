@@ -14,8 +14,8 @@ idf_component_register(
         "curve25519_test.c"
     INCLUDE_DIRS
         "."
-        "../../main"
     REQUIRES
+        main
         ceepew_hal
         mbedtls
         esp_system

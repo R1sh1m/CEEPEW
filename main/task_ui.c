@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
+#include "esp_log.h"
 #include <string.h>
 
 /* HAL headers */

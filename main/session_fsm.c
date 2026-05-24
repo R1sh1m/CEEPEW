@@ -31,6 +31,7 @@
 #include "ceepew_pipeline.h"
 #include "ceepew_region.h"  /* Phase 4: For region_reset */
 #include "crypto_eddsa.h"
+#include "esp_log.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
@@ -344,6 +345,7 @@ CeePewErr_t session_end(void){
     err = crypto_ctx_destroy();
     if (err != CEEPEW_OK) { /* continue with zeroing */ }
     session_secure_zero_context();
+    region_reset(&g_region);
 
     return CEEPEW_OK;
 }
@@ -487,6 +489,10 @@ CeePewErr_t session_wipe(void)
 
     /* Reset region allocator to free all temporary buffers */
     region_reset(&g_region);
+
+    /* Re-enable the pipeline for the next session attempt */
+    err = ceepew_pipeline_init();
+    if (err != CEEPEW_OK) { CEEPEW_LOG("SESSION", "pipeline_init failed: %d", err); }
 
     /* Reset UI to discovery mode */
     ui_manager_reset_to_discovery();

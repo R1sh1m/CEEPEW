@@ -5,8 +5,8 @@ idf_component_register(
         "ecc_arq.c"
     INCLUDE_DIRS
         "."
-        "../../main"
     REQUIRES
+        main
         esp_common
         transport
         log

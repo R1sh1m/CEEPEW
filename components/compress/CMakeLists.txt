@@ -3,8 +3,8 @@ idf_component_register(
         "compress_huffman.c"
     INCLUDE_DIRS
         "."
-        "../../main"
     REQUIRES
+        main
         esp_common
         log
 )

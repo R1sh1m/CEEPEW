@@ -3,8 +3,8 @@ idf_component_register(
         "digital_sum.c"
     INCLUDE_DIRS
         "."
-        "../../main"
     REQUIRES
+        main
         esp_common
         mem
         log
