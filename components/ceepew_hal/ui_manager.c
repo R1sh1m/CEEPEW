@@ -157,6 +157,163 @@ static uint8_t rssi_to_bars(int8_t rssi){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * SECTION 1b — SELF-CONTAINED 5×7 FONT
+ *
+ * Bypasses hal_ui_text() which has no working font data.
+ * Each character: 5 bytes = 5 columns. Each byte = 1 column, 7 rows.
+ * bit 0 = topmost pixel row, bit 6 = bottommost.
+ * Characters encoded for ASCII 0x20 (space) through 0x7E (~).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static const uint8_t s_font5x7[95][5] = {
+    { 0x00, 0x00, 0x00, 0x00, 0x00 }, /* 20   */
+    { 0x00, 0x00, 0x5F, 0x00, 0x00 }, /* 21 ! */
+    { 0x00, 0x07, 0x00, 0x07, 0x00 }, /* 22 " */
+    { 0x14, 0x7F, 0x14, 0x7F, 0x14 }, /* 23 # */
+    { 0x24, 0x2A, 0x7F, 0x2A, 0x12 }, /* 24 $ */
+    { 0x23, 0x13, 0x08, 0x64, 0x62 }, /* 25 % */
+    { 0x36, 0x49, 0x55, 0x22, 0x50 }, /* 26 & */
+    { 0x00, 0x05, 0x03, 0x00, 0x00 }, /* 27 ' */
+    { 0x00, 0x1C, 0x22, 0x41, 0x00 }, /* 28 ( */
+    { 0x00, 0x41, 0x22, 0x1C, 0x00 }, /* 29 ) */
+    { 0x08, 0x2A, 0x1C, 0x2A, 0x08 }, /* 2A * */
+    { 0x08, 0x08, 0x3E, 0x08, 0x08 }, /* 2B + */
+    { 0x00, 0x50, 0x30, 0x00, 0x00 }, /* 2C , */
+    { 0x08, 0x08, 0x08, 0x08, 0x08 }, /* 2D - */
+    { 0x00, 0x60, 0x60, 0x00, 0x00 }, /* 2E . */
+    { 0x20, 0x10, 0x08, 0x04, 0x02 }, /* 2F / */
+    { 0x3E, 0x51, 0x49, 0x45, 0x3E }, /* 30 0 */
+    { 0x00, 0x42, 0x7F, 0x40, 0x00 }, /* 31 1 */
+    { 0x42, 0x61, 0x51, 0x49, 0x46 }, /* 32 2 */
+    { 0x21, 0x41, 0x45, 0x4B, 0x31 }, /* 33 3 */
+    { 0x18, 0x14, 0x12, 0x7F, 0x10 }, /* 34 4 */
+    { 0x27, 0x45, 0x45, 0x45, 0x39 }, /* 35 5 */
+    { 0x3C, 0x4A, 0x49, 0x49, 0x30 }, /* 36 6 */
+    { 0x01, 0x71, 0x09, 0x05, 0x03 }, /* 37 7 */
+    { 0x36, 0x49, 0x49, 0x49, 0x36 }, /* 38 8 */
+    { 0x06, 0x49, 0x49, 0x29, 0x1E }, /* 39 9 */
+    { 0x00, 0x36, 0x36, 0x00, 0x00 }, /* 3A : */
+    { 0x00, 0x56, 0x36, 0x00, 0x00 }, /* 3B ; */
+    { 0x00, 0x08, 0x14, 0x22, 0x41 }, /* 3C < */
+    { 0x14, 0x14, 0x14, 0x14, 0x14 }, /* 3D = */
+    { 0x41, 0x22, 0x14, 0x08, 0x00 }, /* 3E > */
+    { 0x02, 0x01, 0x51, 0x09, 0x06 }, /* 3F ? */
+    { 0x32, 0x49, 0x79, 0x41, 0x3E }, /* 40 @ */
+    { 0x7E, 0x11, 0x11, 0x11, 0x7E }, /* 41 A */
+    { 0x7F, 0x49, 0x49, 0x49, 0x36 }, /* 42 B */
+    { 0x3E, 0x41, 0x41, 0x41, 0x22 }, /* 43 C */
+    { 0x7F, 0x41, 0x41, 0x22, 0x1C }, /* 44 D */
+    { 0x7F, 0x49, 0x49, 0x49, 0x41 }, /* 45 E */
+    { 0x7F, 0x09, 0x09, 0x01, 0x01 }, /* 46 F */
+    { 0x3E, 0x41, 0x41, 0x51, 0x72 }, /* 47 G */
+    { 0x7F, 0x08, 0x08, 0x08, 0x7F }, /* 48 H */
+    { 0x00, 0x41, 0x7F, 0x41, 0x00 }, /* 49 I */
+    { 0x20, 0x40, 0x41, 0x3F, 0x01 }, /* 4A J */
+    { 0x7F, 0x08, 0x14, 0x22, 0x41 }, /* 4B K */
+    { 0x7F, 0x40, 0x40, 0x40, 0x40 }, /* 4C L */
+    { 0x7F, 0x02, 0x04, 0x02, 0x7F }, /* 4D M */
+    { 0x7F, 0x04, 0x08, 0x10, 0x7F }, /* 4E N */
+    { 0x3E, 0x41, 0x41, 0x41, 0x3E }, /* 4F O */
+    { 0x7F, 0x09, 0x09, 0x09, 0x06 }, /* 50 P */
+    { 0x3E, 0x41, 0x51, 0x21, 0x5E }, /* 51 Q */
+    { 0x7F, 0x09, 0x19, 0x29, 0x46 }, /* 52 R */
+    { 0x46, 0x49, 0x49, 0x49, 0x31 }, /* 53 S */
+    { 0x01, 0x01, 0x7F, 0x01, 0x01 }, /* 54 T */
+    { 0x3F, 0x40, 0x40, 0x40, 0x3F }, /* 55 U */
+    { 0x1F, 0x20, 0x40, 0x20, 0x1F }, /* 56 V */
+    { 0x7F, 0x20, 0x18, 0x20, 0x7F }, /* 57 W */
+    { 0x63, 0x14, 0x08, 0x14, 0x63 }, /* 58 X */
+    { 0x03, 0x04, 0x78, 0x04, 0x03 }, /* 59 Y */
+    { 0x61, 0x51, 0x49, 0x45, 0x43 }, /* 5A Z */
+    { 0x00, 0x7F, 0x41, 0x41, 0x00 }, /* 5B [ */
+    { 0x02, 0x04, 0x08, 0x10, 0x20 }, /* 5C \\ */
+    { 0x00, 0x41, 0x41, 0x7F, 0x00 }, /* 5D ] */
+    { 0x04, 0x02, 0x01, 0x02, 0x04 }, /* 5E ^ */
+    { 0x40, 0x40, 0x40, 0x40, 0x40 }, /* 5F _ */
+    { 0x00, 0x01, 0x02, 0x04, 0x00 }, /* 60 ` */
+    { 0x20, 0x54, 0x54, 0x54, 0x78 }, /* 61 a */
+    { 0x7F, 0x48, 0x44, 0x44, 0x38 }, /* 62 b */
+    { 0x38, 0x44, 0x44, 0x44, 0x20 }, /* 63 c */
+    { 0x38, 0x44, 0x44, 0x48, 0x7F }, /* 64 d */
+    { 0x38, 0x54, 0x54, 0x54, 0x18 }, /* 65 e */
+    { 0x08, 0x7E, 0x09, 0x01, 0x02 }, /* 66 f */
+    { 0x08, 0x54, 0x54, 0x54, 0x3C }, /* 67 g */
+    { 0x7F, 0x08, 0x04, 0x04, 0x78 }, /* 68 h */
+    { 0x00, 0x44, 0x7D, 0x40, 0x00 }, /* 69 i */
+    { 0x20, 0x40, 0x44, 0x3D, 0x00 }, /* 6A j */
+    { 0x7F, 0x10, 0x28, 0x44, 0x00 }, /* 6B k */
+    { 0x00, 0x41, 0x7F, 0x40, 0x00 }, /* 6C l */
+    { 0x7C, 0x04, 0x18, 0x04, 0x78 }, /* 6D m */
+    { 0x7C, 0x08, 0x04, 0x04, 0x78 }, /* 6E n */
+    { 0x38, 0x44, 0x44, 0x44, 0x38 }, /* 6F o */
+    { 0x7C, 0x14, 0x14, 0x14, 0x08 }, /* 70 p */
+    { 0x08, 0x14, 0x14, 0x18, 0x7C }, /* 71 q */
+    { 0x7C, 0x08, 0x04, 0x04, 0x08 }, /* 72 r */
+    { 0x48, 0x54, 0x54, 0x54, 0x20 }, /* 73 s */
+    { 0x04, 0x3F, 0x44, 0x40, 0x20 }, /* 74 t */
+    { 0x3C, 0x40, 0x40, 0x20, 0x7C }, /* 75 u */
+    { 0x1C, 0x20, 0x40, 0x20, 0x1C }, /* 76 v */
+    { 0x3C, 0x40, 0x30, 0x40, 0x3C }, /* 77 w */
+    { 0x44, 0x28, 0x10, 0x28, 0x44 }, /* 78 x */
+    { 0x0C, 0x50, 0x50, 0x50, 0x3C }, /* 79 y */
+    { 0x44, 0x64, 0x54, 0x4C, 0x44 }, /* 7A z */
+    { 0x00, 0x08, 0x36, 0x41, 0x00 }, /* 7B { */
+    { 0x00, 0x00, 0x7F, 0x00, 0x00 }, /* 7C | */
+    { 0x00, 0x41, 0x36, 0x08, 0x00 }, /* 7D } */
+    { 0x08, 0x08, 0x2A, 0x1C, 0x08 }, /* 7E ~ (right-arrow) */
+};
+
+/* Render one character at pixel position (x, y). Uses draw_pixel() which
+ * calls hal_ui_rect_fill() — known working. Safe: clips to screen bounds.
+ * Each character is 5px wide × 7px tall with 1px column gap = 6px advance. */
+static void ui_draw_char(uint8_t x, uint8_t y, char c)
+{
+    uint8_t idx;
+    if ((uint8_t)c < 32U || (uint8_t)c > 126U) {
+        idx = (uint8_t)('?' - 32U);   /* substitute for out-of-range */
+    } else {
+        idx = (uint8_t)((uint8_t)c - 32U);
+    }
+
+    for (uint8_t col = 0U; col < 5U; col++) {
+        uint8_t col_data = s_font5x7[idx][col];
+        for (uint8_t row = 0U; row < 7U; row++) {
+            if ((col_data >> row) & 1U) {
+                uint8_t px = (uint8_t)(x + col);
+                uint8_t py = (uint8_t)(y + row);
+                draw_pixel(px, py);   /* draw_pixel already clips */
+            }
+        }
+    }
+}
+
+/* Render a NUL-terminated string starting at (x, y).
+ * Advances 6px per character. Stops at screen right edge. */
+static void ui_draw_text(uint8_t x, uint8_t y, const char *str)
+{
+    if (str == NULL) { return; }
+    uint8_t cx = x;
+    while (*str != '\0') {
+        if (cx + 5U > 128U) { break; }   /* no room for another char */
+        ui_draw_char(cx, y, *str);
+        cx = (uint8_t)(cx + 6U);
+        str++;
+    }
+}
+
+/* ── Redirect broken HAL text/char/circle to self-contained implementations ──
+ * hal_ui_rect_fill() works fine so we keep all geometry calls unchanged.
+ * #undef first to avoid "macro redefinition" warnings if hal_ui.h declared them. */
+#undef  hal_ui_text
+#define hal_ui_text(x, y, s, colour)    ui_draw_text((uint8_t)(x), (uint8_t)(y), (s))
+
+#undef  hal_ui_char
+#define hal_ui_char(x, y, c, colour)    ui_draw_char((uint8_t)(x), (uint8_t)(y), (char)(c))
+
+#undef  hal_ui_circle
+#define hal_ui_circle(x, y, r, colour)  draw_circle((int16_t)(x), (int16_t)(y), (uint8_t)(r))
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * SECTION 2 — DATA TABLES & CONSTANTS
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -332,7 +489,7 @@ static CeePewErr_t render_boot_anim(void)
     if (f >= 30U) {
        const char   letters[7U]   = { 'C','E','E','-','P','E','W' };
        const uint8_t lx[7U]       = { 43U,50U,57U,64U,71U,78U,85U };
-       const uint8_t FINAL_Y      = 14U;
+       const uint8_t FINAL_Y      = 12U;
 
        for (uint8_t i = 0U; i < 7U; i++) {
            uint32_t letter_start = 30U + (uint32_t)i * 4U;
@@ -374,7 +531,7 @@ static CeePewErr_t render_boot_anim(void)
        uint8_t pct = (seg_count * 100U) / 12U;
        char pct_str[5U];
        (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-       hal_ui_text(104U, 44U, pct_str, HAL_UI_WHITE);
+       hal_ui_text(104U, 45U, pct_str, HAL_UI_WHITE);
     }
 
     /* ── Phase 4 (f 90–109): Border frame draws in from corners ── */
@@ -624,8 +781,6 @@ static CeePewErr_t render_discovery(void)
                        g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5], (int)rssi_smooth);
         (void)snprintf(line2, sizeof(line2), "hits:%u age:%lums",
                        (unsigned)g_ble_ctx.scan_hit_count, (unsigned long)age_ms);
-        hal_ui_text(0U, 48U, line1, HAL_UI_WHITE);
-        hal_ui_text(64U, 48U, line2, HAL_UI_WHITE);
     } else {
         /* Preserve a simple simulation for when no real peer exists */
         if ((now_ms / 3000U) % 2U == 0U) {
@@ -669,28 +824,40 @@ static CeePewErr_t render_discovery(void)
     }
     hal_ui_text(68U, 40U, ble_state, HAL_UI_WHITE);
 
-    /* ── Rows 48–55: Bottom status bar ─────────────────────────────────────── */
-    /*
-     * FIX B(2): Status text is drawn unconditionally.
-     * "SCANNING" with animated trailing dots cycles at 500ms intervals.
-     */
-    static const char *const SCAN_STATES[4] = {
-        "SCANNING   ",
-        "SCANNING.  ",
-        "SCANNING.. ",
-        "SCANNING..."
-    };
-    uint8_t dot_idx = (uint8_t)((now_ms / 500U) % 4U);
-    hal_ui_text(0U, 48U, SCAN_STATES[dot_idx], HAL_UI_WHITE);
+    /* ── Bottom status row — mutually exclusive: peer info OR scanning dots ── */
+    if (g_ble_ctx.discovered) {
+        /* Real peer found: show smoothed RSSI, hit count, staleness age */
+        int16_t rssi_s = (int16_t)(g_ble_ctx.peer_rssi_smooth_x8 / 8);
+        if (rssi_s < -90) { rssi_s = -90; }
+        if (rssi_s > -30) { rssi_s = -30; }
 
-    /* Signal strength hint (simulation) */
-    if ((now_ms / 3000U) % 2U == 0U) {
-        uint8_t rssi_est = (int8_t)(-60 + (now_ms / 100U) % 30);  /* -60 to -30 dBm */
-        char rssi_str[12];
-        (void)snprintf(rssi_str, sizeof(rssi_str), "RSSI:%d", rssi_est);
-        hal_ui_text(64U, 48U, rssi_str, HAL_UI_WHITE);
+        char line1[22];
+        char line2[22];
+        (void)snprintf(line1, sizeof(line1), "PEER %02X%02X ~%ddBm",
+                       g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5],
+                       (int)rssi_s);
+
+        uint32_t age_ms_bot = (g_ble_ctx.last_seen_ms == 0U) ? 0U :
+                              ((uint32_t)(esp_timer_get_time() / 1000LL) -
+                               g_ble_ctx.last_seen_ms);
+        (void)snprintf(line2, sizeof(line2), "hits:%-3u age:%lus",
+                       (unsigned)g_ble_ctx.scan_hit_count,
+                       (unsigned long)(age_ms_bot / 1000U));
+
+        hal_ui_text(INFO_X,  48U, line1, HAL_UI_WHITE);
+        hal_ui_text(INFO_X,  56U, line2, HAL_UI_WHITE);
+
     } else {
-        hal_ui_text(64U, 48U, "No signal ", HAL_UI_WHITE);
+        /* No peer yet: animated scanning dots */
+        static const char *const SCAN_STATES[4] = {
+            "SCANNING   ",
+            "SCANNING.  ",
+            "SCANNING.. ",
+            "SCANNING..."
+        };
+        uint8_t dot_idx = (uint8_t)((now_ms / 500U) % 4U);
+        hal_ui_text(INFO_X, 48U, SCAN_STATES[dot_idx], HAL_UI_WHITE);
+        hal_ui_text(INFO_X, 56U, "Press btn to pair", HAL_UI_WHITE);
     }
 
     /* ── Rows 56–63: Navigation bar ── */
@@ -788,7 +955,7 @@ static CeePewErr_t render_countdown(void)
     /* Large countdown number — centred */
     char sec_str[4U];
     (void)snprintf(sec_str, sizeof(sec_str), "%2u", (unsigned)secs);
-    hal_ui_text(56U, 18U, sec_str, HAL_UI_WHITE);
+    hal_ui_text(56U, 20U, sec_str, HAL_UI_WHITE);
     hal_ui_text(18U, 18U, "Syncing in", HAL_UI_WHITE);
     hal_ui_text(72U, 18U, "sec", HAL_UI_WHITE);
 
