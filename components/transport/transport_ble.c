@@ -52,6 +52,9 @@ CeePewErr_t transport_ble_init(void)
     memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
     g_ble_ctx.peer_name_len = 0U;
     g_ble_ctx.peer_rssi = 0;
+    g_ble_ctx.peer_rssi_smooth_x8 = 0;
+    g_ble_ctx.last_seen_ms = 0U;
+    g_ble_ctx.scan_hit_count = 0U;
     
     g_ble_ctx.state = BLE_IDLE;
     g_ble_ctx.discovery_start_ts = 0U;
@@ -400,35 +403,56 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                 break;
             }
 
-            /* Avoid re-processing the same peer we already found */
-            if (g_ble_ctx.discovered &&
-                memcmp(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U) == 0) {
-                break;  /* already logged this peer */
+            /* If this is a CEEPEW peer, either record it (first hit) or update
+               the RSSI smoothing state if it's the same peer we've already seen. */
+            int16_t new_rssi_x8 = (int16_t)((int16_t)param->scan_rst.rssi * 8);
+
+            if (!g_ble_ctx.discovered) {
+                /* First hit: record peer metadata and seed EMA */
+                ESP_LOGI(TAG, "CEEPEW peer found (first): %02X:%02X:%02X:%02X:%02X:%02X  RSSI=%d  name=%s",
+                         param->scan_rst.bda[0], param->scan_rst.bda[1],
+                         param->scan_rst.bda[2], param->scan_rst.bda[3],
+                         param->scan_rst.bda[4], param->scan_rst.bda[5],
+                         param->scan_rst.rssi,
+                         found_name);
+
+                memcpy(s_discovered_peer.peer_mac, param->scan_rst.bda, 6U);
+                s_discovered_peer.rssi    = (int8_t)param->scan_rst.rssi;
+                s_discovered_peer.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
+                s_discovered_peer.name_len = found_name_len;
+                memcpy(s_discovered_peer.name, found_name, found_name_len);
+                s_discovered_peer.name[found_name_len] = '\0';
+
+                memcpy(g_ble_ctx.peer_mac,   param->scan_rst.bda,  6U);
+                memcpy(g_ble_ctx.peer_name,  found_name,          found_name_len);
+                g_ble_ctx.peer_name_len  = found_name_len;
+
+                /* Seed EMA */
+                g_ble_ctx.peer_rssi_smooth_x8 = new_rssi_x8;
+                g_ble_ctx.peer_rssi = (int8_t)param->scan_rst.rssi;
+                g_ble_ctx.last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+                g_ble_ctx.scan_hit_count = 1U;
+                g_ble_ctx.discovered = true;
+                g_ble_ctx.discovery_start_ts = (uint32_t)(esp_timer_get_time() / 1000000LL);
+
+                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+            } else if (memcmp(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U) == 0) {
+                /* Same peer: update EMA smoothing and metadata */
+                g_ble_ctx.peer_rssi = (int8_t)param->scan_rst.rssi;   /* raw */
+                /* EMA: smooth = 0.75*smooth + 0.25*new  (stored ×8 precision)
+                   integer form: (6*s + 2*n)/8 */
+                g_ble_ctx.peer_rssi_smooth_x8 = (int16_t)((6 * g_ble_ctx.peer_rssi_smooth_x8 + 2 * new_rssi_x8) / 8);
+                g_ble_ctx.last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+                if (g_ble_ctx.scan_hit_count < 255U) { g_ble_ctx.scan_hit_count++; }
+
+                /* Update transient record too */
+                s_discovered_peer.rssi = g_ble_ctx.peer_rssi;
+                s_discovered_peer.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
+            } else {
+                /* We already have a discovered peer; ignore different devices until reset */
+                break;
             }
 
-            ESP_LOGI(TAG, "CEEPEW peer found: %02X:%02X:%02X:%02X:%02X:%02X  RSSI=%d  name=%s",
-                     param->scan_rst.bda[0], param->scan_rst.bda[1],
-                     param->scan_rst.bda[2], param->scan_rst.bda[3],
-                     param->scan_rst.bda[4], param->scan_rst.bda[5],
-                     param->scan_rst.rssi,
-                     found_name);
-
-            /* Record the peer */
-            memcpy(s_discovered_peer.peer_mac, param->scan_rst.bda, 6U);
-            s_discovered_peer.rssi    = (int8_t)param->scan_rst.rssi;
-            s_discovered_peer.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
-            s_discovered_peer.name_len = found_name_len;
-            memcpy(s_discovered_peer.name, found_name, found_name_len);
-            s_discovered_peer.name[found_name_len] = '\0';
-
-            memcpy(g_ble_ctx.peer_mac,   param->scan_rst.bda,  6U);
-            memcpy(g_ble_ctx.peer_name,  found_name,          found_name_len);
-            g_ble_ctx.peer_name_len  = found_name_len;
-            g_ble_ctx.peer_rssi      = (int8_t)param->scan_rst.rssi;
-            g_ble_ctx.discovered     = true;
-            g_ble_ctx.discovery_start_ts = (uint32_t)(esp_timer_get_time() / 1000000LL);
-
-            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
         } break;
 
         case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:

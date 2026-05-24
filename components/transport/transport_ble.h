@@ -62,7 +62,10 @@ typedef struct {
     bool           discovered;                 /* Peer discovered during scan */
     uint8_t        peer_name[16];              /* NUL not guaranteed; use peer_name_len */
     uint8_t        peer_name_len;
-    int8_t         peer_rssi;
+    int8_t         peer_rssi;                  /* raw, last received */
+    int16_t        peer_rssi_smooth_x8;        /* EMA ×8 precision */
+    uint32_t       last_seen_ms;               /* ms since boot of last scan hit */
+    uint8_t        scan_hit_count;             /* total hits recorded for this peer */
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;

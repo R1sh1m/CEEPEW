@@ -581,24 +581,56 @@ static CeePewErr_t render_discovery(void)
     /* If a real peer was discovered via BLE, show its blip and details. Otherwise
      * fall back to the simulated placeholder used during early UI testing. */
     if (g_ble_ctx.discovered) {
-        /* Derive a deterministic sweep index from the peer MAC to place the blip */
-        uint8_t sweep_idx = (uint8_t)(g_ble_ctx.peer_mac[5] % 16U);
+        uint32_t now_ms_local = (uint32_t)(esp_timer_get_time() / 1000LL);
 
-        /* Map RSSI to a radius: stronger RSSI -> closer to centre */
-        uint8_t r = RDR_R2;
-        int8_t rssi = g_ble_ctx.peer_rssi;
-        if (rssi >= -50) { r = (uint8_t)((RDR_R1 + RDR_R2) / 2U); }
-        else if (rssi >= -70) { r = RDR_R2; }
-        else { r = (uint8_t)(RDR_R3 - 6U); }
+        /* Smoothed RSSI back to dBm (stored ×8) */
+        int16_t rssi_smooth = (int16_t)(g_ble_ctx.peer_rssi_smooth_x8 / 8);
+        if (rssi_smooth < -90) { rssi_smooth = -90; }
+        if (rssi_smooth > -30) { rssi_smooth = -30; }
 
-        int16_t ex = SWEEP16[sweep_idx].ex;
-        int16_t ey = SWEEP16[sweep_idx].ey;
+        /* Map smoothed RSSI to radial distance: -30dBm -> 2, -90dBm -> RDR_R3-1 */
+        uint8_t blip_r = (uint8_t)((((int16_t)(-rssi_smooth - 30) * (int16_t)(RDR_R3 - 3U)) / 60) + 2U);
+
+        /* Angle: base derived from MAC low byte (consistent), plus small wobble from instant noise */
+        uint8_t base_idx = (uint8_t)(g_ble_ctx.peer_mac[5] % 16U);
+        int16_t rssi_delta = (int16_t)((int16_t)g_ble_ctx.peer_rssi - rssi_smooth);
+        int8_t wobble = (int8_t)((rssi_delta > 3) ? 2 : (rssi_delta < -3) ? -2 : 0);
+        uint8_t blip_idx = (uint8_t)((int16_t)base_idx + wobble + 16U) % 16U;
+
+        int16_t ex = SWEEP16[blip_idx].ex;
+        int16_t ey = SWEEP16[blip_idx].ey;
         int16_t dx = ex - RDR_CX;
         int16_t dy = ey - RDR_CY;
 
-        uint8_t peer_bx = (uint8_t)(RDR_CX + (dx * (int32_t)r) / (int32_t)RDR_R3);
-        uint8_t peer_by = (uint8_t)(RDR_CY + (dy * (int32_t)r) / (int32_t)RDR_R3);
-        draw_peer_blip(peer_bx, peer_by, now_ms);
+        int16_t bx = (int16_t)RDR_CX + (int16_t)(((int32_t)dx * blip_r) / (int32_t)RDR_R3);
+        int16_t by = (int16_t)RDR_CY + (int16_t)(((int32_t)dy * blip_r) / (int32_t)RDR_R3);
+
+        /* Staleness: blink faster when older than 2s */
+        uint32_t age_ms = (g_ble_ctx.last_seen_ms == 0U) ? 0U : (now_ms_local - g_ble_ctx.last_seen_ms);
+        uint32_t blink_rate = (age_ms > 2000U) ? 100U : 180U; /* ms per half-period */
+        bool blink_on = ((now_ms_local / blink_rate) & 1U) != 0U;
+
+        if (blink_on && bx >= 0 && bx < 128 && by >= 10 && by < 64) {
+            int8_t blip_size = (age_ms < 1000U) ? 1 : 0; /* 3x3 if fresh, 1x1 if stale */
+            for (int8_t ox = -blip_size; ox <= blip_size; ox++) {
+                for (int8_t oy = -blip_size; oy <= blip_size; oy++) {
+                    int16_t fx = bx + ox;
+                    int16_t fy = by + oy;
+                    if (fx >= 0 && fx < 128 && fy >= 10 && fy < 64) {
+                        draw_pixel((uint8_t)fx, (uint8_t)fy);
+                    }
+                }
+            }
+        }
+
+        /* Status: smoothed RSSI + hit count + age */
+        char line1[22]; char line2[22];
+        (void)snprintf(line1, sizeof(line1), "PEER %02X%02X  ~%ddBm",
+                       g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5], (int)rssi_smooth);
+        (void)snprintf(line2, sizeof(line2), "hits:%u age:%lums",
+                       (unsigned)g_ble_ctx.scan_hit_count, (unsigned long)age_ms);
+        hal_ui_text(0U, 48U, line1, HAL_UI_WHITE);
+        hal_ui_text(64U, 48U, line2, HAL_UI_WHITE);
     } else {
         /* Preserve a simple simulation for when no real peer exists */
         if ((now_ms / 3000U) % 2U == 0U) {
@@ -606,6 +638,9 @@ static CeePewErr_t render_discovery(void)
             uint8_t peer_by = (uint8_t)(RDR_CY + 10U);
             draw_peer_blip(peer_bx, peer_by, now_ms);
         }
+
+        /* If no real peer, clear status area */
+        hal_ui_text(68U, 16U, "--- scanning ---", HAL_UI_WHITE);
     }
 
     /* ── RIGHT PANEL: Status & peer information (x=64–127) ── */
@@ -617,7 +652,7 @@ static CeePewErr_t render_discovery(void)
                        g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1], g_ble_ctx.peer_mac[2],
                        g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
         hal_ui_text(68U, 16U, macbuf, HAL_UI_WHITE);
-        uint8_t bars = rssi_to_bars(g_ble_ctx.peer_rssi);
+        uint8_t bars = rssi_to_bars((int8_t)(g_ble_ctx.peer_rssi_smooth_x8 / 8));
         draw_rssi_bars(68U, 24U, bars);
     } else {
         hal_ui_text(68U, 16U, "--- scanning ---", HAL_UI_WHITE);
