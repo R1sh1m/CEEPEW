@@ -16,13 +16,7 @@
 static const char *TAG = "transport_ble";
 
 #ifdef CONFIG_BT_ENABLED
-#if defined(__has_include)
-#if __has_include("esp_bt.h")
 #include "esp_bt.h"
-#endif
-#else
-#include "esp_bt.h"
-#endif
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
 #include "esp_gatt_defs.h"
