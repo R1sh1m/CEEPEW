@@ -685,7 +685,10 @@ static CeePewErr_t render_boot_anim(void)
        uint32_t elapsed = f - 60U;
        uint8_t  seg_count = (elapsed < 30U) ? (uint8_t)((elapsed * 12U) / 30U) : 12U;
        for (uint8_t s = 0U; s < seg_count; s++) {
-           HalUIRect_t seg = { .x = (uint8_t)(16U + s * 8U), .y = (uint8_t)(border.y + 2U), .w = 7U, .h = (uint8_t)(border.h - 4U) };
+           uint8_t seg_x = (uint8_t)(16U + s * 8U);
+           /* Safety clamp: prevent segment from extending beyond 120px boundary */
+           if (seg_x + 7U > 120U) break;
+           HalUIRect_t seg = { .x = seg_x, .y = (uint8_t)(border.y + 2U), .w = 7U, .h = (uint8_t)(border.h - 4U) };
            hal_ui_rect_fill(&seg, HAL_UI_WHITE);
        }
 
@@ -927,11 +930,12 @@ static CeePewErr_t render_discovery(void)
     #define RPANEL_WIDTH    73U     /* 128 - 55 = 73px available (expanded from 67) */
     #define LINE_HEIGHT     9U      /* 7px glyph + 2px gap */
     #define Y_TITLE         1U      /* Rotating title row */
-    #define Y_PEER_ID       10U     /* Peer info section (reduced gap from 12) */
+    #define Y_PEER_ID       10U     /* Peer info section */
     #define Y_RSSI_BARS     18U     /* RSSI signal bars */
-    #define Y_RSSI_DBM      30U     /* dBm value */
-    #define Y_PAIR_BTN      39U     /* PAIR button */
-    #define Y_BLE_STATE     48U     /* BLE: XXXX state */
+    #define Y_RSSI_DBM      27U     /* dBm value — moved down 3px for spacing */
+    #define Y_PAIR_BTN      36U     /* PAIR button — moved down 3px for spacing */
+    #define Y_HINT          44U     /* Pairing hint text — NEW dedicated line */
+    #define Y_BLE_STATE     48U     /* BLE: XXXX state (only shown when NO peer) */
     #define Y_STATUS        56U     /* Status line */
 
     /* ── Left panel: Radar ── */
@@ -971,7 +975,7 @@ static CeePewErr_t render_discovery(void)
        /* Prompt user to press the button to begin pairing (only if not already confirmed) */
        if (!g_ble_ctx.commitment_verified && !transport_ble_handoff_ready()) {
            hal_ui_text(RPANEL_X, Y_PAIR_BTN, "BTN:PAIR", HAL_UI_WHITE);
-hal_ui_text(RPANEL_X, Y_BLE_STATE - 2U, "press to connect", HAL_UI_WHITE);
+           hal_ui_text(RPANEL_X, Y_HINT, "press btn", HAL_UI_WHITE);
        }
 
        /* Blip rendering — only visible near sweep arm */
@@ -1003,19 +1007,21 @@ hal_ui_text(RPANEL_X, Y_BLE_STATE - 2U, "press to connect", HAL_UI_WHITE);
        ui_draw_rotating_text(RPANEL_X, Y_PEER_ID, "Awaiting peer...", RPANEL_WIDTH, shared_scroll_px);
     }
 
-    /* ── BLE state indicator ── */
-    const char *ble_state = "BLE: IDLE";
-    switch (transport_ble_get_state()) {
-       case BLE_IDLE:        ble_state = "BLE: IDLE"; break;
-       case BLE_ADVERTISING: ble_state = "BLE: ADV";  break;
-       case BLE_SCANNING:    ble_state = "BLE: SCAN"; break;
-       case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: ADV+SCN"; break;
-       case BLE_CONNECTED:   ble_state = "BLE: CONN"; break;
-       case BLE_PAIRING:     ble_state = "BLE: PAIR"; break;
-       case BLE_DONE:        ble_state = "BLE: DONE"; break;
-       default:              ble_state = "BLE: ?";    break;
+    /* ── BLE state indicator (only when peer NOT discovered to avoid clutter) ── */
+    if (!g_ble_ctx.discovered) {
+       const char *ble_state = "BLE: IDLE";
+       switch (transport_ble_get_state()) {
+           case BLE_IDLE:        ble_state = "BLE: IDLE"; break;
+           case BLE_ADVERTISING: ble_state = "BLE: ADV";  break;
+           case BLE_SCANNING:    ble_state = "BLE: SCAN"; break;
+           case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: ADV+SCN"; break;
+           case BLE_CONNECTED:   ble_state = "BLE: CONN"; break;
+           case BLE_PAIRING:     ble_state = "BLE: PAIR"; break;
+           case BLE_DONE:        ble_state = "BLE: DONE"; break;
+           default:              ble_state = "BLE: ?";    break;
+       }
+       hal_ui_text(RPANEL_X, Y_BLE_STATE, ble_state, HAL_UI_WHITE);
     }
-    hal_ui_text(RPANEL_X, Y_BLE_STATE, ble_state, HAL_UI_WHITE);
 
     /* ── Bottom status line ── */
     if (g_ble_ctx.discovered) {
@@ -1915,7 +1921,7 @@ static CeePewErr_t render_cryptogram(void)
             draw_circle(64, 44, ring2_r);
         }
 
-        /* Confirmation sub-panel */
+        /* Confirmation sub-panel: show sync status */
         uint32_t now_ms   = (uint32_t)(esp_timer_get_time() / 1000LL);
         uint32_t elapsed  = (g_ui_ctx.crypto_confirm_start_ms != 0U &&
                              now_ms >= g_ui_ctx.crypto_confirm_start_ms)
@@ -1923,17 +1929,27 @@ static CeePewErr_t render_cryptogram(void)
         uint32_t rem_ms   = (elapsed < 30000U) ? (30000U - elapsed) : 0U;
         uint8_t  cd_secs  = (uint8_t)(rem_ms / 1000U);
 
-        char cd_str[13U];
-        (void)snprintf(cd_str, sizeof(cd_str), "Confirm: %us", (unsigned)cd_secs);
-        hal_ui_text(24U, 54U, cd_str, HAL_UI_WHITE);
+        /* Check peer readiness: both must signal ready before transition */
+        if (transport_ble_both_ready_for_chat()) {
+            char cd_str[20U];
+            (void)snprintf(cd_str, sizeof(cd_str), "Ready! Press btn");
+            hal_ui_text(12U, 54U, cd_str, HAL_UI_WHITE);
 
-        if (g_ui_ctx.button_pressed) {
-            (void)ui_manager_transition_to(UI_STATE_CHAT);
-            g_ui_ctx.transition_ready = true;
-        }
-        if (rem_ms == 0U) {
-            (void)ui_manager_transition_to(UI_STATE_CHAT);
-            g_ui_ctx.transition_ready = true;
+            if (g_ui_ctx.button_pressed) {
+                (void)ui_manager_transition_to(UI_STATE_CHAT);
+                g_ui_ctx.transition_ready = true;
+            }
+        } else {
+            /* Waiting for peer to signal ready */
+            char cd_str[20U];
+            (void)snprintf(cd_str, sizeof(cd_str), "Syncing: %us", (unsigned)cd_secs);
+            hal_ui_text(20U, 54U, cd_str, HAL_UI_WHITE);
+
+            if (rem_ms == 0U) {
+                /* Timeout: transition anyway */
+                (void)ui_manager_transition_to(UI_STATE_CHAT);
+                g_ui_ctx.transition_ready = true;
+            }
         }
 
     } else {
@@ -2007,64 +2023,62 @@ static CeePewErr_t render_chat_menu(void)
     return CEEPEW_OK;
 }
 
-/* Phase 4: Chat compose — on-screen keyboard with potentiometer-driven cursor */
+/* Phase 4: Chat compose — sliding character selector with potentiometer control */
 static CeePewErr_t render_chat_compose(void)
 {
     hal_ui_clear();
 
-    uint32_t f = g_ui_ctx.anim.frame_count;
+    /* Character set: A-Z 0-9 (36 characters) */
+    static const char CHARSET[37] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    /* Map potentiometer (0-255) to character index (0-35) */
+    uint8_t pot = g_ui_ctx.user_input;
+    uint8_t char_idx = (uint8_t)(((uint16_t)pot * 36U) / 256U);
+    if (char_idx >= 36U) { char_idx = 35U; }
+    g_ui_ctx.keyboard_col = char_idx;  /* reuse field to store current char index */
 
     /* Title */
-    hal_ui_text(18U, 2U, "WRITE MESSAGE", HAL_UI_WHITE);
+    hal_ui_text(16U, 2U, "WRITE MESSAGE", HAL_UI_WHITE);
     draw_hline(0U, 12U, 128U);
 
-    /* Keyboard layout: 6 columns x 10 rows (A-Z + 0-9) */
-    static const char KEYBOARD_GRID[60] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-,?!';: ";
-    /* Rows: A-F, G-L, M-R, S-X, Y-Z + 0-5, 6-9 + .-,, ?!';:, space */
+    /* Render selected character large in center (16x18 area) */
+    char selected_ch[2U] = { CHARSET[char_idx], '\0' };
+    /* Use large text by rendering multiple times for visual emphasis */
+    hal_ui_text(60U, 24U, selected_ch, HAL_UI_WHITE);
+    hal_ui_text(59U, 23U, selected_ch, HAL_UI_WHITE);  /* overlay for bold effect */
 
-    /* Map potentiometer to row/column selection */
-    uint8_t pot = g_ui_ctx.user_input;
-    uint8_t grid_idx = (uint8_t)(((uint16_t)pot * 44U) / 256U);  /* 44 printable characters */
-    if (grid_idx >= 44U) { grid_idx = 43U; }
+    /* Character index display (e.g., "D (04/36)") */
+    char idx_str[10U];
+    (void)snprintf(idx_str, sizeof(idx_str), "(%02u/36)", (unsigned)char_idx + 1U);
+    hal_ui_text(50U, 36U, idx_str, HAL_UI_WHITE);
 
-    uint8_t grid_col = grid_idx % 6U;
-    uint8_t grid_row = grid_idx / 6U;
+    /* Show nearby characters for context (scrolling effect) */
+    uint8_t prev_idx = (char_idx > 0U) ? char_idx - 1U : 35U;
+    uint8_t next_idx = (char_idx < 35U) ? char_idx + 1U : 0U;
 
-    g_ui_ctx.keyboard_col = grid_col;
-    g_ui_ctx.keyboard_row = grid_row;
+    char prev_ch[2U] = { CHARSET[prev_idx], '\0' };
+    char next_ch[2U] = { CHARSET[next_idx], '\0' };
 
-    /* Display keyboard grid (6 chars per row, max 7 rows visible on 128x64 screen) */
-    for (uint8_t row = 0U; row < 7U; row++) {
-        uint8_t y_pos = (uint8_t)(16U + row * 7U);
-        if (y_pos > 54U) { break; }
+    hal_ui_text(40U, 27U, prev_ch, HAL_UI_WHITE);    /* previous char on left */
+    hal_ui_text(72U, 27U, next_ch, HAL_UI_WHITE);    /* next char on right */
 
-        for (uint8_t col = 0U; col < 6U; col++) {
-            uint8_t char_idx = row * 6U + col;
-            if (char_idx >= 44U) { break; }
+    /* Message preview and character count */
+    char msg_preview[32U];
+    (void)snprintf(msg_preview, sizeof(msg_preview), "Msg [%u/255]",
+                   (unsigned)g_ui_ctx.compose_length);
+    hal_ui_text(4U, 45U, msg_preview, HAL_UI_WHITE);
 
-            uint8_t x_pos = (uint8_t)(4U + col * 20U);
-            char ch = KEYBOARD_GRID[char_idx];
-            char ch_str[2U] = { ch, '\0' };
-
-            if (row == grid_row && col == grid_col) {
-                /* Selected: highlight with box */
-                HalUIRect_t sel_box = { .x = x_pos - 2U, .y = (uint8_t)(y_pos - 1U), .w = 18U, .h = 7U };
-                hal_ui_rect(&sel_box, HAL_UI_WHITE);
-                hal_ui_text(x_pos, y_pos, ch_str, HAL_UI_WHITE);
-            } else {
-                /* Not selected: plain text */
-                hal_ui_text(x_pos, y_pos, ch_str, HAL_UI_WHITE);
-            }
-        }
+    /* Display actual message content (wrapped if needed) */
+    if (g_ui_ctx.compose_length > 0U) {
+        char msg_line[28U];
+        uint8_t copy_len = (g_ui_ctx.compose_length < 27U) ? g_ui_ctx.compose_length : 27U;
+        (void)memcpy(msg_line, g_ui_ctx.compose_buffer, copy_len);
+        msg_line[copy_len] = '\0';
+        hal_ui_text(4U, 52U, msg_line, HAL_UI_WHITE);
     }
 
-    /* Message preview at bottom */
-    char preview[24U];
-    uint8_t preview_len = (g_ui_ctx.compose_length < 20U) ? g_ui_ctx.compose_length : 20U;
-    (void)memcpy(preview, g_ui_ctx.compose_buffer, preview_len);
-    preview[preview_len] = '\0';
-    hal_ui_text(4U, 56U, "Msg: ", HAL_UI_WHITE);
-    hal_ui_text(28U, 56U, preview, HAL_UI_WHITE);
+    /* Instructions */
+    hal_ui_text(4U, 60U, "Add: btn | Del: long | Send: 2s", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2145,6 +2159,12 @@ CeePewErr_t ui_manager_update(void)
             memcpy(g_ui_ctx.peer_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
             g_ui_ctx.commitment_verified   = g_ble_ctx.commitment_verified;
             g_ui_ctx.crypto_confirm_start_ms = now_ms;
+
+            /* Signal readiness after commitment verified, enabling sync handshake with peer */
+            if (g_ble_ctx.commitment_verified && !g_ble_ctx.ready_for_chat) {
+                transport_ble_set_ready_for_chat();
+                ESP_LOGI("ui", "Cryptogram state: signaled ready_for_chat to peer");
+            }
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT || g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
             /* Initialize chat menu */
             g_ui_ctx.chat_menu_selected = 0U;

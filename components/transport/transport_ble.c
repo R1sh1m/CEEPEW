@@ -607,6 +607,24 @@ bool transport_ble_handoff_ready(void)
     return g_ble_ctx.handoff_ready && g_ble_ctx.commitment_verified;
 }
 
+void transport_ble_set_ready_for_chat(void)
+{
+    g_ble_ctx.ready_for_chat = true;
+    ESP_LOGI(TAG, "Local ready_for_chat set to true");
+}
+
+bool transport_ble_peer_ready_for_chat(void)
+{
+    return g_ble_ctx.peer_ready_for_chat;
+}
+
+bool transport_ble_both_ready_for_chat(void)
+{
+    /* Both local and peer must signal readiness to proceed */
+    return g_ble_ctx.ready_for_chat && g_ble_ctx.peer_ready_for_chat
+           && g_ble_ctx.commitment_verified;
+}
+
 CeePewErr_t transport_ble_disconnect(void)
 {
     if (g_ble_ctx.state == BLE_IDLE) {

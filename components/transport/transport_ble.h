@@ -94,6 +94,9 @@ typedef struct {
     bool           connecting;
     bool           commitment_write_pending;
     uint32_t       verify_fail_count;
+    bool           ready_for_chat;              /* Local readiness flag after commitment verified */
+    bool           peer_ready_for_chat;         /* Peer's readiness flag received via GATT */
+    uint32_t       peer_ready_timestamp_ms;     /* When peer_ready_for_chat was set */
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
@@ -125,6 +128,15 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
 
 /* Verify peer's commitment matches ours (call after exchange completes) */
 CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t len);
+
+/* Set local readiness flag after commitment verified (for sync handshake) */
+void transport_ble_set_ready_for_chat(void);
+
+/* Check if peer has signaled readiness (call to verify both sides ready) */
+bool transport_ble_peer_ready_for_chat(void);
+
+/* Check if both local and peer are ready for chat transition */
+bool transport_ble_both_ready_for_chat(void);
 
 /* Check if handoff to Phase 3 is ready (commitment verified + connection stable) */
 bool transport_ble_handoff_ready(void);
