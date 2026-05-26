@@ -30,10 +30,12 @@ typedef enum {
     UI_STATE_FINGERPRINT = 8U,    /* Sprint 10: Fingerprint display */
     UI_STATE_FINGERPRINT_CONFIRM = 9U,  /* Phase 4: Confirm fingerprint with D/S */
     UI_STATE_CHAT = 10U,           /* Sprint 11: Chat bubbles */
-    UI_STATE_CRYPTOGRAM = 11U,     /* Sprint 12: Cryptogram panel */
-    UI_STATE_NONCE_EXHAUSTED = 12U, /* Phase 4: Nonce limit exhausted */
-   UI_STATE_INFO = 13U,           /* DIAG-only: Info / diagnostics display */
-   UI_STATE_ERROR = 14U,         /* Phase 4: Generic error display */
+    UI_STATE_CHAT_MENU = 11U,      /* Phase 4: Chat menu (Read/Write/Check) */
+    UI_STATE_CHAT_COMPOSE = 12U,   /* Phase 4: Chat message composition with keyboard */
+    UI_STATE_CRYPTOGRAM = 13U,     /* Sprint 12: Cryptogram panel */
+    UI_STATE_NONCE_EXHAUSTED = 14U, /* Phase 4: Nonce limit exhausted */
+    UI_STATE_INFO = 15U,           /* DIAG-only: Info / diagnostics display */
+    UI_STATE_ERROR = 16U,         /* Phase 4: Generic error display */
 } UIState_t;
 
 /* Animation frame context */
@@ -72,6 +74,13 @@ typedef struct {
     bool          fingerprint_confirmed; /* true if user confirmed (D button) */
     uint32_t      reject_sequence_start_ms; /* ms when red reject blink started */
     uint32_t      error_start_ms;       /* ms when error state was entered */
+    /* Phase 4: Chat menu and compose context */
+    uint8_t       chat_menu_selected;   /* 0=Read, 1=Write, 2=Check */
+    char          compose_buffer[256];  /* Message composition buffer */
+    uint8_t       compose_length;       /* Current message length */
+    uint8_t       compose_cursor;       /* Cursor position in message */
+    uint8_t       keyboard_row;         /* Current keyboard row (0-9 for 6x10 grid) */
+    uint8_t       keyboard_col;         /* Current keyboard column (0-5) */
 } UIContext_t;
 
 extern UIContext_t g_ui_ctx;

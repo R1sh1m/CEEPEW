@@ -678,7 +678,7 @@ static CeePewErr_t render_boot_anim(void)
     /* ── Phase 3 (f 60–89): Chunky loading bar fills ── */
     if (f >= 60U) {
        /* Bar border (moved up to increase gap below with frame) */
-       HalUIRect_t border = { .x = 14U, .y = 54U, .w = 100U, .h = 9U };
+       HalUIRect_t border = { .x = 14U, .y = 50U, .w = 100U, .h = 9U };
        hal_ui_rect(&border, HAL_UI_WHITE);
 
        /* Chunky fill — 4-px wide segments with 1-px gaps */
@@ -689,11 +689,11 @@ static CeePewErr_t render_boot_anim(void)
            hal_ui_rect_fill(&seg, HAL_UI_WHITE);
        }
 
-       /* Percentage counter — placed below bar */
+       /* Percentage counter — placed below bar with clear separation */
        uint8_t pct = (seg_count * 100U) / 12U;
        char pct_str[5U];
        (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-       hal_ui_text(50U, 56U, pct_str, HAL_UI_WHITE);
+       hal_ui_text(50U, 61U, pct_str, HAL_UI_WHITE);
     }
 
     /* ── Phase 4 (f 90–109): Border frame draws in from corners ── */
@@ -1951,6 +1951,125 @@ static CeePewErr_t render_cryptogram(void)
     return CEEPEW_OK;
 }
 
+/* Phase 4: Chat menu — user selects Read/Write/Check with potentiometer-driven pointer */
+static CeePewErr_t render_chat_menu(void)
+{
+    hal_ui_clear();
+
+    uint32_t f = g_ui_ctx.anim.frame_count;
+
+    /* Title */
+    hal_ui_text(20U, 2U, "SECURE CHAT", HAL_UI_WHITE);
+    draw_hline(0U, 12U, 128U);
+
+    /* Three menu options */
+    static const char *const MENU_OPTIONS[3] = {
+        "[ Read Inbox ]",
+        "[ Write Message ]",
+        "[ Check Message ]"
+    };
+
+    /* Map potentiometer (0-255) to menu selection (0-2) */
+    uint8_t selected = (uint8_t)(((uint16_t)g_ui_ctx.user_input * 3U) / 256U);
+    if (selected >= 3U) { selected = 2U; }
+    g_ui_ctx.chat_menu_selected = selected;
+
+    /* Render menu items with highlighting */
+    for (uint8_t i = 0U; i < 3U; i++) {
+        uint8_t y_pos = (uint8_t)(20U + i * 12U);
+         
+        if (i == selected) {
+            /* Selected: draw filled box and inverted text */
+            HalUIRect_t sel_box = {
+                .x = 10U,
+                .y = (uint8_t)(y_pos - 1U),
+                .w = 108U,
+                .h = 10U
+            };
+            hal_ui_rect_fill(&sel_box, HAL_UI_WHITE);
+            /* Text appears inverted on filled background */
+            hal_ui_text(15U, y_pos, MENU_OPTIONS[i], HAL_UI_BLACK);
+        } else {
+            /* Not selected: plain text with box outline */
+            hal_ui_text(15U, y_pos, MENU_OPTIONS[i], HAL_UI_WHITE);
+        }
+    }
+
+    /* Animated pointer on the right */
+    uint8_t ptr_y = (uint8_t)(24U + g_ui_ctx.chat_menu_selected * 12U);
+    uint8_t ptr_x = (uint8_t)(120U + ((f / 4U) % 3U));
+    hal_ui_text(ptr_x, ptr_y, ">", HAL_UI_WHITE);
+
+    /* Instruction */
+    hal_ui_text(10U, 56U, "Turn pot / press", HAL_UI_WHITE);
+
+    g_ui_ctx.anim.frame_count++;
+    return CEEPEW_OK;
+}
+
+/* Phase 4: Chat compose — on-screen keyboard with potentiometer-driven cursor */
+static CeePewErr_t render_chat_compose(void)
+{
+    hal_ui_clear();
+
+    uint32_t f = g_ui_ctx.anim.frame_count;
+
+    /* Title */
+    hal_ui_text(18U, 2U, "WRITE MESSAGE", HAL_UI_WHITE);
+    draw_hline(0U, 12U, 128U);
+
+    /* Keyboard layout: 6 columns x 10 rows (A-Z + 0-9) */
+    static const char KEYBOARD_GRID[60] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-,?!';: ";
+    /* Rows: A-F, G-L, M-R, S-X, Y-Z + 0-5, 6-9 + .-,, ?!';:, space */
+
+    /* Map potentiometer to row/column selection */
+    uint8_t pot = g_ui_ctx.user_input;
+    uint8_t grid_idx = (uint8_t)(((uint16_t)pot * 44U) / 256U);  /* 44 printable characters */
+    if (grid_idx >= 44U) { grid_idx = 43U; }
+
+    uint8_t grid_col = grid_idx % 6U;
+    uint8_t grid_row = grid_idx / 6U;
+
+    g_ui_ctx.keyboard_col = grid_col;
+    g_ui_ctx.keyboard_row = grid_row;
+
+    /* Display keyboard grid (6 chars per row, max 7 rows visible on 128x64 screen) */
+    for (uint8_t row = 0U; row < 7U; row++) {
+        uint8_t y_pos = (uint8_t)(16U + row * 7U);
+        if (y_pos > 54U) { break; }
+
+        for (uint8_t col = 0U; col < 6U; col++) {
+            uint8_t char_idx = row * 6U + col;
+            if (char_idx >= 44U) { break; }
+
+            uint8_t x_pos = (uint8_t)(4U + col * 20U);
+            char ch = KEYBOARD_GRID[char_idx];
+            char ch_str[2U] = { ch, '\0' };
+
+            if (row == grid_row && col == grid_col) {
+                /* Selected: highlight with box */
+                HalUIRect_t sel_box = { .x = x_pos - 2U, .y = (uint8_t)(y_pos - 1U), .w = 18U, .h = 7U };
+                hal_ui_rect(&sel_box, HAL_UI_WHITE);
+                hal_ui_text(x_pos, y_pos, ch_str, HAL_UI_WHITE);
+            } else {
+                /* Not selected: plain text */
+                hal_ui_text(x_pos, y_pos, ch_str, HAL_UI_WHITE);
+            }
+        }
+    }
+
+    /* Message preview at bottom */
+    char preview[24U];
+    uint8_t preview_len = (g_ui_ctx.compose_length < 20U) ? g_ui_ctx.compose_length : 20U;
+    (void)memcpy(preview, g_ui_ctx.compose_buffer, preview_len);
+    preview[preview_len] = '\0';
+    hal_ui_text(4U, 56U, "Msg: ", HAL_UI_WHITE);
+    hal_ui_text(28U, 56U, preview, HAL_UI_WHITE);
+
+    g_ui_ctx.anim.frame_count++;
+    return CEEPEW_OK;
+}
+
 CeePewErr_t ui_manager_update(void)
 {
     CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
@@ -2026,6 +2145,18 @@ CeePewErr_t ui_manager_update(void)
             memcpy(g_ui_ctx.peer_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
             g_ui_ctx.commitment_verified   = g_ble_ctx.commitment_verified;
             g_ui_ctx.crypto_confirm_start_ms = now_ms;
+        } else if (g_ui_ctx.current_state == UI_STATE_CHAT || g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
+            /* Initialize chat menu */
+            g_ui_ctx.chat_menu_selected = 0U;
+            g_ui_ctx.button_prev = false;
+        } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
+            /* Initialize message compose context */
+            memset(g_ui_ctx.compose_buffer, 0U, sizeof(g_ui_ctx.compose_buffer));
+            g_ui_ctx.compose_length = 0U;
+            g_ui_ctx.compose_cursor = 0U;
+            g_ui_ctx.keyboard_row = 0U;
+            g_ui_ctx.keyboard_col = 0U;
+            g_ui_ctx.button_prev = false;
         } else if (g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
             g_ui_ctx.error_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_ERROR) {
@@ -2132,6 +2263,52 @@ CeePewErr_t ui_manager_update(void)
             (void)ui_manager_transition_to(UI_STATE_CHAT);
             g_ui_ctx.transition_ready = true;
         }
+    } else if (g_ui_ctx.current_state == UI_STATE_CHAT || g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
+        /* Chat menu: button selects option */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            /* Transition to compose based on selection */
+            switch (g_ui_ctx.chat_menu_selected) {
+                case 0U:  /* Read Inbox */
+                    /* TODO: implement read mode */
+                    (void)ui_manager_transition_to(UI_STATE_CHAT);
+                    g_ui_ctx.transition_ready = true;
+                    break;
+                case 1U:  /* Write Message */
+                    (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
+                    g_ui_ctx.transition_ready = true;
+                    break;
+                case 2U:  /* Check Message */
+                    /* TODO: implement check mode */
+                    (void)ui_manager_transition_to(UI_STATE_CHAT);
+                    g_ui_ctx.transition_ready = true;
+                    break;
+                default:  break;
+            }
+        }
+    } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
+        /* Message compose: button adds character, long press sends */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms) ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 1000U) {
+                /* Long press: send message and return to menu */
+                if (g_ui_ctx.compose_length > 0U) {
+                    /* TODO: send message via session API */
+                    ESP_LOGI("ui", "Sending message: %.*s", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
+                }
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
+            } else {
+                /* Short press: add selected character to message */
+                static const char KEYBOARD_GRID[60] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-,?!';: ";
+                uint8_t char_idx = g_ui_ctx.keyboard_row * 6U + g_ui_ctx.keyboard_col;
+                if (char_idx < 44U && g_ui_ctx.compose_length < 255U) {
+                    g_ui_ctx.compose_buffer[g_ui_ctx.compose_length] = KEYBOARD_GRID[char_idx];
+                    g_ui_ctx.compose_length++;
+                }
+            }
+        }
     } else if (g_ui_ctx.current_state == UI_STATE_ERROR ||
                g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
         uint32_t start_ms = (g_ui_ctx.current_state == UI_STATE_ERROR)
@@ -2225,7 +2402,13 @@ CeePewErr_t ui_manager_draw(void)
             err = render_fingerprint_confirm();
             break;
         case UI_STATE_CHAT:
-            err = render_chat();
+            err = render_chat_menu();
+            break;
+        case UI_STATE_CHAT_MENU:
+            err = render_chat_menu();
+            break;
+        case UI_STATE_CHAT_COMPOSE:
+            err = render_chat_compose();
             break;
         case UI_STATE_CRYPTOGRAM:
             err = render_cryptogram();
