@@ -595,8 +595,27 @@ CeePewErr_t transport_ble_deinit(void)
     s_adv_starting = false;
     s_scan_start_failed = false;
     s_ble_initialised = false;
-
     return CEEPEW_OK;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * transport_ble_retry_scan_if_needed()
+ *
+ * Called periodically from task_session_run() (on the 1 s timeout tick).
+ * If a previous scan-start failed (e.g., transient coexistence conflict),
+ * this clears the request guard and retries.
+ * ════════════════════════════════════════════════════════════════════════ */
+CeePewErr_t transport_ble_retry_scan_if_needed(void)
+{
+    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
+
+    if (!s_scan_start_failed) { return CEEPEW_OK; }
+
+    ESP_LOGW(TAG, "Retrying BLE scan start after previous failure");
+    s_scan_requested    = false;
+    s_scan_start_failed = false;
+    return transport_ble_start_scan();
 }
 
 #ifdef CONFIG_BT_ENABLED
