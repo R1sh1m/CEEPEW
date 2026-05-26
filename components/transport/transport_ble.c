@@ -879,9 +879,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             break;
 
         case ESP_GATTC_SEARCH_RES_EVT:
-            if (param->search_res.srvc_id.is_primary &&
-                param->search_res.srvc_id.id.uuid.len == ESP_UUID_LEN_16 &&
-                param->search_res.srvc_id.id.uuid.uuid.uuid16 == BLE_SERVICE_UUID) {
+            if (param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16 &&
+                param->search_res.srvc_id.uuid.uuid.uuid16 == BLE_SERVICE_UUID) {
                 g_ble_ctx.service_start_handle = param->search_res.start_handle;
                 g_ble_ctx.service_end_handle = param->search_res.end_handle;
                 ESP_LOGI(TAG, "GATTC service found: %u-%u",
@@ -959,7 +958,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
 }
 
 static void gatts_event_handler(esp_gatts_cb_event_t event,
-                                esp_gatts_if_t gatts_if,
+                                esp_gatt_if_t gatts_if,
                                 esp_ble_gatts_cb_param_t *param)
 {
     if (!param) { return; }
