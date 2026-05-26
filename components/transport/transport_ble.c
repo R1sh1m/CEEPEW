@@ -66,10 +66,6 @@ static const uint8_t s_adv_service_uuid16[2] = {
     (uint8_t)(BLE_SERVICE_UUID & 0xFFU),
     (uint8_t)((BLE_SERVICE_UUID >> 8U) & 0xFFU)
 };
-static esp_bt_uuid_t s_service_uuid = {
-    .len = ESP_UUID_LEN_16,
-    .uuid = { .uuid16 = BLE_SERVICE_UUID }
-};
 static esp_bt_uuid_t s_char_uuid = {
     .len = ESP_UUID_LEN_16,
     .uuid = { .uuid16 = BLE_CHAR_UUID }
