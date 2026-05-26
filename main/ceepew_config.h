@@ -79,9 +79,9 @@
 #define CEEPEW_DIAG_SAMPLE_MS            1000U
 #define CEEPEW_ADC_MAX_RAW               4095U
 #define CEEPEW_ADC_SAMPLES               8U
-#define CEEPEW_POT_EMA_ALPHA_NUM         15U    /* EMA alpha = 15/100 = 0.15  */
+#define CEEPEW_POT_EMA_ALPHA_NUM         25U    /* EMA alpha = 25/100 = 0.25 (snappier) */
 #define CEEPEW_POT_EMA_ALPHA_DEN         100U
-#define CEEPEW_POT_DEADZONE              100U   /* ADC units at rails         */
+#define CEEPEW_POT_DEADZONE              60U    /* ADC units at rails (reduced deadzone) */
 #define CEEPEW_POT_EDGE_HYSTERESIS       32U
 #define CEEPEW_CLICK_COOLDOWN_MS         200U
 #define CEEPEW_EDGE_STABLE_MS            300U

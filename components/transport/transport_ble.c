@@ -66,6 +66,14 @@ static const uint8_t s_adv_service_uuid16[2] = {
     (uint8_t)(BLE_SERVICE_UUID & 0xFFU),
     (uint8_t)((BLE_SERVICE_UUID >> 8U) & 0xFFU)
 };
+static const uint8_t s_adv_raw_data[] = {
+    2U, 0x01U, (uint8_t)(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    3U, 0x03U, (uint8_t)(BLE_SERVICE_UUID & 0xFFU), (uint8_t)((BLE_SERVICE_UUID >> 8U) & 0xFFU),
+    7U, 0x09U, 'C', 'E', 'E', 'P', 'E', 'W'
+};
+static const uint8_t s_scan_rsp_raw_data[] = {
+    7U, 0x09U, 'C', 'E', 'E', 'P', 'E', 'W'
+};
 static esp_bt_uuid_t s_char_uuid = {
     .len = ESP_UUID_LEN_16,
     .uuid = { .uuid16 = BLE_CHAR_UUID }
@@ -109,6 +117,9 @@ static bool s_ble_initialised = false;
 static bool s_scan_requested = false;
 static bool s_adv_data_set = false;
 static bool s_scan_rsp_set = false;
+static bool s_scan_peer_dedupe_valid = false;
+static uint8_t s_scan_peer_dedupe_mac[6U] = {0U};
+static uint32_t s_scan_peer_dedupe_seen_ms = 0U;
 
 /*
  * s_adv_starting — set when esp_ble_gap_start_advertising() is called,
@@ -126,6 +137,8 @@ static bool s_adv_starting = false;
  */
 static bool s_scan_start_failed = false;
 
+#define CEEPEW_SCAN_PEER_DEDUPE_WINDOW_MS 300U
+
 static const char *transport_ble_state_name(BleState_t state)
 {
     switch (state) {
@@ -140,10 +153,65 @@ static const char *transport_ble_state_name(BleState_t state)
     }
 }
 
+static bool transport_ble_scan_peer_is_duplicate(const uint8_t mac[6U],
+                                                 uint32_t now_ms)
+{
+    CEEPEW_ASSERT(mac != NULL, false);
+
+    if (!s_scan_peer_dedupe_valid) {
+        memcpy(s_scan_peer_dedupe_mac, mac, 6U);
+        s_scan_peer_dedupe_seen_ms = now_ms;
+        s_scan_peer_dedupe_valid = true;
+        return false;
+    }
+
+    if (memcmp(s_scan_peer_dedupe_mac, mac, 6U) != 0) {
+        memcpy(s_scan_peer_dedupe_mac, mac, 6U);
+        s_scan_peer_dedupe_seen_ms = now_ms;
+        return false;
+    }
+
+    if ((uint32_t)(now_ms - s_scan_peer_dedupe_seen_ms) <= CEEPEW_SCAN_PEER_DEDUPE_WINDOW_MS) {
+        return true;
+    }
+
+    s_scan_peer_dedupe_seen_ms = now_ms;
+    return false;
+}
+
 static void transport_ble_format_mac(const uint8_t mac[6], char out[18])
 {
     (void)snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static bool transport_ble_payload_contains(const uint8_t *buf,
+                                           uint16_t buf_len,
+                                           const uint8_t *needle,
+                                           uint8_t needle_len)
+{
+    CEEPEW_ASSERT(buf != NULL, false);
+    CEEPEW_ASSERT(needle != NULL && needle_len > 0U, false);
+
+    if (buf_len < needle_len) {
+        return false;
+    }
+
+    uint16_t limit = (uint16_t)(buf_len - needle_len + 1U);
+    for (uint16_t i = 0U; i < limit; i++) {
+        bool match = true;
+        for (uint8_t j = 0U; j < needle_len; j++) {
+            if (buf[i + j] != needle[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 CeePewErr_t transport_ble_init(void)
@@ -184,6 +252,9 @@ CeePewErr_t transport_ble_init(void)
     s_scan_requested = false;
     s_adv_data_set = false;
     s_scan_rsp_set = false;
+    s_scan_peer_dedupe_valid = false;
+    s_scan_peer_dedupe_seen_ms = 0U;
+    memset(s_scan_peer_dedupe_mac, 0U, sizeof(s_scan_peer_dedupe_mac));
     ESP_LOGI(TAG, "BLE context reset: state=%s adv=%u scan=%u",
              transport_ble_state_name(g_ble_ctx.state),
              g_ble_ctx.is_advertising ? 1U : 0U,
@@ -230,8 +301,8 @@ CeePewErr_t transport_ble_init(void)
     ESP_LOGI(TAG, "esp_bluedroid_enable: OK");
 
     /* Set initialization flag BEFORE registering callbacks to avoid race condition.
-     * GAP callbacks may fire during esp_ble_gap_register_callback() or 
-     * esp_ble_gap_set_device_name(), and those callbacks need s_ble_initialised 
+     * GAP callbacks may fire during esp_ble_gap_register_callback() or
+     * esp_ble_gap_set_device_name(), and those callbacks need s_ble_initialised
      * to be true to pass assertions.
      */
     s_ble_initialised = true;
@@ -246,6 +317,18 @@ CeePewErr_t transport_ble_init(void)
 
     esp_ble_gatts_register_callback(gatts_event_handler);
     ESP_LOGI(TAG, "GATTS callback registered");
+
+    /* Start advertising early, in parallel with GATT registration.
+     * This ensures that by the time GATTC registers and scan starts,
+     * the advertising is already on the air and will be discovered.
+     * transport_ble_start_advertising() will configure and start BLE ads.
+     */
+    CeePewErr_t adv_err = transport_ble_start_advertising();
+    if (adv_err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "Early advertising start returned: %d (will retry on GATT events)", adv_err);
+    } else {
+        ESP_LOGI(TAG, "Advertising configuration initiated early");
+    }
 
     err = esp_ble_gattc_app_register(0);
     if (err != ESP_OK) {
@@ -293,48 +376,18 @@ CeePewErr_t transport_ble_start_advertising(void)
         ESP_LOGI(TAG, "Device name set to 'CEEPEW'");
     }
 
-    esp_ble_adv_data_t adv_data = {
-        .set_scan_rsp = false,
-        .include_name = false, /* put name in SCAN_RSP for active scanners */
-        .include_txpower = false,
-        .min_interval = 0x0030,  /* 48ms minimum (BLE standard) */
-        .max_interval = 0x0030,  /* fixed interval */
-        .appearance = 0,
-        .manufacturer_len = 0,
-        .p_manufacturer_data = NULL,
-        .service_data_len = 0,
-        .p_service_data = NULL,
-        .service_uuid_len = sizeof(s_adv_service_uuid16),
-        .p_service_uuid = (uint8_t *)s_adv_service_uuid16,
-        .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
-    };
-
-    err = esp_ble_gap_config_adv_data(&adv_data);
+    err = esp_ble_gap_config_adv_data_raw((uint8_t *)s_adv_raw_data,
+                                          sizeof(s_adv_raw_data));
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ble_gap_config_adv_data FAILED: %d (%s)", err, esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_ble_gap_config_adv_data_raw FAILED: %d (%s)", err, esp_err_to_name(err));
         return CEEPEW_ERR_HW;
     }
 
     /* Configure scan response separately so active scanners always receive name */
-    esp_ble_adv_data_t scan_rsp_data = {
-        .set_scan_rsp = true,
-        .include_name = true,
-        .include_txpower = true,
-        .min_interval = 0,
-        .max_interval = 0,
-        .appearance = 0,
-        .manufacturer_len = 0,
-        .p_manufacturer_data = NULL,
-        .service_data_len = 0,
-        .p_service_data = NULL,
-        .service_uuid_len = 0,
-        .p_service_uuid = NULL,
-        .flag = 0,
-    };
-
-    err = esp_ble_gap_config_adv_data(&scan_rsp_data);
+    err = esp_ble_gap_config_scan_rsp_data_raw((uint8_t *)s_scan_rsp_raw_data,
+                                               sizeof(s_scan_rsp_raw_data));
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ble_gap_config_adv_data (scan rsp) FAILED: %d (%s)", err, esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_ble_gap_config_scan_rsp_data_raw FAILED: %d (%s)", err, esp_err_to_name(err));
         return CEEPEW_ERR_HW;
     }
 
@@ -390,14 +443,14 @@ CeePewErr_t transport_ble_start_scan(void)
      * PASSIVE scan would silently drop the scan-response and we'd see no name.
      */
     ESP_LOGI(TAG, "Scan requested: active=%u interval=%u window=%u duplicate=%u",
-             1U, 0x50U, 0x30U, 0U);
+             1U, 0x50U, 0x30U, 1U);
     esp_ble_scan_params_t scan_params = {
         .scan_type          = BLE_SCAN_TYPE_ACTIVE,
         .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
         .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
         .scan_interval      = 0x50,   /* 50ms = 80 × 0.625ms */
         .scan_window        = 0x30,   /* 30ms — leaves room for TX */
-        .scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE,  /* see every advertisement */
+        .scan_duplicate     = BLE_SCAN_DUPLICATE_ENABLE,  /* deduplicate per scan window */
     };
 
     esp_err_t err = esp_ble_gap_set_scan_params(&scan_params);
@@ -612,6 +665,35 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
 
+    /* First: check for peer timeout and clear discovered state if peer vanished */
+    {
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        const uint32_t PEER_LOST_TIMEOUT_MS = 5000U; /* 5s — conservative for discovery */
+
+        if (g_ble_ctx.discovered && g_ble_ctx.last_seen_ms != 0U &&
+            (now_ms - g_ble_ctx.last_seen_ms) > PEER_LOST_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "Peer lost: last seen %lu ms ago — clearing discovered",
+                     (unsigned long)(now_ms - g_ble_ctx.last_seen_ms));
+
+            /* Clear peer fields so upper layers return to discovery */
+            memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
+            memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
+            g_ble_ctx.peer_name_len = 0U;
+            g_ble_ctx.peer_rssi = 0;
+            g_ble_ctx.peer_rssi_smooth_x8 = 0;
+            g_ble_ctx.last_seen_ms = 0U;
+            g_ble_ctx.scan_hit_count = 0U;
+            g_ble_ctx.scan_seen_count = 0U;
+            g_ble_ctx.adv_packet_count = 0U;
+            g_ble_ctx.discovered = false;
+            s_scan_peer_dedupe_valid = false;
+            memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
+
+            /* Ensure UI and session task observe discovery reset */
+            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+        }
+    }
+
     if (!s_scan_start_failed) { return CEEPEW_OK; }
 
     ESP_LOGW(TAG, "Retrying BLE scan start after previous failure");
@@ -626,7 +708,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     switch (event) {
 
     /* ── Advertising data accepted by stack → start advertising only ── */
-    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT: {
+    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
+    case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT: {
         s_adv_data_set = true;
         ESP_LOGI(TAG, "ADV_DATA_SET_COMPLETE (scan_rsp_ready=%u)", s_scan_rsp_set);
         if (s_adv_data_set && s_scan_rsp_set && !s_adv_starting) {
@@ -660,6 +743,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
     /* ── Scan response data accepted → no action needed ──────────────── */
     case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
+    case ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT:
         s_scan_rsp_set = true;
         ESP_LOGI(TAG, "SCAN_RSP_DATA_SET_COMPLETE (adv_data_ready=%u)", s_adv_data_set);
         if (s_adv_data_set && s_scan_rsp_set && !s_adv_starting) {
@@ -747,6 +831,13 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         if (param->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) { break; }
         if (g_ble_ctx.scan_seen_count < UINT32_MAX) { g_ble_ctx.scan_seen_count++; }
 
+        /* Diagnostic: log scan event frequency */
+        if (g_ble_ctx.scan_seen_count % 100U == 0U) {
+            ESP_LOGI(TAG, "Scan activity: seen_count=%lu discovered=%u hits=%u state=%s",
+                     (unsigned long)g_ble_ctx.scan_seen_count, g_ble_ctx.discovered ? 1U : 0U,
+                     g_ble_ctx.scan_hit_count, transport_ble_state_name(g_ble_ctx.state));
+        }
+
         char    found_name[17] = {0};
         uint8_t found_name_len = 0U;
         bool    service_uuid_match = false;
@@ -755,14 +846,20 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         transport_ble_format_mac(param->scan_rst.bda, found_mac);
 
         uint16_t total_adv_len = (uint16_t)(param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len);
+        uint8_t *raw_adv = param->scan_rst.ble_adv;
+        bool payload_has_ceepew_name = false;
+        if (raw_adv != NULL && total_adv_len >= 6U) {
+            payload_has_ceepew_name = transport_ble_payload_contains(raw_adv, total_adv_len,
+                                                                     (const uint8_t *)"CEEPEW", 6U);
+        }
         uint8_t *name_ptr = esp_ble_resolve_adv_data_by_type(
-            param->scan_rst.ble_adv,
+            raw_adv,
             total_adv_len,
             ESP_BLE_AD_TYPE_NAME_CMPL,
             &found_name_len);
         if (name_ptr == NULL) {
             name_ptr = esp_ble_resolve_adv_data_by_type(
-                param->scan_rst.ble_adv,
+                raw_adv,
                 total_adv_len,
                 ESP_BLE_AD_TYPE_NAME_SHORT,
                 &found_name_len);
@@ -774,16 +871,19 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             }
             memcpy(found_name, name_ptr, found_name_len);
             found_name[found_name_len] = '\0';
+        } else if (payload_has_ceepew_name) {
+            memcpy(found_name, "CEEPEW", 6U);
+            found_name_len = 6U;
         }
 
         uint8_t *uuid_ptr = esp_ble_resolve_adv_data_by_type(
-            param->scan_rst.ble_adv,
+            raw_adv,
             total_adv_len,
             ESP_BLE_AD_TYPE_16SRV_CMPL,
             &service_uuid_len);
         if (uuid_ptr == NULL) {
             uuid_ptr = esp_ble_resolve_adv_data_by_type(
-                param->scan_rst.ble_adv,
+                raw_adv,
                 total_adv_len,
                 ESP_BLE_AD_TYPE_16SRV_PART,
                 &service_uuid_len);
@@ -793,11 +893,25 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             service_uuid_match = true;
         }
 
+        /* Diagnostic: trace UUID parsing if peer might be CEE-PEW */
+        if ((found_name_len >= 2U) || service_uuid_match || uuid_ptr != NULL || payload_has_ceepew_name) {
+            ESP_LOGD(TAG, "UUID parse: uuid_ptr=%p uuid_len=%u expected_len=%lu match=%u",
+                     uuid_ptr, service_uuid_len, (unsigned long)sizeof(s_adv_service_uuid16),
+                     service_uuid_match ? 1U : 0U);
+        }
+
         /* Accept a device whose name starts with "CEEPEW" or whose service UUID
          * advertises the CEEPEW service. */
         bool is_ceepew_peer = ((found_name_len >= 6U &&
                                 memcmp(found_name, "CEEPEW", 6U) == 0) ||
-                               service_uuid_match);
+                              service_uuid_match ||
+                              payload_has_ceepew_name);
+
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        if (is_ceepew_peer &&
+            transport_ble_scan_peer_is_duplicate(param->scan_rst.bda, now_ms)) {
+            break;
+        }
 
         ESP_LOGI(TAG, "Scan signal: evt=%u peer=%s rssi=%d adv_len=%u name=%s svc=%s match=%s",
                  (unsigned)param->scan_rst.search_evt,
@@ -963,7 +1077,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 g_ble_ctx.handoff_ready = true;
                 g_ble_ctx.state = BLE_DONE;
             }
-            break;
+            break; 
 
         case ESP_GATTC_DISCONNECT_EVT:
             g_ble_ctx.gattc_connected = false;
@@ -971,6 +1085,25 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             g_ble_ctx.state = BLE_IDLE;
             g_ble_ctx.gattc_char_handle = 0U;
             ESP_LOGI(TAG, "GATTC disconnected");
+
+            /* If disconnect occurred before successful commitment verification,
+             * reset discovered peer so upper layers return to discovery state. */
+            if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
+                ESP_LOGI(TAG, "Disconnect before verification — clearing discovered peer");
+                memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
+                memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
+                g_ble_ctx.peer_name_len = 0U;
+                g_ble_ctx.peer_rssi = 0;
+                g_ble_ctx.peer_rssi_smooth_x8 = 0;
+                g_ble_ctx.last_seen_ms = 0U;
+                g_ble_ctx.scan_hit_count = 0U;
+                g_ble_ctx.scan_seen_count = 0U;
+                g_ble_ctx.adv_packet_count = 0U;
+                g_ble_ctx.discovered = false;
+                s_scan_peer_dedupe_valid = false;
+                memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
+                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+            }
             break;
 
         default:
@@ -1028,6 +1161,24 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         case ESP_GATTS_DISCONNECT_EVT:
             g_ble_ctx.gatts_connected = false;
             ESP_LOGI(TAG, "GATTS disconnected");
+
+            /* If responder disconnected before verification, clear discovered peer */
+            if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
+                ESP_LOGI(TAG, "Responder disconnected before verification — clearing discovered peer");
+                memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
+                memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
+                g_ble_ctx.peer_name_len = 0U;
+                g_ble_ctx.peer_rssi = 0;
+                g_ble_ctx.peer_rssi_smooth_x8 = 0;
+                g_ble_ctx.last_seen_ms = 0U;
+                g_ble_ctx.scan_hit_count = 0U;
+                g_ble_ctx.scan_seen_count = 0U;
+                g_ble_ctx.adv_packet_count = 0U;
+                g_ble_ctx.discovered = false;
+                s_scan_peer_dedupe_valid = false;
+                memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
+                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+            }
             break;
 
         case ESP_GATTS_WRITE_EVT:
@@ -1042,7 +1193,14 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             if (!param->write.is_prep &&
                 param->write.handle == g_ble_ctx.gatts_char_handle &&
                 param->write.len == 8U) {
-                (void)transport_ble_verify_commitment(param->write.value);
+                CeePewErr_t verify_err = transport_ble_verify_commitment(param->write.value);
+                if (verify_err != CEEPEW_OK) {
+                    ESP_LOGW(TAG, "transport_ble_verify_commitment failed: %d", (int)verify_err);
+                    /* Show a distinct UI state indicating the remote code differs */
+                    (void)ui_manager_transition_to(UI_STATE_CODE_DIFFERENT);
+                    /* Reset BLE pairing state and disconnect so local device returns to scanning */
+                    (void)transport_ble_disconnect();
+                }
             }
             break;
 

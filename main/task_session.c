@@ -93,6 +93,7 @@
     static int8_t s_last_ble_rssi = 0;
     static uint64_t s_last_ble_scan_heartbeat_ms = 0ULL;
 static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started */
+    static bool s_ble_peer_latched = false;
 
     static const char *task_session_ble_state_name(BleState_t state)
     {
@@ -122,8 +123,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* Expand the 4-digit UI entry into the 32-byte session code expected by
         * the session FSM by repeating the user-selected digits across the buffer. */
         for (uint8_t i = 0U; i < 32U; i++) {
-            uint8_t digit = (uint8_t)(g_ui_ctx.code_digits[i % 4U] % 10U);
-            session_code[i] = (uint8_t)('0' + digit);
+            /* Expand the 4-character UI entry (ASCII bytes) into 32-byte session code */
+            uint8_t ch = g_ui_ctx.code_digits[i % 4U];
+            /* If stored value is not printable, fallback to '0'+(val%10) */
+            if (ch < 32U) { ch = (uint8_t)('0' + (ch % 10U)); }
+            session_code[i] = ch;
         }
 
         return CEEPEW_OK;
@@ -139,11 +143,16 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* Nothing to do once active session is established */
         if (phase == 3U && session_is_active()) {return CEEPEW_OK;}
 
-        /* Reset exchange flag whenever we drop below phase 2 */
-        if (phase < 2U) { s_ble_commitment_exchanged = false;}
+        /* Reset phase-latched flags whenever we drop below their stage. */
+        if (phase < 1U) {
+            s_ble_peer_latched = false;
+        }
+        if (phase < 2U) {
+            s_ble_commitment_exchanged = false;
+        }
 
         /* ── STEP 1: Accept peer MAC into session FSM once discovered ────────── */
-        if (phase == 1U && g_ble_ctx.discovered) {
+        if (phase == 1U && g_ble_ctx.discovered && !s_ble_peer_latched) {
             const BlePeerRecord_t *peer = transport_ble_get_peer();
             if (peer != NULL) {
                 char peer_mac[18];
@@ -152,6 +161,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                         peer_mac, (int)peer->rssi, (unsigned)g_ble_ctx.scan_hit_count,
                         (unsigned)peer->name_len);
                 (void)session_phase1_accept_peer(peer->peer_mac);
+                s_ble_peer_latched = true;
             }
         }
 
@@ -170,7 +180,9 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
         /* ── STEP 3: Initiator connects during code-entry ─────────────────────
         * Only the initiator calls connect_to_peer. Responder stays passive.      */
-        if (phase == 1U && is_initiator && g_ble_ctx.discovered && !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected && g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY && (ble_state == BLE_ADVERTISING || ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING)) {
+        if (phase == 1U && is_initiator && g_ble_ctx.discovered && !g_ble_ctx.connecting &&
+            !g_ble_ctx.gattc_connected && g_ui_ctx.current_state == UI_STATE_CODE_ENTRY &&
+            (ble_state == BLE_ADVERTISING || ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING)) {
             const BlePeerRecord_t *peer = transport_ble_get_peer();
             if (peer != NULL) {
                 CeePewErr_t err = transport_ble_connect_to_peer(peer->peer_mac);
@@ -184,7 +196,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         * Both devices pre-populate commitment_digest so the GATTS verify path
         * on the responder works when the GATT write arrives.                     */
         if (phase == 1U && g_ble_ctx.discovered &&
-            g_ui_ctx.current_state >= UI_STATE_COUNTDOWN) {
+            g_ui_ctx.current_state == UI_STATE_COUNTDOWN) {
 
             uint8_t session_code[32U];
             CeePewErr_t err = task_session_build_session_code(session_code);
@@ -240,11 +252,14 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         phase     = session_get_phase();
         ble_state = transport_ble_get_state();
 
-        if (phase == 2U &&
-            (ble_state == BLE_DONE || g_ble_ctx.commitment_verified)) {
+        if (phase == 2U && transport_ble_handoff_ready()) {
 
             CeePewErr_t err = session_phase2_derive_key();
             if (err != CEEPEW_OK) { return err; }
+
+            /* Transition UI to key-derivation animation so user sees progress */
+            (void)ui_manager_transition_to(UI_STATE_KEYDER);
+            g_ui_ctx.transition_ready = true;
 
             (void)transport_ble_disconnect();
             s_ble_commitment_exchanged = false;

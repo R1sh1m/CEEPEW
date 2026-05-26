@@ -23,14 +23,16 @@ typedef enum {
     UI_STATE_DISCOVERY = 1U,      /* Sprint 8: Radar/discovery */
     UI_STATE_CODE_ENTRY = 2U,     /* Sprint 9: Code entry grid */
     UI_STATE_COUNTDOWN = 3U,      /* Sprint 9: Countdown bar */
-    UI_STATE_CONFIRM = 4U,        /* Sprint 9: Confirmation */
-    UI_STATE_KEYDER = 5U,         /* Sprint 10: Key derivation anim */
-    UI_STATE_FINGERPRINT = 6U,    /* Sprint 10: Fingerprint display */
-    UI_STATE_FINGERPRINT_CONFIRM = 7U,  /* Phase 4: Confirm fingerprint with D/S */
-    UI_STATE_CHAT = 8U,           /* Sprint 11: Chat bubbles */
-    UI_STATE_CRYPTOGRAM = 9U,     /* Sprint 12: Cryptogram panel */
-    UI_STATE_NONCE_EXHAUSTED = 10U, /* Phase 4: Nonce limit exhausted */
-    UI_STATE_ERROR = 11U,         /* Phase 4: Generic error display */
+    UI_STATE_CODE_INCORRECT = 4U, /* New: Code mismatch UI */
+    UI_STATE_CODE_DIFFERENT = 5U, /* New: Different code UI */
+    UI_STATE_CONFIRM = 6U,        /* Sprint 9: Confirmation */
+    UI_STATE_KEYDER = 7U,         /* Sprint 10: Key derivation anim */
+    UI_STATE_FINGERPRINT = 8U,    /* Sprint 10: Fingerprint display */
+    UI_STATE_FINGERPRINT_CONFIRM = 9U,  /* Phase 4: Confirm fingerprint with D/S */
+    UI_STATE_CHAT = 10U,           /* Sprint 11: Chat bubbles */
+    UI_STATE_CRYPTOGRAM = 11U,     /* Sprint 12: Cryptogram panel */
+    UI_STATE_NONCE_EXHAUSTED = 12U, /* Phase 4: Nonce limit exhausted */
+    UI_STATE_ERROR = 13U,         /* Phase 4: Generic error display */
 } UIState_t;
 
 /* Animation frame context */
@@ -56,6 +58,7 @@ typedef struct {
     /* Sprint-9 code entry context */
     uint8_t       code_digits[4];
     uint8_t       code_selected; /* index 0-3 */
+    uint32_t      code_entry_start_ms; /* ms timestamp when code entry became visible */
     uint32_t      countdown_start_ms; /* ms timestamp when countdown began */
     /* Sprint-12 cryptogram context */
     uint8_t       commitment[8];        /* Local session commitment (SHA256 truncated) */

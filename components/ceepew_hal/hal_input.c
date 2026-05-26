@@ -7,16 +7,19 @@
 
 /* Defaults from spec if not configured elsewhere */
 #ifndef CEEPEW_POT_EMA_ALPHA_NUM
-#define CEEPEW_POT_EMA_ALPHA_NUM 15U
+/* Make pot feel snappier: alpha = 25/100 (0.25) */
+#define CEEPEW_POT_EMA_ALPHA_NUM 25U
 #endif
 #ifndef CEEPEW_POT_EMA_ALPHA_DEN
 #define CEEPEW_POT_EMA_ALPHA_DEN 100U
 #endif
 #ifndef CEEPEW_POT_DEADZONE
-#define CEEPEW_POT_DEADZONE 100U
+/* Reduce deadzone so full travel maps to characters */
+#define CEEPEW_POT_DEADZONE 60U
 #endif
 #ifndef CEEPEW_POT_EDGE_HYSTERESIS
-#define CEEPEW_POT_EDGE_HYSTERESIS 32U
+/* Tighter hysteresis for edge stability */
+#define CEEPEW_POT_EDGE_HYSTERESIS 16U
 #endif
 
 static uint16_t ema_update(uint16_t prev_ema, uint16_t new_sample)
