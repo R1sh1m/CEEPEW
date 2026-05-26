@@ -2,18 +2,18 @@
  *
  * CEE-PEW BLE Transport (Phases 1-2: Discovery & Pairing)
  * Uses Bluedroid BLE stack from ESP-IDF for advertisement scanning and GATT exchange.
- * 
+ *
  * PHASE 1 (DISCOVERY):
  *   - Local device advertises its MAC, device name, and capability flags
  *   - Both peers scan for each other's advertisements
  *   - Once found, exchange MAC addresses and move to Phase 2
- * 
+ *
  * PHASE 2 (PAIRING):
  *   - Establish BLE connection (central → peripheral)
  *   - Exchange commitment hash (session code digest) via GATT
  *   - Verify commitment matches (user confirms 4-digit code on both devices)
  *   - Once confirmed, handoff to ESP-NOW for Phase 3 (active session)
- * 
+ *
  * NOTE: BLE is ONLY used for pairing discovery; all bulk data flows on ESP-NOW.
  */
 
@@ -30,11 +30,16 @@
 extern "C" {
 #endif
 
+enum {
+    CEEPEW_GATT_IF_NONE = 0xFFU
+};
+
 /* BLE connection states */
 typedef enum {
     BLE_IDLE = 0U,
     BLE_ADVERTISING,
     BLE_SCANNING,
+    BLE_ADVERTISING_AND_SCANNING,
     BLE_CONNECTED,
     BLE_PAIRING,
     BLE_DONE
@@ -65,7 +70,25 @@ typedef struct {
     int8_t         peer_rssi;                  /* raw, last received */
     int16_t        peer_rssi_smooth_x8;        /* EMA ×8 precision */
     uint32_t       last_seen_ms;               /* ms since boot of last scan hit */
+    BlePeerRecord_t peer_record;
+    uint32_t       scan_seen_count;            /* total advertisements observed */
     uint8_t        scan_hit_count;             /* total hits recorded for this peer */
+    uint32_t       adv_packet_count;           /* number of advertisement packets sent (for UI feedback) */
+    bool           is_advertising;
+    bool           is_scanning;
+    uint8_t        gattc_if;                   /* client interface (CEEPEW_GATT_IF_NONE if unset) */
+    uint8_t        gatts_if;                   /* server interface (CEEPEW_GATT_IF_NONE if unset) */
+    uint16_t       conn_id;                    /* active connection id */
+    uint16_t       service_start_handle;
+    uint16_t       service_end_handle;
+    uint16_t       gattc_char_handle;          /* peer characteristic handle */
+    uint16_t       gatts_char_handle;          /* local characteristic handle */
+    bool           gattc_registered;
+    bool           gatts_registered;
+    bool           gattc_connected;
+    bool           gatts_connected;
+    bool           connecting;
+    bool           commitment_write_pending;
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
@@ -88,7 +111,10 @@ const BlePeerRecord_t *transport_ble_get_peer(void);
 /* Initiate BLE connection to discovered peer (Phase 1 → Phase 2) */
 CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6]);
 
-/* Exchange commitment hash via GATT (Phase 2). 
+/* Retry a previously failed scan start (called periodically from task_session) */
+CeePewErr_t transport_ble_retry_scan_if_needed(void);
+
+/* Exchange commitment hash via GATT (Phase 2).
  * Sets g_ble_ctx.commitment_digest and waits for peer to confirm. */
 CeePewErr_t transport_ble_exchange_commitment(const uint8_t commitment_digest[8]);
 

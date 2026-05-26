@@ -724,9 +724,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     case ESP_GAP_BLE_SCAN_RESULT_EVT: {
         if (!param) { break; }
         if (param->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) { break; }
-        if (param->scan_rst.ble_adv != NULL && g_ble_ctx.scan_seen_count < UINT32_MAX) {
-            g_ble_ctx.scan_seen_count++;
-        }
+        if (g_ble_ctx.scan_seen_count < UINT32_MAX) { g_ble_ctx.scan_seen_count++; }
 
         char    found_name[17] = {0};
         uint8_t found_name_len = 0U;
