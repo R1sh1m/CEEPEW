@@ -229,6 +229,13 @@ CeePewErr_t transport_ble_init(void)
     }
     ESP_LOGI(TAG, "esp_bluedroid_enable: OK");
 
+    /* Set initialization flag BEFORE registering callbacks to avoid race condition.
+     * GAP callbacks may fire during esp_ble_gap_register_callback() or 
+     * esp_ble_gap_set_device_name(), and those callbacks need s_ble_initialised 
+     * to be true to pass assertions.
+     */
+    s_ble_initialised = true;
+
     /* Register BLE callbacks to receive events. Implementations are no-op but
        allow upper layers to rely on the event-driven flow. */
     esp_ble_gap_register_callback(gap_event_handler);
@@ -255,7 +262,6 @@ CeePewErr_t transport_ble_init(void)
     ESP_LOGI(TAG, "transport_ble_init: COMPLETE - BLE ready");
 #endif
 
-    s_ble_initialised = true;
     return CEEPEW_OK;
 }
 
@@ -291,8 +297,8 @@ CeePewErr_t transport_ble_start_advertising(void)
         .set_scan_rsp = false,
         .include_name = false, /* put name in SCAN_RSP for active scanners */
         .include_txpower = false,
-        .min_interval = 0,
-        .max_interval = 0,
+        .min_interval = 0x0030,  /* 48ms minimum (BLE standard) */
+        .max_interval = 0x0030,  /* fixed interval */
         .appearance = 0,
         .manufacturer_len = 0,
         .p_manufacturer_data = NULL,
