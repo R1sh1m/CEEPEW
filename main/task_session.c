@@ -40,18 +40,8 @@
 
     static const char *TAG = "task_session";
 
-    CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16],
-                                        const uint8_t nonce[16],
-                                        const uint8_t *ad,
-                                        uint16_t ad_len,
-                                        const uint8_t *ct,
-                                        uint16_t ct_len,
-                                        uint8_t *pt,
-                                        uint16_t *pt_len);
-    CeePewErr_t crypto_eddsa_verify(const uint8_t pub[32],
-                                    const uint8_t *msg,
-                                    uint16_t msg_len,
-                                    const uint8_t sig[64]);
+    CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16], const uint8_t nonce[16], const uint8_t *ad, uint16_t ad_len, const uint8_t *ct, uint16_t ct_len, uint8_t *pt, uint16_t *pt_len);
+    CeePewErr_t crypto_eddsa_verify(const uint8_t pub[32], const uint8_t *msg, uint16_t msg_len, const uint8_t sig[64]);
 
     /* -------------------------------------------------------------------------- */
     /* Queue Instances (global, created by task_session_init)                    */
@@ -95,8 +85,7 @@
 static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started */
     static bool s_ble_peer_latched = false;
 
-    static const char *task_session_ble_state_name(BleState_t state)
-    {
+    static const char *task_session_ble_state_name(BleState_t state){
         switch (state) {
             case BLE_IDLE: return "idle";
             case BLE_ADVERTISING: return "advertising";
@@ -109,14 +98,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         }
     }
 
-    static void task_session_format_mac(const uint8_t mac[6], char out[18])
-    {
-        (void)snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
-                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    static void task_session_format_mac(const uint8_t mac[6], char out[18]){
+        (void)snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
 
-    static CeePewErr_t task_session_build_session_code(uint8_t session_code[32U])
-    {
+    static CeePewErr_t task_session_build_session_code(uint8_t session_code[32U]){
         CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
         CEEPEW_ASSERT(g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY, CEEPEW_ERR_PARAM);
 
@@ -253,6 +239,12 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         ble_state = transport_ble_get_state();
 
         if (phase == 2U && transport_ble_handoff_ready()) {
+
+            /* Stronger gating: initiator must have exchanged commitment locally before deriving */
+            if (is_initiator && !s_ble_commitment_exchanged) {
+                /* wait another tick so write/ACK can propagate */
+                return CEEPEW_OK;
+            }
 
             CeePewErr_t err = session_phase2_derive_key();
             if (err != CEEPEW_OK) { return err; }

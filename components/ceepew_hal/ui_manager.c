@@ -11,6 +11,7 @@
 #include "../../main/session_msgstore.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -33,10 +34,12 @@ extern CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16]);
 
 UIContext_t g_ui_ctx = {0};
 static bool s_ui_manager_initialised = false;
+static uint32_t s_last_ui_wipe_ms = 0U;
 
 static CeePewErr_t render_fingerprint_confirm(void);
 static CeePewErr_t render_error(void);
 static CeePewErr_t render_code_incorrect(void);
+static CeePewErr_t render_info(void);
 static CeePewErr_t render_code_different(void);
 
 CeePewErr_t ui_manager_init(void){
@@ -662,33 +665,35 @@ static CeePewErr_t render_boot_anim(void)
            hal_ui_text(lx[i], y_pos, tmp, HAL_UI_WHITE);
        }
 
-       /* Underline grows from left under the logo */
+       /* Underline grows from left under the logo — match logo width exactly */
        if (f >= 58U) {
            uint32_t ul_f = f - 58U;
-           uint8_t  ul_w = (ul_f < 20U) ? (uint8_t)(ul_f * 3U) : 59U;
-           if (ul_w > 0U) { draw_hline(43U, 23U, ul_w); }
+           uint8_t ul_x = lx[0];
+           uint8_t ul_final_w = (uint8_t)((lx[6] + 5U) - lx[0]); /* char width 5 */
+           uint8_t ul_w = (ul_f < 20U) ? (uint8_t)(((uint32_t)ul_f * (uint32_t)ul_final_w) / 20U) : ul_final_w;
+           if (ul_w > 0U) { draw_hline(ul_x, 23U, ul_w); }
        }
     }
 
     /* ── Phase 3 (f 60–89): Chunky loading bar fills ── */
     if (f >= 60U) {
-       /* Bar border */
-       HalUIRect_t border = { .x = 14U, .y = 44U, .w = 100U, .h = 10U };
+       /* Bar border (moved up to increase gap below with frame) */
+       HalUIRect_t border = { .x = 14U, .y = 34U, .w = 100U, .h = 8U };
        hal_ui_rect(&border, HAL_UI_WHITE);
 
        /* Chunky fill — 4-px wide segments with 1-px gaps */
        uint32_t elapsed = f - 60U;
        uint8_t  seg_count = (elapsed < 30U) ? (uint8_t)((elapsed * 12U) / 30U) : 12U;
        for (uint8_t s = 0U; s < seg_count; s++) {
-           HalUIRect_t seg = { .x = (uint8_t)(16U + s * 8U), .y = 46U, .w = 7U, .h = 6U };
+           HalUIRect_t seg = { .x = (uint8_t)(16U + s * 8U), .y = (uint8_t)(border.y + 2U), .w = 7U, .h = (uint8_t)(border.h - 4U) };
            hal_ui_rect_fill(&seg, HAL_UI_WHITE);
        }
 
-       /* Percentage counter — moved BELOW bar to avoid overlap */
+       /* Percentage counter — placed below bar */
        uint8_t pct = (seg_count * 100U) / 12U;
        char pct_str[5U];
        (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-       hal_ui_text(50U, 56U, pct_str, HAL_UI_WHITE);
+       hal_ui_text(50U, (uint8_t)(border.y + border.h + 2U), pct_str, HAL_UI_WHITE);
     }
 
     /* ── Phase 4 (f 90–109): Border frame draws in from corners ── */
@@ -830,37 +835,47 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
                            uint8_t sweep_pos, uint8_t blip_idx,
                            uint32_t age_ms)
 {
-    if (age_ms >= 4000U) {
+    /* Extend lifetime so transient scan gaps do not immediately hide the blip */
+    if (age_ms >= 8000U) {
         return;
     }
 
-    draw_pixel(bx, by);
+    /* Always draw a visible base marker (2×2) so small OLEDs show it reliably */
+    HalUIRect_t base = {
+        .x = (uint8_t)((bx > 0U) ? (bx - 1U) : 0U),
+        .y = (uint8_t)((by > 0U) ? (by - 1U) : 0U),
+        .w = 2U,
+        .h = 2U
+    };
+    hal_ui_rect_fill(&base, HAL_UI_WHITE);
 
     uint8_t forward = (uint8_t)((blip_idx + 16U - sweep_pos) % 16U);
     uint8_t reverse = (uint8_t)((sweep_pos + 16U - blip_idx) % 16U);
     uint8_t dist = (forward < reverse) ? forward : reverse;
+
+    /* When sweep aligns (dist == 0) show an expanded visual pulse */
     if (dist == 0U) {
         HalUIRect_t blip = {
-            .x = (uint8_t)(bx - 1U),
-            .y = (uint8_t)(by - 1U),
+            .x = (uint8_t)((bx > 1U) ? (bx - 1U) : 0U),
+            .y = (uint8_t)((by > 1U) ? (by - 1U) : 0U),
+            .w = 4U,
+            .h = 4U
+        };
+        hal_ui_rect_fill(&blip, HAL_UI_WHITE);
+        /* Short radial highlight for freshness */
+        if (age_ms < 600U) {
+            draw_circle((int16_t)bx, (int16_t)by, 4U);
+        }
+    } else if (dist == 1U) {
+        HalUIRect_t blip = {
+            .x = (uint8_t)((bx > 0U) ? (bx - 1U) : 0U),
+            .y = (uint8_t)((by > 0U) ? (by - 1U) : 0U),
             .w = 3U,
             .h = 3U
         };
         hal_ui_rect_fill(&blip, HAL_UI_WHITE);
-        if (age_ms < 400U) {
-            draw_circle((int16_t)bx, (int16_t)by, 3U);
-        }
-    } else if (dist == 1U) {
-        HalUIRect_t blip = {
-            .x = (uint8_t)(bx - 1U),
-            .y = (uint8_t)(by - 1U),
-            .w = 2U,
-            .h = 2U
-        };
-        hal_ui_rect_fill(&blip, HAL_UI_WHITE);
     } else {
-        /* Keep a stable single-pixel blip visible even between sweep hits. */
-        draw_pixel(bx, by);
+        /* Keep the stable base marker already drawn; no extra work here. */
     }
 }
 
@@ -1198,16 +1213,81 @@ static CeePewErr_t render_confirm(void)
 
     /* Prompt box at bottom — pulses */
     uint8_t blink = (uint8_t)((f / 8U) % 2U);
-    HalUIRect_t prompt = { .x = 14U, .y = 46U, .w = 100U, .h = 16U };
+    HalUIRect_t prompt = { .x = 14U, .y = 44U, .w = 100U, .h = 20U };
     if (blink == 0U) {
         hal_ui_rect(&prompt, HAL_UI_WHITE);
-        hal_ui_text(18U, 51U, "HOLD BUTTON TO PAIR", HAL_UI_WHITE);
+        hal_ui_text(18U, 49U, "HOLD BUTTON TO PAIR", HAL_UI_WHITE);
+        /* Small hint for DIAG users about Info Mode */
+        hal_ui_text(18U, 58U, "Hold for Info (DIAG)", HAL_UI_WHITE);
     } else {
         hal_ui_rect_fill(&prompt, HAL_UI_WHITE);
         /* Invert text — can't truly invert, so just skip text on filled frame */
     }
 
     g_ui_ctx.anim.frame_count++;
+    return CEEPEW_OK;
+}
+
+/* DIAG-only Info screen: displays diagnostic info and exits on short press or timeout */
+static CeePewErr_t render_info(void)
+{
+    hal_ui_clear();
+    /* Title */
+    hal_ui_text(18U, 2U, "DEVICE INFO (DIAG)", HAL_UI_WHITE);
+    draw_hline(0U, 11U, 128U);
+
+    /* MAC and firmware */
+    char mac_str[24U];
+    uint8_t local_mac[6] = {0};
+    if (esp_wifi_get_mac(WIFI_IF_STA, local_mac) == ESP_OK) {
+        (void)snprintf(mac_str, sizeof(mac_str), "STA MAC: %02X:%02X:%02X", local_mac[0], local_mac[1], local_mac[2]);
+        hal_ui_text(4U, 14U, mac_str, HAL_UI_WHITE);
+        (void)snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X", local_mac[3], local_mac[4], local_mac[5]);
+        hal_ui_text(4U, 22U, mac_str, HAL_UI_WHITE);
+    } else {
+        hal_ui_text(4U, 14U, "STA MAC: <err>", HAL_UI_WHITE);
+    }
+
+    hal_ui_text(4U, 30U, "FW: ceepew", HAL_UI_WHITE);
+
+    /* Show last secure wipe timestamp/counter if available via session_fsm */
+    extern uint32_t session_get_last_wipe_ms(void);
+    uint32_t lw = session_get_last_wipe_ms();
+    char lw_str[24U];
+    uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
+    if (lw != 0U) {
+        uint32_t age_s = (now_ms > lw) ? (uint32_t)((now_ms - lw) / 1000U) : 0U;
+        (void)snprintf(lw_str, sizeof(lw_str), "Last wipe: %lus ago", (unsigned long)age_s);
+        hal_ui_text(4U, 38U, lw_str, HAL_UI_WHITE);
+    } else {
+        hal_ui_text(4U, 38U, "Last wipe: never", HAL_UI_WHITE);
+    }
+
+    /* ADC diagnostics (raw and smoothed) — exposed via input module if initialized */
+    extern CeePewErr_t input_get_adc_snapshot(uint16_t *raw_out, uint16_t *smoothed_out);
+    uint16_t raw = 0U, sm = 0U;
+    if (input_get_adc_snapshot(&raw, &sm) == CEEPEW_OK) {
+        char adc_str[32U];
+        (void)snprintf(adc_str, sizeof(adc_str), "ADC raw:%u sm:%u", (unsigned)raw, (unsigned)sm);
+        hal_ui_text(4U, 46U, adc_str, HAL_UI_WHITE);
+    } else {
+        hal_ui_text(4U, 46U, "ADC: <not ready>", HAL_UI_WHITE);
+    }
+
+    /* BLE state */
+    const char *ble_state = "BLE:?";
+    switch (transport_ble_get_state()) {
+        case BLE_IDLE: ble_state = "BLE:IDLE"; break;
+        case BLE_ADVERTISING: ble_state = "BLE:ADV"; break;
+        case BLE_SCANNING: ble_state = "BLE:SCAN"; break;
+        case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE:ADV+SCN"; break;
+        case BLE_CONNECTED: ble_state = "BLE:CONN"; break;
+        case BLE_PAIRING: ble_state = "BLE:PAIR"; break;
+        case BLE_DONE: ble_state = "BLE:DONE"; break;
+        default: break;
+    }
+    hal_ui_text(4U, 54U, ble_state, HAL_UI_WHITE);
+
     return CEEPEW_OK;
 }
 
@@ -2015,7 +2095,12 @@ CeePewErr_t ui_manager_update(void)
             uint32_t elapsed_ms = (now_ms >= start_ms) ? (now_ms - start_ms) : 0U;
             uint32_t seq_ms = (uint32_t)(CEEPEW_RGB_REJECT_SEQUENCE_CT * 2U * CEEPEW_RGB_ERROR_BLINK_MS);
             if (elapsed_ms >= seq_ms) {
-                session_wipe();
+                /* Debounce UI-originated wipes to prevent rapid repeated wipes during transient UI animations */
+                if (now_ms - s_last_ui_wipe_ms > 5000U) {
+                    ESP_LOGW("ui", "session_wipe requested by UI (error timeout) — debounced");
+                    s_last_ui_wipe_ms = now_ms;
+                    session_wipe();
+                }
             }
         }
     }
@@ -2028,14 +2113,31 @@ CeePewErr_t ui_manager_update(void)
         g_ble_ctx.discovery_start_ts != 0U &&
         now_s >= g_ble_ctx.discovery_start_ts &&
         (now_s - g_ble_ctx.discovery_start_ts) >= CEEPEW_PAIRING_TIMEOUT_S) {
-        session_wipe();
+        /* Discovery timeout: do NOT perform a destructive secure wipe here.
+         * Instead, gracefully abort pairing and return to discovery so the
+         * device can re-advertise/scan and attempt recovery. This prevents
+         * repeated secure wipes caused by transient scan/adv gaps. */
+        if (now_ms - s_last_ui_wipe_ms > 5000U) {
+            ESP_LOGW("ui", "discovery timeout — aborting pairing and returning to discovery (no wipe)");
+            s_last_ui_wipe_ms = now_ms;
+            /* Ensure BLE link is torn down and UI returns to discovery state */
+            (void)transport_ble_disconnect();
+            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+            g_ui_ctx.transition_ready = true;
+        }
     }
 
     if (g_ble_ctx.state == BLE_PAIRING &&
         g_ble_ctx.pairing_start_ts != 0U &&
         now_s >= g_ble_ctx.pairing_start_ts &&
         (now_s - g_ble_ctx.pairing_start_ts) >= CEEPEW_PAIRING_TIMEOUT_S) {
-        session_wipe();
+        if (now_ms - s_last_ui_wipe_ms > 5000U) {
+            ESP_LOGW("ui", "pairing timeout — aborting pairing and returning to discovery (no wipe)");
+            s_last_ui_wipe_ms = now_ms;
+            (void)transport_ble_disconnect();
+            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+            g_ui_ctx.transition_ready = true;
+        }
     }
 
     /* Remember previous button state for edge detection */
@@ -2090,6 +2192,9 @@ CeePewErr_t ui_manager_draw(void)
             break;
         case UI_STATE_CODE_DIFFERENT:
             err = render_code_different();
+            break;
+        case UI_STATE_INFO:
+            err = render_info();
             break;
         case UI_STATE_ERROR:
             err = render_error();
