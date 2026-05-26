@@ -5,6 +5,8 @@
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_bt.h"            /* ← required for esp_bt_controller_mem_release */
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
 #include "session_memory.h"
@@ -22,11 +24,25 @@
 #include "ui_manager.h"
 #include "task_arch.h"
 #include "esp_wifi.h"
+#include "transport_ble.h"
 
 static const char *TAG = "CEE-PEW-MAIN";
 
 void app_main(void){
     ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup ===");
+
+    /* Initialize NVS (required by BLE stack before bring-up) */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES ||
+        nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS partition degraded; erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_flash_init failed: %d", (int)nvs_err);
+        esp_restart();
+    }
 
     CeePewErr_t err = hal_gpio_init();
     if (err != CEEPEW_OK) {
@@ -52,6 +68,22 @@ void app_main(void){
         return;
     }
 
+    /* ── BT CONTROLLER MEMORY RELEASE ──────────────────────────────────────── */
+    /* Must be called before esp_bt_controller_init() AND before WiFi starts.
+     * This call carves out the correct memory layout for the BT controller,
+     * including coexistence buffers shared with WiFi. If called after
+     * esp_wifi_start() it returns ESP_ERR_INVALID_STATE and the controller may
+     * be left with a misaligned memory map that breaks BLE scanning under
+     * ESP-NOW. CEE-PEW uses BLE only, so release Classic BT memory here.
+     */
+    esp_err_t bt_mem_err = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    if (bt_mem_err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_bt_controller_mem_release: %d (%s) — continuing",
+                 (int)bt_mem_err, esp_err_to_name(bt_mem_err));
+    } else {
+        ESP_LOGI(TAG, "Classic BT memory released to heap — BLE-only mode");
+    }
+
     err = hal_radio_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_radio_init failed: %d", (int)err);
@@ -64,6 +96,9 @@ void app_main(void){
         ESP_LOGE(TAG, "esp_wifi_get_mac failed: %d", (int)mac_err);
         return;
     }
+    ESP_LOGI(TAG, "Local STA MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             local_mac[0], local_mac[1], local_mac[2],
+             local_mac[3], local_mac[4], local_mac[5]);
 
     err = session_phase1_init(local_mac);
     if (err != CEEPEW_OK) {
@@ -89,6 +124,15 @@ void app_main(void){
         ESP_LOGE(TAG, "ui_manager_init failed: %d", (int)err);
         return;
     }
+
+    /* CRITICAL: Initialize BLE stack before UI task (discover/pairing) */
+    err = transport_ble_init();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err);
+        esp_restart();  /* Cannot proceed without BLE */
+    }
+
+    /* BLE advertising/scan start is driven from BLE GATT/GAP events to avoid race conditions */
 
     /* CRITICAL: Initialize region allocator before any pipeline or session use */
     err = region_init(&g_region);
