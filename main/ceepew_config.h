@@ -130,7 +130,7 @@
 /* -------------------------------------------------------------------------- */
 /* Region Allocator                                                            */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_REGION_POOL_BYTES         (64U * 1024U)
+#define CEEPEW_REGION_POOL_BYTES         (48U * 1024U)
 #define CEEPEW_REGION_ALIGN              8U
 #define CEEPEW_REGION_MAX_ALLOCS         256U
 
