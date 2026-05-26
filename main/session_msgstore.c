@@ -1,5 +1,4 @@
 /* main/session_msgstore.c
- *
  * Implementation of session message store with TTL enforcement.
  * Automatically expires messages older than CEEPEW_MSG_TTL_S.
  * Tracks nonce counter and triggers exhaustion flag when limit is reached.
@@ -16,22 +15,17 @@
    on every add and via explicit msg_store_expire_old() calls. The nonce_exhausted
    flag is set when the counter reaches CEEPEW_NONCE_HARD_LIMIT; once set, it
    persists until msg_store_wipe_all() clears it (which happens on session end). */
-
 MsgStore_t g_msg_store = {0};
-
-CeePewErr_t msg_store_init(void)
-{
+CeePewErr_t msg_store_init(void){
     /* Ensure store starts empty and configured limits are sane */
     CEEPEW_ASSERT(g_msg_store.count == 0U, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(CEEPEW_MAX_MESSAGES > 0U, CEEPEW_ERR_PARAM);
-
     memset(&g_msg_store, 0U, sizeof(MsgStore_t));
     g_msg_store.head = 0U;
     g_msg_store.tail = 0U;
     g_msg_store.count = 0U;
     g_msg_store.last_wipe_ts = (uint32_t)(esp_timer_get_time() / 1000000LL);
     g_msg_store.nonce_exhausted = false;
-
     /* Sanity assert after init */
     CEEPEW_ASSERT(g_msg_store.count == 0U, CEEPEW_ERR_INTERNAL);
     return CEEPEW_OK;
@@ -51,7 +45,7 @@ CeePewErr_t msg_store_add(const uint8_t *encrypted_data, uint16_t encrypted_len,
     if (g_msg_store.count >= CEEPEW_MAX_MESSAGES) {
         CeePewErr_t err = msg_store_expire_old();
         CEEPEW_ASSERT(err == CEEPEW_OK, err);
-        
+
         /* If still full after expiration, securely zero oldest message then drop it */
         if (g_msg_store.count >= CEEPEW_MAX_MESSAGES) {
             volatile uint8_t *pold = (volatile uint8_t *)&g_msg_store.messages[g_msg_store.head];

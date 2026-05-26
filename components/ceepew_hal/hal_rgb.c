@@ -397,52 +397,69 @@ CeePewErr_t rgb_set_pattern(RgbPattern_t pattern)
     s_state.step_index = 0U;
 
     const RgbPatternDef_t *pattern_def = &s_patterns[s_state.active_pattern];
-    
+
     /* Check if this is a PWM pulse pattern (step has UINT32_MAX duration) */
     bool is_pwm_pattern = (pattern_def->step_count == 1U && 
                            pattern_def->steps != NULL &&
                            pattern_def->steps[0].duration_ms == UINT32_MAX);
-    
+
     CeePewErr_t err = CEEPEW_OK;
-    
+
+    /* Preserve previous mode so we can decide whether to tear down the old timer */
+    RgbMode_t prev_mode = s_state.mode;
+
     if (is_pwm_pattern) {
-        /* Switch to PWM mode for smooth pulsing */
+        /* Switching to PWM mode */
+        /* If we were in pattern mode previously, ensure any existing timer is deleted */
+        if (prev_mode != RGB_MODE_PWM && s_state.timer != NULL) {
+            (void)xTimerDelete(s_state.timer, 0U);
+            s_state.timer = NULL;
+            s_state.timer_running = false;
+        }
+
         s_state.mode = RGB_MODE_PWM;
         s_state.pwm.r_duty = (pattern_def->steps[0].r == 1U) ? 255U : 0U;
         s_state.pwm.g_duty = (pattern_def->steps[0].g == 1U) ? 255U : 0U;
         s_state.pwm.b_duty = (pattern_def->steps[0].b == 1U) ? 255U : 0U;
         s_state.pwm.step_index = 0U;
-        
-        /* Stop pattern timer and apply initial PWM duty */
-        (void)xTimerStop(s_state.timer, 0U);
+
+        /* Apply initial PWM duty */
         err = rgb_apply_pwm_duty(s_state.pwm.r_duty, s_state.pwm.g_duty, s_state.pwm.b_duty);
-        
+
         if (err == CEEPEW_OK) {
-            /* Recreate timer with PWM callback (4ms per step = 1.024s per full cycle) */
-            xTimerDelete(s_state.timer, 0U);
-            s_state.timer = xTimerCreateStatic("rgb_pwm", pdMS_TO_TICKS(4U), pdTRUE,
-                                               NULL, rgb_pwm_timer_cb, &s_timer_buf);
-            if (s_state.timer != NULL) {
-                xTimerStart(s_state.timer, 0U);
+            /* Ensure a PWM timer exists and is running */
+            if (s_state.timer == NULL) {
+                s_state.timer = xTimerCreateStatic("rgb_pwm", pdMS_TO_TICKS(4U), pdTRUE,
+                                                   NULL, rgb_pwm_timer_cb, &s_timer_buf);
+                if (s_state.timer == NULL) {
+                    err = CEEPEW_ERR_ALLOC;
+                }
+            }
+            if (err == CEEPEW_OK && s_state.timer != NULL) {
+                (void)xTimerStart(s_state.timer, 0U);
                 s_state.timer_running = true;
-            } else {
-                err = CEEPEW_ERR_ALLOC;
             }
         }
     } else {
-        /* Standard pattern mode (on/off blinking) */
+        /* Switching to standard pattern mode (on/off blinking) */
+        /* If we were previously in PWM mode, delete the PWM timer to avoid stale callback usage */
+        if (prev_mode == RGB_MODE_PWM && s_state.timer != NULL) {
+            (void)xTimerDelete(s_state.timer, 0U);
+            s_state.timer = NULL;
+            s_state.timer_running = false;
+        }
+
         s_state.mode = RGB_MODE_PATTERN;
-        
-        /* Stop PWM timer if it was running and recreate pattern timer */
-        if (s_state.pwm.step_index > 0U || s_state.mode == RGB_MODE_PWM) {
-            xTimerDelete(s_state.timer, 0U);
-            s_state.timer = xTimerCreateStatic("rgb", pdMS_TO_TICKS(1U), pdFALSE,
+
+        /* Ensure pattern timer exists */
+        if (s_state.timer == NULL) {
+            s_state.timer = xTimerCreateStatic("rgb", rgb_ms_to_ticks(1U), pdFALSE,
                                                NULL, rgb_timer_cb, &s_timer_buf);
             if (s_state.timer == NULL) {
                 err = CEEPEW_ERR_ALLOC;
             }
         }
-        
+
         if (err == CEEPEW_OK) {
             err = rgb_apply_step_locked(pattern_def);
             if (err == CEEPEW_OK) {

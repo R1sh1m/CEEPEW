@@ -291,9 +291,6 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
 
     s_state.active_addr = addr;
     
-    /* Send initial diagnostic test pattern to verify display is working */
-    ESP_LOGI(TAG, "SSD1306 init complete at addr 0x%02X, sending test pattern", addr);
-    
     return CEEPEW_OK;
 }
 
@@ -358,7 +355,6 @@ CeePewErr_t hal_oled_init(void){
     }
 
     s_state.initialised = true;
-    ESP_LOGI(TAG, "OLED initialised at 0x%02X", (unsigned)s_state.active_addr);
     err = hal_oled_clear();
     if (err != CEEPEW_OK) {
         oled_release_resources();
@@ -417,7 +413,6 @@ CeePewErr_t hal_oled_flush(void){
         }
     }
     
-    ESP_LOGI(TAG, "hal_oled_flush: sending bitmap to panel at 0x%02X", (unsigned)s_state.active_addr);
     esp_err_t rc = esp_lcd_panel_draw_bitmap(s_state.panel_handle,
                                              0,
                                              0,
@@ -428,7 +423,6 @@ CeePewErr_t hal_oled_flush(void){
         ESP_LOGE(TAG, "hal_oled_flush: esp_lcd_panel_draw_bitmap failed: 0x%x", rc);
         return CEEPEW_ERR_HW;
     }
-    ESP_LOGI(TAG, "hal_oled_flush: bitmap sent successfully");
     return CEEPEW_OK;
 }
 

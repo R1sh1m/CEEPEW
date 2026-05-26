@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define CEEPEW_REGION_POOL_BYTES (200U * 1024U)
+#define CEEPEW_REGION_POOL_BYTES (128U * 1024U)
 #define CEEPEW_REGION_MAX_ALLOCS 256U
 
 typedef struct {

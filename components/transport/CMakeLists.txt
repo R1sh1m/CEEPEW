@@ -13,6 +13,7 @@ idf_component_register(
         ceepew_hal
         crypto
         mem
+        bt
         esp_wifi
         esp_timer
         log

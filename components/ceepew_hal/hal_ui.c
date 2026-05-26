@@ -71,7 +71,6 @@ CeePewErr_t hal_ui_flush(void){
         return err;
     }
 
-    uint16_t pixels_drawn = 0U;
     /* loop bound: HAL_UI_HEIGHT_PX / 8U = 8U pages (compile-time constant) */
     for (uint8_t page = 0U; page < (HAL_UI_HEIGHT_PX / 8U); page++) {
         const uint16_t base = (uint16_t)page * (uint16_t)HAL_UI_WIDTH_PX;
@@ -94,12 +93,10 @@ CeePewErr_t hal_ui_flush(void){
                              x, (page * 8U) + bit);
                     return err;
                 }
-                pixels_drawn++;
             }
         }
     }
 
-    ESP_LOGI(TAG, "hal_ui_flush: %u pixels drawn, calling hal_oled_flush", pixels_drawn);
     return hal_oled_flush();
 }
 
