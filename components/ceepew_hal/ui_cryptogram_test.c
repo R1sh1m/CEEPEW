@@ -13,11 +13,11 @@
 #ifdef CEEPEW_ENABLE_SELFTEST
 
 /* Mock session FSM functions for Sprint 12 cryptogram tests */
-__attribute__((weak)) CeePewErr_t session_get_commitment(uint8_t commitment[8])
+__attribute__((weak)) CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
     /* Return test commitment for display */
-    uint8_t test_commitment[8] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0};
-    memcpy(commitment, test_commitment, 8U);
+    uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    memcpy(commitment, test_commitment, CEEPEW_COMMITMENT_BYTES);
     return CEEPEW_OK;
 }
 

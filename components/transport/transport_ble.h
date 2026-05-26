@@ -59,7 +59,11 @@ typedef struct {
     BleState_t     state;
     uint8_t        local_mac[6];
     uint8_t        peer_mac[6];
-    uint8_t        commitment_digest[8];      /* Truncated SHA256(session_code) */
+    uint8_t        commitment_digest[CEEPEW_COMMITMENT_BYTES];      /* Truncated SHA256(session_code) */
+    uint8_t        local_commitment_len; /* bytes stored for local commitment */
+    uint8_t        peer_commitment_len;  /* bytes received from peer (8 or 16) */
+    bool           peer_commitment_legacy; /* true if peer uses legacy 8-byte commit */
+    uint8_t        reconnect_attempts;   /* reconnect attempts after disconnect */
     uint32_t       discovery_start_ts;
     uint32_t       pairing_start_ts;
     bool           commitment_verified;
@@ -89,6 +93,7 @@ typedef struct {
     bool           gatts_connected;
     bool           connecting;
     bool           commitment_write_pending;
+    uint32_t       verify_fail_count;
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
@@ -116,10 +121,10 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void);
 
 /* Exchange commitment hash via GATT (Phase 2).
  * Sets g_ble_ctx.commitment_digest and waits for peer to confirm. */
-CeePewErr_t transport_ble_exchange_commitment(const uint8_t commitment_digest[8]);
+CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, uint8_t len);
 
 /* Verify peer's commitment matches ours (call after exchange completes) */
-CeePewErr_t transport_ble_verify_commitment(const uint8_t peer_digest[8]);
+CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t len);
 
 /* Check if handoff to Phase 3 is ready (commitment verified + connection stable) */
 bool transport_ble_handoff_ready(void);

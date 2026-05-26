@@ -32,4 +32,7 @@ CeePewErr_t input_consume_click(InputCtx_t *ctx, bool *was_clicked);
 /* Get normalized pot value (0-255), button stable state, and diag switch state. */
 CeePewErr_t input_get_normalized(const InputCtx_t *ctx, uint8_t *out_pot, bool *out_button, bool *out_diag);
 
+/* Diagnostic accessor: get current raw and smoothed ADC snapshot (safe to call anytime) */
+CeePewErr_t input_get_adc_snapshot(uint16_t *raw_out, uint16_t *smoothed_out);
+
 #endif /* HAL_INPUT_H */

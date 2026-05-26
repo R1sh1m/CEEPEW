@@ -31,6 +31,10 @@
 #define CEEPEW_DEVICE_SIG_BYTES          32U    /* HMAC-SHA256 device sig     */
 #define CEEPEW_SESSION_CODE_MIN_LEN      8U
 
+/* Commitment sizes */
+#define CEEPEW_COMMITMENT_BYTES          16U
+#define CEEPEW_COMMITMENT_LEGACY_BYTES   8U
+
 /* -------------------------------------------------------------------------- */
 /* Nonce Safety                                                                */
 /*                                                                             */

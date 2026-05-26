@@ -527,19 +527,21 @@ CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6])
     return CEEPEW_OK;
 }
 
-CeePewErr_t transport_ble_exchange_commitment(const uint8_t commitment_digest[8])
+CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, uint8_t len)
 {
     CEEPEW_ASSERT(commitment_digest != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(g_ble_ctx.state == BLE_CONNECTED, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(len == CEEPEW_COMMITMENT_BYTES || len == CEEPEW_COMMITMENT_LEGACY_BYTES, CEEPEW_ERR_PARAM);
 
-    /* Store the commitment locally (fixed-size, no dynamic alloc). We keep only
-       the truncated 8-byte digest. Actual GATT write will be performed in the
-       appropriate GATTC/GATTS callback when handles / connection are available. */
-    memcpy(g_ble_ctx.commitment_digest, commitment_digest, 8U);
-    ESP_LOGI(TAG, "Commitment exchange queued: state=%s connected=%u char_handle=%u",
+    /* Store the commitment locally (fixed-size, no dynamic alloc). Zero the buffer then copy len bytes */
+    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) { g_ble_ctx.commitment_digest[i] = 0U; }
+    memcpy(g_ble_ctx.commitment_digest, commitment_digest, len);
+    g_ble_ctx.local_commitment_len = len;
+
+    ESP_LOGI(TAG, "Commitment exchange queued: state=%s connected=%u char_handle=%u len=%u",
              transport_ble_state_name(g_ble_ctx.state),
              g_ble_ctx.gattc_connected ? 1U : 0U,
-             (unsigned)g_ble_ctx.gattc_char_handle);
+             (unsigned)g_ble_ctx.gattc_char_handle, (unsigned)len);
 
 #ifdef CONFIG_BT_ENABLED
     if (g_ble_ctx.gattc_connected && g_ble_ctx.gattc_char_handle != 0U) {
@@ -547,7 +549,7 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t commitment_digest[8]
             g_ble_ctx.gattc_if,
             g_ble_ctx.conn_id,
             g_ble_ctx.gattc_char_handle,
-            8U,
+            len,
             g_ble_ctx.commitment_digest,
             ESP_GATT_WRITE_TYPE_RSP,
             ESP_GATT_AUTH_REQ_NONE);
@@ -566,21 +568,30 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t commitment_digest[8]
     return CEEPEW_OK;
 }
 
-CeePewErr_t transport_ble_verify_commitment(const uint8_t peer_digest[8])
+CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t len)
 {
     CEEPEW_ASSERT(peer_digest != NULL, CEEPEW_ERR_NULL_PTR);
     if (g_ble_ctx.state != BLE_PAIRING && g_ble_ctx.state != BLE_CONNECTED) {
         return CEEPEW_ERR_PARAM;
     }
+    CEEPEW_ASSERT(len == CEEPEW_COMMITMENT_BYTES || len == CEEPEW_COMMITMENT_LEGACY_BYTES, CEEPEW_ERR_PARAM);
 
-    /* Verify peer's commitment matches ours (constant-time comparison) */
+    /* Defensive: record peer length */
+    g_ble_ctx.peer_commitment_len = len;
+    g_ble_ctx.peer_commitment_legacy = (len == CEEPEW_COMMITMENT_LEGACY_BYTES);
+
+    /* Verify peer's commitment matches ours (constant-time comparison)
+     * Accept legacy 8-byte commitments by comparing the first 8 bytes. */
     uint8_t match = 0U;
-    /* loop bound: 8U (commitment_digest size) */
-    for (uint8_t i = 0U; i < 8U; i++) {
+    uint8_t cmp_len = (len == CEEPEW_COMMITMENT_LEGACY_BYTES) ? CEEPEW_COMMITMENT_LEGACY_BYTES : CEEPEW_COMMITMENT_BYTES;
+    for (uint8_t i = 0U; i < cmp_len; i++) {
         match |= (g_ble_ctx.commitment_digest[i] ^ peer_digest[i]);
     }
 
     if (match != 0U) {
+        /* Defensive: record failure and log for diagnostics. Do NOT reveal details. */
+        g_ble_ctx.verify_fail_count++;
+        ESP_LOGW(TAG, "commitment mismatch — verify_fail_count=%u", (unsigned)g_ble_ctx.verify_fail_count);
         return CEEPEW_ERR_AUTH_FAIL;  /* Mismatch */
     }
 
@@ -668,10 +679,15 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     /* First: check for peer timeout and clear discovered state if peer vanished */
     {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        const uint32_t PEER_LOST_TIMEOUT_MS = 5000U; /* 5s — conservative for discovery */
+        const uint32_t PEER_LOST_TIMEOUT_MS = 15000U; /* 15s — tolerate longer scan/adv gaps */
 
-        if (g_ble_ctx.discovered && g_ble_ctx.last_seen_ms != 0U &&
-            (now_ms - g_ble_ctx.last_seen_ms) > PEER_LOST_TIMEOUT_MS) {
+        /* If we're currently connected via GATT, preserve the discovered peer until
+         * the connection drops — connection state is a stronger signal than transient
+         * scan misses. This prevents clearing during transient RF scheduling delays. */
+        if (g_ble_ctx.discovered && (g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected)) {
+            /* Peer still connected — keep discovered state */
+        } else if (g_ble_ctx.discovered && g_ble_ctx.last_seen_ms != 0U &&
+                   (now_ms - g_ble_ctx.last_seen_ms) > PEER_LOST_TIMEOUT_MS) {
             ESP_LOGW(TAG, "Peer lost: last seen %lu ms ago — clearing discovered",
                      (unsigned long)(now_ms - g_ble_ctx.last_seen_ms));
 
@@ -1050,11 +1066,12 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                          (unsigned)g_ble_ctx.gattc_char_handle);
                 if (g_ble_ctx.commitment_write_pending) {
                     g_ble_ctx.commitment_write_pending = false;
+                    uint8_t write_len = (g_ble_ctx.local_commitment_len == 0U) ? CEEPEW_COMMITMENT_BYTES : g_ble_ctx.local_commitment_len;
                     (void)esp_ble_gattc_write_char(
                         g_ble_ctx.gattc_if,
                         g_ble_ctx.conn_id,
                         g_ble_ctx.gattc_char_handle,
-                        8U,
+                        (uint16_t)write_len,
                         g_ble_ctx.commitment_digest,
                         ESP_GATT_WRITE_TYPE_RSP,
                         ESP_GATT_AUTH_REQ_NONE);
@@ -1071,38 +1088,61 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 g_ble_ctx.state = BLE_IDLE;
             } else {
                 ESP_LOGI(TAG, "GATTC write complete — commitment accepted by peer");
-                /* Initiator considers verification done when write is ACK'd.
-                 * If the responder has a mismatching code it will disconnect. */
-                g_ble_ctx.commitment_verified = true;
-                g_ble_ctx.handoff_ready = true;
-                g_ble_ctx.state = BLE_DONE;
+
+                /* Defensive check: ensure local commitment was populated before
+                 * treating a successful write as verification. A peer that writes
+                 * early (or a logic bug) must not cause us to accept verification. */
+                uint8_t local_zero = 0U;
+                uint8_t local_len = (g_ble_ctx.local_commitment_len == 0U) ? CEEPEW_COMMITMENT_BYTES : g_ble_ctx.local_commitment_len;
+                for (uint8_t i = 0U; i < local_len; i++) { local_zero |= g_ble_ctx.commitment_digest[i]; }
+                if (local_zero == 0U) {
+                    ESP_LOGW(TAG, "GATTC write ack with empty local commitment — disconnecting");
+                    g_ble_ctx.verify_fail_count++;
+                    /* Force disconnect and mark idle so session_fsm can retry cleanly */
+                    g_ble_ctx.state = BLE_IDLE;
+                } else {
+                    g_ble_ctx.commitment_verified = true;
+                    g_ble_ctx.handoff_ready = true;
+                    g_ble_ctx.state = BLE_DONE;
+                }
             }
-            break; 
+            break;
 
         case ESP_GATTC_DISCONNECT_EVT:
             g_ble_ctx.gattc_connected = false;
             g_ble_ctx.connecting = false;
-            g_ble_ctx.state = BLE_IDLE;
             g_ble_ctx.gattc_char_handle = 0U;
             ESP_LOGI(TAG, "GATTC disconnected");
 
             /* If disconnect occurred before successful commitment verification,
-             * reset discovered peer so upper layers return to discovery state. */
+             * attempt a limited number of reconnects before clearing the peer. */
             if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
-                ESP_LOGI(TAG, "Disconnect before verification — clearing discovered peer");
-                memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
-                memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
-                g_ble_ctx.peer_name_len = 0U;
-                g_ble_ctx.peer_rssi = 0;
-                g_ble_ctx.peer_rssi_smooth_x8 = 0;
-                g_ble_ctx.last_seen_ms = 0U;
-                g_ble_ctx.scan_hit_count = 0U;
-                g_ble_ctx.scan_seen_count = 0U;
-                g_ble_ctx.adv_packet_count = 0U;
-                g_ble_ctx.discovered = false;
-                s_scan_peer_dedupe_valid = false;
-                memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
-                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+                if (g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS &&
+                    (g_ble_ctx.peer_mac[0] != 0U || g_ble_ctx.peer_mac[1] != 0U)) {
+                    g_ble_ctx.reconnect_attempts++;
+                    ESP_LOGW(TAG, "Disconnect before verification — attempting reconnect %u/%u",
+                             (unsigned)g_ble_ctx.reconnect_attempts, (unsigned)CEEPEW_MAX_RECONNECT_ATTEMPTS);
+                    /* Try reconnecting */
+                    (void)transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
+                } else {
+                    ESP_LOGI(TAG, "Clearing discovered peer after reconnect attempts exhausted or no peer_mac");
+                    g_ble_ctx.state = BLE_IDLE;
+                    memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
+                    memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
+                    g_ble_ctx.peer_name_len = 0U;
+                    g_ble_ctx.peer_rssi = 0;
+                    g_ble_ctx.peer_rssi_smooth_x8 = 0;
+                    g_ble_ctx.last_seen_ms = 0U;
+                    g_ble_ctx.scan_hit_count = 0U;
+                    g_ble_ctx.scan_seen_count = 0U;
+                    g_ble_ctx.adv_packet_count = 0U;
+                    g_ble_ctx.discovered = false;
+                    s_scan_peer_dedupe_valid = false;
+                    memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
+                    (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+                }
+            } else {
+                g_ble_ctx.state = BLE_IDLE;
             }
             break;
 
@@ -1192,8 +1232,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             }
             if (!param->write.is_prep &&
                 param->write.handle == g_ble_ctx.gatts_char_handle &&
-                param->write.len == 8U) {
-                CeePewErr_t verify_err = transport_ble_verify_commitment(param->write.value);
+                (param->write.len == CEEPEW_COMMITMENT_BYTES || param->write.len == CEEPEW_COMMITMENT_LEGACY_BYTES)) {
+                CeePewErr_t verify_err = transport_ble_verify_commitment(param->write.value, (uint8_t)param->write.len);
                 if (verify_err != CEEPEW_OK) {
                     ESP_LOGW(TAG, "transport_ble_verify_commitment failed: %d", (int)verify_err);
                     /* Show a distinct UI state indicating the remote code differs */

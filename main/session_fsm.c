@@ -379,20 +379,46 @@ CeePewErr_t session_get_device_id(uint8_t device_id[6])
     return CEEPEW_OK;
 }
 
-CeePewErr_t session_get_commitment(uint8_t commitment[8])
+CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
     CEEPEW_ASSERT(s_session.phase >= 2U && s_session.phase <= 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
 
-    /* Compute SHA256(session_code) and truncate first 8 bytes */
-    uint8_t session_code_hash[32];
-    CeePewErr_t err = crypto_sha256_compute(s_session.session_code, 32U, session_code_hash);
+    /* Stronger commitment v2: SHA256("CEEPEW_COMMIT_v2" || id_A || id_B || session_code || t_round)
+     * Truncate to first 16 bytes for improved collision resistance. Order device ids
+     * deterministically (lower first) so both peers derive the same commitment. */
+    const char *label = "CEEPEW_COMMIT_v2";
+    size_t label_len = strlen(label);
+
+    uint8_t id_a[6];
+    uint8_t id_b[6];
+    memcpy(id_a, s_session.device_id_self, 6U);
+    memcpy(id_b, s_session.device_id_peer, 6U);
+
+    /* Deterministic ordering: ensure id_a <= id_b lexicographically */
+    if (memcmp(id_a, id_b, 6U) > 0) {
+        uint8_t tmp[6]; memcpy(tmp, id_a, 6U); memcpy(id_a, id_b, 6U); memcpy(id_b, tmp, 6U);
+    }
+
+    uint32_t t_round = (uint32_t)(s_session.phase2_timestamp);
+
+    uint8_t info[64];
+    size_t off = 0U;
+    memcpy(info + off, label, label_len); off += label_len;
+    memcpy(info + off, id_a, 6U); off += 6U;
+    memcpy(info + off, id_b, 6U); off += 6U;
+    memcpy(info + off, s_session.session_code, 32U); off += 32U;
+    memcpy(info + off, &t_round, sizeof(uint32_t)); off += sizeof(uint32_t);
+
+    uint8_t out32[32];
+    CeePewErr_t err = crypto_sha256_compute(info, off, out32);
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
-    memcpy(commitment, session_code_hash, 8U);
+    memcpy(commitment, out32, CEEPEW_COMMITMENT_BYTES);
 
-    /* Secure zero the temporary */
-    ceepew_secure_zero(session_code_hash, sizeof(session_code_hash));
+    /* Secure zero temporaries */
+    ceepew_secure_zero(out32, sizeof(out32));
+    ceepew_secure_zero(info, sizeof(info));
 
     return CEEPEW_OK;
 }

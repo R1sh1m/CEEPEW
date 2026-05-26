@@ -32,7 +32,8 @@ typedef enum {
     UI_STATE_CHAT = 10U,           /* Sprint 11: Chat bubbles */
     UI_STATE_CRYPTOGRAM = 11U,     /* Sprint 12: Cryptogram panel */
     UI_STATE_NONCE_EXHAUSTED = 12U, /* Phase 4: Nonce limit exhausted */
-    UI_STATE_ERROR = 13U,         /* Phase 4: Generic error display */
+   UI_STATE_INFO = 13U,           /* DIAG-only: Info / diagnostics display */
+   UI_STATE_ERROR = 14U,         /* Phase 4: Generic error display */
 } UIState_t;
 
 /* Animation frame context */

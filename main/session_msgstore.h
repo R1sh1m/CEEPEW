@@ -69,4 +69,7 @@ uint8_t msg_store_count(void);
 /* Get current store usage in bytes */
 uint32_t msg_store_usage_bytes(void);
 
+/* Diagnostic accessor: last secure-wipe time in milliseconds since epoch */
+uint32_t session_get_last_wipe_ms(void);
+
 #endif /* SESSION_MSGSTORE_H */

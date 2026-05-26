@@ -671,14 +671,14 @@ static CeePewErr_t render_boot_anim(void)
            uint8_t ul_x = lx[0];
            uint8_t ul_final_w = (uint8_t)((lx[6] + 5U) - lx[0]); /* char width 5 */
            uint8_t ul_w = (ul_f < 20U) ? (uint8_t)(((uint32_t)ul_f * (uint32_t)ul_final_w) / 20U) : ul_final_w;
-           if (ul_w > 0U) { draw_hline(ul_x, 23U, ul_w); }
+           if (ul_w > 0U) { draw_hline(ul_x, 20U, ul_w); }
        }
     }
 
     /* ── Phase 3 (f 60–89): Chunky loading bar fills ── */
     if (f >= 60U) {
        /* Bar border (moved up to increase gap below with frame) */
-       HalUIRect_t border = { .x = 14U, .y = 34U, .w = 100U, .h = 8U };
+       HalUIRect_t border = { .x = 14U, .y = 54U, .w = 100U, .h = 9U };
        hal_ui_rect(&border, HAL_UI_WHITE);
 
        /* Chunky fill — 4-px wide segments with 1-px gaps */
@@ -693,7 +693,7 @@ static CeePewErr_t render_boot_anim(void)
        uint8_t pct = (seg_count * 100U) / 12U;
        char pct_str[5U];
        (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-       hal_ui_text(50U, (uint8_t)(border.y + border.h + 2U), pct_str, HAL_UI_WHITE);
+       hal_ui_text(50U, 56U, pct_str, HAL_UI_WHITE);
     }
 
     /* ── Phase 4 (f 90–109): Border frame draws in from corners ── */
@@ -726,7 +726,7 @@ static CeePewErr_t render_boot_anim(void)
        /* Subtitle fades in (moved down to avoid overlap with logo) */
        /* Render at consistent position (16, 30) throughout phases 4 and 5 */
        if (bf >= 10U) {
-           hal_ui_text(16U, 30U, "SECURE MESSENGER", HAL_UI_WHITE);
+           hal_ui_text(16U, 28U, "SECURE MESSENGER", HAL_UI_WHITE);
        }
     }
 
@@ -829,14 +829,15 @@ static void draw_sweep_arm(uint8_t pos)
 }
 
 /* Peer blip renderer.
- * The blip only becomes visible when the sweep arm is near the derived
- * peer angle, which prevents the "fixed GIF" look from a static marker. */
+ * The blip becomes more persistent and exhibits a slow, periodic drift in
+ * displayed location so transient scan gaps don't make it disappear instantly
+ * and to increase visual salience during discovery. */
 static void draw_peer_blip(uint8_t bx, uint8_t by,
                            uint8_t sweep_pos, uint8_t blip_idx,
                            uint32_t age_ms)
 {
     /* Extend lifetime so transient scan gaps do not immediately hide the blip */
-    if (age_ms >= 8000U) {
+    if (age_ms >= 25000U) {
         return;
     }
 
@@ -849,8 +850,15 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
     };
     hal_ui_rect_fill(&base, HAL_UI_WHITE);
 
-    uint8_t forward = (uint8_t)((blip_idx + 16U - sweep_pos) % 16U);
-    uint8_t reverse = (uint8_t)((sweep_pos + 16U - blip_idx) % 16U);
+    /* Compute a slow time-based offset so the blip drifts visibly over time.
+     * This only affects the displayed index; the actual peer coordinates
+     * (bx,by) remain the source of the marker. The offset updates every 2s. */
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    uint8_t time_offset = (uint8_t)((now_ms / 2000U) % 16U);
+    uint8_t display_idx = (uint8_t)((blip_idx + time_offset) % 16U);
+
+    uint8_t forward = (uint8_t)((display_idx + 16U - sweep_pos) % 16U);
+    uint8_t reverse = (uint8_t)((sweep_pos + 16U - display_idx) % 16U);
     uint8_t dist = (forward < reverse) ? forward : reverse;
 
     /* When sweep aligns (dist == 0) show an expanded visual pulse */
@@ -858,15 +866,25 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
         HalUIRect_t blip = {
             .x = (uint8_t)((bx > 1U) ? (bx - 1U) : 0U),
             .y = (uint8_t)((by > 1U) ? (by - 1U) : 0U),
+            .w = 5U,
+            .h = 5U
+        };
+        hal_ui_rect_fill(&blip, HAL_UI_WHITE);
+        /* Slight radial highlight for very fresh sightings */
+        if (age_ms < 800U) {
+            draw_circle((int16_t)bx, (int16_t)by, 5U);
+        }
+    } else if (dist == 1U) {
+        HalUIRect_t blip = {
+            .x = (uint8_t)((bx > 0U) ? (bx - 1U) : 0U),
+            .y = (uint8_t)((by > 0U) ? (by - 1U) : 0U),
             .w = 4U,
             .h = 4U
         };
         hal_ui_rect_fill(&blip, HAL_UI_WHITE);
-        /* Short radial highlight for freshness */
-        if (age_ms < 600U) {
-            draw_circle((int16_t)bx, (int16_t)by, 4U);
-        }
-    } else if (dist == 1U) {
+    } else if (dist <= 3U) {
+        /* Keep a slightly larger base for near-alignment so the blip remains
+         * perceptible even when the sweep is nearby. */
         HalUIRect_t blip = {
             .x = (uint8_t)((bx > 0U) ? (bx - 1U) : 0U),
             .y = (uint8_t)((by > 0U) ? (by - 1U) : 0U),
@@ -875,7 +893,7 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
         };
         hal_ui_rect_fill(&blip, HAL_UI_WHITE);
     } else {
-        /* Keep the stable base marker already drawn; no extra work here. */
+        /* Stable base marker already drawn; nothing more to do. */
     }
 }
 
@@ -952,7 +970,8 @@ static CeePewErr_t render_discovery(void)
 
        /* Prompt user to press the button to begin pairing (only if not already confirmed) */
        if (!g_ble_ctx.commitment_verified && !transport_ble_handoff_ready()) {
-           hal_ui_text(RPANEL_X, Y_PAIR_BTN, "Press button to pair", HAL_UI_WHITE);
+           hal_ui_text(RPANEL_X, Y_PAIR_BTN, "BTN:PAIR", HAL_UI_WHITE);
+hal_ui_text(RPANEL_X, Y_BLE_STATE - 2U, "press to connect", HAL_UI_WHITE);
        }
 
        /* Blip rendering — only visible near sweep arm */
@@ -974,7 +993,7 @@ static CeePewErr_t render_discovery(void)
        int16_t by = (int16_t)RDR_CY + (int16_t)(((int32_t)dy * blip_r) / (int32_t)RDR_R3);
 
        /* Blip bounds check: stay within left panel (x < 52 for divider at 52) */
-       if (bx >= 0 && bx < 52 && by >= 10 && by < 64) {
+       if (bx >= 0 && bx < 52 && by >= 0 && by < 64) {
            uint32_t age_ms = (g_ble_ctx.last_seen_ms == 0U)
                            ? 0U : (now_ms - g_ble_ctx.last_seen_ms);
            draw_peer_blip((uint8_t)bx, (uint8_t)by, sweep_pos, blip_idx, age_ms);
@@ -1353,6 +1372,14 @@ static CeePewErr_t render_keyder_anim(void)
     hal_ui_text(30U, 54U, "DERIVING KEY...", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
+
+    /* FIX: transition to cryptogram once animation completes (~3 s at 50 ms/frame) */
+    if (g_ui_ctx.anim.frame_count >= 150U) {
+        g_ui_ctx.anim.frame_count = 0U;
+        (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
+        g_ui_ctx.transition_ready = true;
+    }
+
     return CEEPEW_OK;
 }
 
@@ -1958,10 +1985,27 @@ CeePewErr_t ui_manager_update(void)
                     g_ui_ctx.error_start_ms = now_ms;
                     return CEEPEW_OK;
                 }
+                /* FIX: also restart scanning so both directions work after re-entry */
+                (void)transport_ble_start_scan();
+            } else if (ble_state == BLE_ADVERTISING) {
+                /* Advertising is up but scan may have been lost — restart it */
+                (void)transport_ble_start_scan();
             }
         } else if (g_ui_ctx.current_state == UI_STATE_COUNTDOWN) {
             /* Mark countdown start time */
             g_ui_ctx.countdown_start_ms = now_ms;
+
+            /* Connect to peer; session FSM will derive and publish the canonical commitment
+             * so do not set g_ble_ctx.commitment_digest or commit-write-pending here. */
+            if (g_ble_ctx.discovered &&
+                !g_ble_ctx.gattc_connected && !g_ble_ctx.gatts_connected &&
+                !g_ble_ctx.connecting) {
+
+                CeePewErr_t conn_err = transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
+                if (conn_err != CEEPEW_OK) {
+                    ESP_LOGW("ui", "connect_to_peer failed: %d — will retry", (int)conn_err);
+                }
+            }
         } else if (g_ui_ctx.current_state == UI_STATE_KEYDER) {
             g_ui_ctx.fingerprint_confirmed = false;
         } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT) {
@@ -1978,7 +2022,9 @@ CeePewErr_t ui_manager_update(void)
             /* Initialize cryptogram confirmation context */
             memset(g_ui_ctx.commitment, 0U, 8U);
             memset(g_ui_ctx.peer_commitment, 0U, 8U);
-            g_ui_ctx.commitment_verified = false;
+            /* FIX: seed peer commitment from BLE context so renderer can compare */
+            memcpy(g_ui_ctx.peer_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
+            g_ui_ctx.commitment_verified   = g_ble_ctx.commitment_verified;
             g_ui_ctx.crypto_confirm_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
             g_ui_ctx.error_start_ms = now_ms;

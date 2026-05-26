@@ -194,10 +194,12 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
             /* Pre-populate commitment_digest so responder verify_commitment() works
             * when the initiator's GATT write arrives on the next tick.            */
-            uint8_t commitment[8U];
+            uint8_t commitment[CEEPEW_COMMITMENT_BYTES];
             err = session_get_commitment(commitment);
             if (err == CEEPEW_OK) {
-                memcpy(g_ble_ctx.commitment_digest, commitment, 8U);
+                /* Store locally and mark local commitment length for BLE layer */
+                memcpy(g_ble_ctx.commitment_digest, commitment, CEEPEW_COMMITMENT_BYTES);
+                g_ble_ctx.local_commitment_len = CEEPEW_COMMITMENT_BYTES;
             }
             ceepew_secure_zero(commitment, sizeof(commitment));
             if (err != CEEPEW_OK) { return err; }
@@ -221,10 +223,10 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
             /* commitment_digest was set in step 4 on the previous tick.
             * Pass a local copy to avoid aliasing UB in exchange_commitment().     */
-            uint8_t local_commitment[8U];
-            memcpy(local_commitment, g_ble_ctx.commitment_digest, 8U);
+            uint8_t local_commitment[CEEPEW_COMMITMENT_BYTES];
+            memcpy(local_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
 
-            CeePewErr_t err = transport_ble_exchange_commitment(local_commitment);
+            CeePewErr_t err = transport_ble_exchange_commitment(local_commitment, CEEPEW_COMMITMENT_BYTES);
             ceepew_secure_zero(local_commitment, sizeof(local_commitment));
             if (err != CEEPEW_OK) { return err; }
 
