@@ -1066,7 +1066,7 @@ static CeePewErr_t render_code_entry(void)
     const uint8_t cell_w     = 24U;
     const uint8_t cell_h     = 28U;
     const uint8_t cell_y     = 18U;
-    
+
     for (uint8_t i = 0U; i < 4U; i++) {
         bool is_active = (g_ui_ctx.code_selected == i);
 
@@ -1129,7 +1129,89 @@ static CeePewErr_t render_code_entry(void)
     return CEEPEW_OK;
 }
 
+/* Module-level retry counter — lives between countdown re-entries */
+static uint8_t s_countdown_fail_count = 0U;
+
 static CeePewErr_t render_countdown(void)
+{
+    hal_ui_clear();
+
+    /* ── EARLY EXIT: session became active before countdown expired ─── */
+    if (session_is_active() || transport_ble_handoff_ready()) {
+        s_countdown_fail_count = 0U;
+        g_ui_ctx.anim.frame_count = 0U;
+        (void)ui_manager_transition_to(UI_STATE_KEYDER);
+        g_ui_ctx.transition_ready = true;
+        return CEEPEW_OK;
+    }
+
+    uint32_t f    = g_ui_ctx.anim.frame_count;
+    uint32_t now  = (uint32_t)(esp_timer_get_time() / 1000LL);
+    uint32_t elapsed = (now >= g_ui_ctx.countdown_start_ms)
+                     ? (now - g_ui_ctx.countdown_start_ms) : 0U;
+    uint32_t total_ms = (uint32_t)CEEPEW_PAIRING_TIMEOUT_S * 1000U;
+    uint32_t rem_ms   = (elapsed < total_ms) ? (total_ms - elapsed) : 0U;
+    uint8_t  secs     = (uint8_t)(rem_ms / 1000U);
+
+    /* Title */
+    hal_ui_text(30U, 2U, "SYNCING", HAL_UI_WHITE);
+    draw_hline(0U, 11U, 128U);
+
+    char sec_str[4U];
+    (void)snprintf(sec_str, sizeof(sec_str), "%2u", (unsigned)secs);
+    hal_ui_text(14U, 20U, "Syncing in", HAL_UI_WHITE);
+    hal_ui_text(14U, 30U, sec_str, HAL_UI_WHITE);
+    hal_ui_text(42U, 30U, "sec", HAL_UI_WHITE);
+
+    /* Progress bar — fills as time DECREASES (remaining time shown) */
+    uint32_t fill = (rem_ms * 110U) / total_ms;
+    if (fill > 110U) { fill = 110U; }
+
+    HalUIRect_t border = { .x = 9U, .y = 40U, .w = 110U, .h = 10U };
+    hal_ui_rect(&border, HAL_UI_WHITE);
+    if (fill > 0U) {
+        HalUIRect_t bar = { .x = 11U, .y = 42U, .w = (uint8_t)fill, .h = 6U };
+        hal_ui_rect_fill(&bar, HAL_UI_WHITE);
+        uint8_t edge_x = (uint8_t)(11U + fill);
+        if (edge_x < 120U) { draw_vline(edge_x, 41U, 8U); }
+    }
+
+    /* Pulsing ring */
+    uint8_t ring_r = (uint8_t)((f % 20U));
+    if (ring_r > 0U && ring_r < 12U) {
+        draw_circle(98, 24, (uint8_t)(ring_r / 2U + 2U));
+    }
+
+    /* "Waiting for peer" blink */
+    uint8_t blink = (uint8_t)((f / 10U) % 2U);
+    if (blink == 0U) {
+        hal_ui_text(10U, 54U, "Waiting for peer...", HAL_UI_WHITE);
+    }
+
+    draw_vline(9U,  40U, 4U);
+    draw_vline(119U, 40U, 4U);
+
+    /* ── TIMEOUT HANDLING ─────────────────────────────────────────────── */
+    if (rem_ms == 0U) {
+        s_countdown_fail_count++;
+        if (s_countdown_fail_count >= 2U) {
+            /* Two consecutive failures → give up and go back to DISCOVERY */
+            s_countdown_fail_count = 0U;
+            (void)transport_ble_disconnect();
+            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+            g_ui_ctx.transition_ready = true;
+        } else {
+            /* First failure → retry code entry */
+            (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
+            g_ui_ctx.transition_ready = true;
+        }
+    }
+
+    g_ui_ctx.anim.frame_count++;
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t render_syncing(void)
 {
     hal_ui_clear();
 
@@ -1965,113 +2047,161 @@ static CeePewErr_t render_chat_menu(void)
 {
     hal_ui_clear();
 
-    uint32_t f = g_ui_ctx.anim.frame_count;
-
     /* Title */
-    hal_ui_text(20U, 2U, "SECURE CHAT", HAL_UI_WHITE);
-    draw_hline(0U, 12U, 128U);
+    hal_ui_text(20U, 1U, "SECURE CHAT", HAL_UI_WHITE);
+    draw_hline(0U, 11U, 128U);
 
-    /* Three menu options */
-    static const char *const MENU_OPTIONS[3] = {
-        "[ Read Inbox ]",
-        "[ Write Message ]",
-        "[ Check Message ]"
+    /* Two options only */
+    static const char *const OPTS[2U] = {
+        " WRITE MESSAGE ",
+        "  READ INBOX   "
     };
 
-    /* Map potentiometer (0-255) to menu selection (0-2) */
-    uint8_t selected = (uint8_t)(((uint16_t)g_ui_ctx.user_input * 3U) / 256U);
-    if (selected >= 3U) { selected = 2U; }
-    g_ui_ctx.chat_menu_selected = selected;
+    /* Map pot to 2 options */
+    uint8_t sel = (g_ui_ctx.user_input >= 128U) ? 1U : 0U;
+    g_ui_ctx.chat_menu_selected = sel;
 
-    /* Render menu items with highlighting */
-    for (uint8_t i = 0U; i < 3U; i++) {
-        uint8_t y_pos = (uint8_t)(20U + i * 12U);
-         
-        if (i == selected) {
-            /* Selected: draw filled box and inverted text */
-            HalUIRect_t sel_box = {
-                .x = 10U,
-                .y = (uint8_t)(y_pos - 1U),
-                .w = 108U,
-                .h = 10U
-            };
-            hal_ui_rect_fill(&sel_box, HAL_UI_WHITE);
-            /* Text appears inverted on filled background */
-            hal_ui_text(15U, y_pos, MENU_OPTIONS[i], HAL_UI_BLACK);
+    for (uint8_t i = 0U; i < 2U; i++) {
+        uint8_t y = (uint8_t)(22U + i * 20U);
+        HalUIRect_t box = { .x = 8U, .y = y, .w = 112U, .h = 14U };
+        if (i == sel) {
+            hal_ui_rect_fill(&box, HAL_UI_WHITE);
+            /* Text appears as BLACK on white fill — use inverted draw.
+             * Since we can't invert on monochrome SSD1306 easily, just
+             * draw outline instead and let the fill show selection.      */
+            hal_ui_rect(&box, HAL_UI_WHITE);
+            hal_ui_text(14U, (uint8_t)(y + 4U), OPTS[i], HAL_UI_BLACK);
         } else {
-            /* Not selected: plain text with box outline */
-            hal_ui_text(15U, y_pos, MENU_OPTIONS[i], HAL_UI_WHITE);
+            hal_ui_rect(&box, HAL_UI_WHITE);
+            hal_ui_text(14U, (uint8_t)(y + 4U), OPTS[i], HAL_UI_WHITE);
         }
     }
 
-    /* Animated pointer on the right */
-    uint8_t ptr_y = (uint8_t)(24U + g_ui_ctx.chat_menu_selected * 12U);
-    uint8_t ptr_x = (uint8_t)(120U + ((f / 4U) % 3U));
-    hal_ui_text(ptr_x, ptr_y, ">", HAL_UI_WHITE);
+    /* Message count badge */
+    uint8_t cnt = (uint8_t)msg_store_count();
+    if (cnt > 0U) {
+        char badge[12U];
+        (void)snprintf(badge, sizeof(badge), "[%u msg]", (unsigned)cnt);
+        hal_ui_text(4U, 62U, badge, HAL_UI_WHITE);
+    }
 
-    /* Instruction */
-    hal_ui_text(10U, 56U, "Turn pot / press", HAL_UI_WHITE);
+    hal_ui_text(70U, 62U, "BTN=select", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
 }
 
 /* Phase 4: Chat compose — sliding character selector with potentiometer control */
+/* Full character set — 62 entries */
+static const char COMPOSE_CHARSET[63U] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    " .,!?;:'\"_-@#/()+=%&*<>";
+#define COMPOSE_CHARSET_LEN  62U
+
 static CeePewErr_t render_chat_compose(void)
 {
+    CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(g_ui_ctx.compose_length <= 255U, CEEPEW_ERR_BOUNDS);
+
     hal_ui_clear();
+    uint32_t f = g_ui_ctx.anim.frame_count;
 
-    /* Character set: A-Z 0-9 (36 characters) */
-    static const char CHARSET[37] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    /* ── Map pot to character ─────────────────────────────────────── */
+    uint8_t char_idx = (uint8_t)(((uint16_t)g_ui_ctx.user_input * COMPOSE_CHARSET_LEN) / 256U);
+    if (char_idx >= COMPOSE_CHARSET_LEN) { char_idx = COMPOSE_CHARSET_LEN - 1U; }
+    g_ui_ctx.keyboard_col = char_idx;
+    char sel_char = COMPOSE_CHARSET[char_idx];
 
-    /* Map potentiometer (0-255) to character index (0-35) */
-    uint8_t pot = g_ui_ctx.user_input;
-    uint8_t char_idx = (uint8_t)(((uint16_t)pot * 36U) / 256U);
-    if (char_idx >= 36U) { char_idx = 35U; }
-    g_ui_ctx.keyboard_col = char_idx;  /* reuse field to store current char index */
+    /* ── Status bar ───────────────────────────────────────────────── */
+    char hdr[22U];
+    (void)snprintf(hdr, sizeof(hdr), "WRITE [%u/255]", (unsigned)g_ui_ctx.compose_length);
+    hal_ui_text(0U, 0U, hdr, HAL_UI_WHITE);
+    draw_hline(0U, 9U, 128U);
 
-    /* Title */
-    hal_ui_text(16U, 2U, "WRITE MESSAGE", HAL_UI_WHITE);
-    draw_hline(0U, 12U, 128U);
-
-    /* Render selected character large in center (16x18 area) */
-    char selected_ch[2U] = { CHARSET[char_idx], '\0' };
-    /* Use large text by rendering multiple times for visual emphasis */
-    hal_ui_text(60U, 24U, selected_ch, HAL_UI_WHITE);
-    hal_ui_text(59U, 23U, selected_ch, HAL_UI_WHITE);  /* overlay for bold effect */
-
-    /* Character index display (e.g., "D (04/36)") */
-    char idx_str[10U];
-    (void)snprintf(idx_str, sizeof(idx_str), "(%02u/36)", (unsigned)char_idx + 1U);
-    hal_ui_text(50U, 36U, idx_str, HAL_UI_WHITE);
-
-    /* Show nearby characters for context (scrolling effect) */
-    uint8_t prev_idx = (char_idx > 0U) ? char_idx - 1U : 35U;
-    uint8_t next_idx = (char_idx < 35U) ? char_idx + 1U : 0U;
-
-    char prev_ch[2U] = { CHARSET[prev_idx], '\0' };
-    char next_ch[2U] = { CHARSET[next_idx], '\0' };
-
-    hal_ui_text(40U, 27U, prev_ch, HAL_UI_WHITE);    /* previous char on left */
-    hal_ui_text(72U, 27U, next_ch, HAL_UI_WHITE);    /* next char on right */
-
-    /* Message preview and character count */
-    char msg_preview[32U];
-    (void)snprintf(msg_preview, sizeof(msg_preview), "Msg [%u/255]",
-                   (unsigned)g_ui_ctx.compose_length);
-    hal_ui_text(4U, 45U, msg_preview, HAL_UI_WHITE);
-
-    /* Display actual message content (wrapped if needed) */
-    if (g_ui_ctx.compose_length > 0U) {
-        char msg_line[28U];
-        uint8_t copy_len = (g_ui_ctx.compose_length < 27U) ? g_ui_ctx.compose_length : 27U;
-        (void)memcpy(msg_line, g_ui_ctx.compose_buffer, copy_len);
-        msg_line[copy_len] = '\0';
-        hal_ui_text(4U, 52U, msg_line, HAL_UI_WHITE);
+    /* ── Selected character — large, centred ─────────────────────── */
+    /* Draw the selected character 2× using the font by printing it twice
+     * at adjacent pixels for a pseudo-bold effect                     */
+    char cs[2U] = { sel_char, '\0' };
+    /* Blink when at edge of charset */
+    bool at_start = (char_idx == 0U);
+    bool at_end   = (char_idx == COMPOSE_CHARSET_LEN - 1U);
+    uint8_t blink = (uint8_t)((f / 4U) % 2U);
+    if ((!at_start && !at_end) || blink == 0U) {
+        hal_ui_text(58U, 16U, cs, HAL_UI_WHITE);
+        hal_ui_text(57U, 15U, cs, HAL_UI_WHITE);  /* overlay for bold */
     }
 
-    /* Instructions */
-    hal_ui_text(4U, 60U, "Add: btn | Del: long | Send: 2s", HAL_UI_WHITE);
+    /* Selector highlight box around big char */
+    HalUIRect_t sel_box = { .x = 53U, .y = 13U, .w = 18U, .h = 14U };
+    hal_ui_rect(&sel_box, HAL_UI_WHITE);
+
+    /* Neighbours for context (one on each side) */
+    if (char_idx > 0U) {
+        char prev[2U] = { COMPOSE_CHARSET[char_idx - 1U], '\0' };
+        hal_ui_text(38U, 18U, prev, HAL_UI_WHITE);
+    }
+    if (char_idx < COMPOSE_CHARSET_LEN - 1U) {
+        char next[2U] = { COMPOSE_CHARSET[char_idx + 1U], '\0' };
+        hal_ui_text(76U, 18U, next, HAL_UI_WHITE);
+    }
+
+    /* ── Charset category label ──────────────────────────────────── */
+    const char *cat = (char_idx < 26U)   ? "A-Z"
+                    : (char_idx < 36U)   ? "0-9"
+                    : (char_idx < 37U)   ? "SPC"
+                    :                      "PUNCT";
+    char cat_str[16U];
+    (void)snprintf(cat_str, sizeof(cat_str), "[%s %02u]", cat, (unsigned)(char_idx + 1U));
+    hal_ui_text(46U, 29U, cat_str, HAL_UI_WHITE);
+
+    /* ── Message preview — last 21 chars ────────────────────────── */
+    draw_hline(0U, 36U, 128U);
+    if (g_ui_ctx.compose_length > 0U) {
+        uint8_t preview_start = 0U;
+        if (g_ui_ctx.compose_length > 21U) {
+            preview_start = (uint8_t)(g_ui_ctx.compose_length - 21U);
+        }
+        uint8_t preview_len = (uint8_t)(g_ui_ctx.compose_length - preview_start);
+        char preview[22U];
+        for (uint8_t i = 0U; i < preview_len; i++) {
+            char ch = g_ui_ctx.compose_buffer[preview_start + i];
+            preview[i] = (ch >= 32 && ch < 127) ? ch : '?';
+        }
+        preview[preview_len] = '\0';
+
+        /* Blinking cursor after last char */
+        uint8_t cur_vis = (uint8_t)((f / 6U) % 2U);
+        if (cur_vis == 0U && preview_len < 21U) {
+            preview[preview_len]     = '_';
+            preview[preview_len + 1U] = '\0';
+        }
+        hal_ui_text(4U, 39U, preview, HAL_UI_WHITE);
+    } else {
+        uint8_t cur_vis = (uint8_t)((f / 6U) % 2U);
+        if (cur_vis == 0U) { hal_ui_text(4U, 39U, "_", HAL_UI_WHITE); }
+    }
+
+    /* ── Button hold indicator ────────────────────────────────────── */
+    draw_hline(0U, 49U, 128U);
+
+    /* Determine hold duration for live feedback */
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    uint32_t hold_dur = 0U;
+    if (g_ui_ctx.button_pressed && g_ui_ctx.button_press_start_ms != 0U) {
+        hold_dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                   ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+    }
+
+    /* Progressive hold bar (0-1800ms → fills 120px) */
+    if (hold_dur > 0U && hold_dur < 2000U) {
+        uint8_t hold_fill = (uint8_t)((hold_dur * 120U) / 2000U);
+        HalUIRect_t hb = { .x = 4U, .y = 52U, .w = hold_fill, .h = 5U };
+        hal_ui_rect_fill(&hb, HAL_UI_WHITE);
+    }
+
+    /* Legend */
+    hal_ui_text(0U, 58U, "TAP=add  HLD=del  2s=SEND", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2163,13 +2293,52 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.chat_menu_selected = 0U;
             g_ui_ctx.button_prev = false;
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
-            /* Initialize message compose context */
-            memset(g_ui_ctx.compose_buffer, 0U, sizeof(g_ui_ctx.compose_buffer));
-            g_ui_ctx.compose_length = 0U;
-            g_ui_ctx.compose_cursor = 0U;
-            g_ui_ctx.keyboard_row = 0U;
-            g_ui_ctx.keyboard_col = 0U;
-            g_ui_ctx.button_prev = false;
+             if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            /* Edge: button just went down */
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            /* Edge: button just released — classify by hold duration */
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                           ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+
+            if (dur >= 1800U) {
+                /* ── LONG HOLD: send message ──────────────────────── */
+                if (g_ui_ctx.compose_length > 0U) {
+                    /* TODO: call session_send_message() here once integrated */
+                    ESP_LOGI("ui", "SEND: '%.*s'",
+                             (int)g_ui_ctx.compose_length,
+                             g_ui_ctx.compose_buffer);
+                    /* Clear compose buffer */
+                    for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
+                        g_ui_ctx.compose_buffer[ci] = 0U;
+                    }
+                    g_ui_ctx.compose_length = 0U;
+                }
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
+
+            } else if (dur >= 600U) {
+                /* ── MEDIUM HOLD: backspace ───────────────────────── */
+                if (g_ui_ctx.compose_length > 0U) {
+                    g_ui_ctx.compose_length--;
+                    g_ui_ctx.compose_buffer[g_ui_ctx.compose_length] = 0U;
+                }
+                /* Stay in compose — do NOT transition */
+
+            } else {
+                /* ── SHORT TAP: append character ──────────────────── */
+                uint8_t char_idx = (uint8_t)(
+                    ((uint16_t)g_ui_ctx.user_input * COMPOSE_CHARSET_LEN) / 256U);
+                if (char_idx >= COMPOSE_CHARSET_LEN) {
+                    char_idx = (uint8_t)(COMPOSE_CHARSET_LEN - 1U);
+                }
+                if (g_ui_ctx.compose_length < 255U) {
+                    g_ui_ctx.compose_buffer[g_ui_ctx.compose_length] = COMPOSE_CHARSET[char_idx];
+                    g_ui_ctx.compose_length++;
+                }
+                /* Stay in compose — do NOT transition */
+            }
+        }
         } else if (g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
             g_ui_ctx.error_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_ERROR) {
@@ -2279,23 +2448,25 @@ CeePewErr_t ui_manager_update(void)
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT || g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
         /* Chat menu: button selects option */
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            /* Transition to compose based on selection */
-            switch (g_ui_ctx.chat_menu_selected) {
-                case 0U:  /* Read Inbox */
-                    /* TODO: implement read mode */
-                    (void)ui_manager_transition_to(UI_STATE_CHAT);
-                    g_ui_ctx.transition_ready = true;
-                    break;
-                case 1U:  /* Write Message */
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                           ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 1500U) {
+                /* Long hold in menu → back to cryptogram to re-check state */
+                (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
+                g_ui_ctx.transition_ready = true;
+            } else {
+                /* Short press → act on selected menu option */
+                if (g_ui_ctx.chat_menu_selected == 0U) {
+                    /* Write — enter compose */
                     (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
                     g_ui_ctx.transition_ready = true;
-                    break;
-                case 2U:  /* Check Message */
-                    /* TODO: implement check mode */
+                } else {
+                    /* Read — TODO show inbox; for now stay in chat */
                     (void)ui_manager_transition_to(UI_STATE_CHAT);
                     g_ui_ctx.transition_ready = true;
-                    break;
-                default:  break;
+                }
             }
         }
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
@@ -2382,72 +2553,216 @@ CeePewErr_t ui_manager_update(void)
     return CEEPEW_OK;
 }
 
+/* 62-entry ASCII charset used by render_diag_page state names */
+static const char *const s_ui_state_names[17] = {
+    "BOOT","DISC","CODE","COUNT","BADCOD","DIFF",
+    "CONFIRM","KEYDER","FP","FPCONF","CHAT","CHATMNU",
+    "COMPOSE","CRYPTO","NONCE","INFO","ERROR"
+};
+
+static CeePewErr_t render_diag_page(void)
+{
+    CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(g_ui_ctx.diag_mode, CEEPEW_ERR_PARAM);
+
+    hal_ui_clear();
+
+    /* Map pot (0-255) to 3 DIAG pages */
+    uint8_t page = (uint8_t)(((uint16_t)g_ui_ctx.user_input * 3U) / 256U);
+    if (page > 2U) { page = 2U; }
+
+    /* Page indicator dots — centred at y=62 */
+    for (uint8_t p = 0U; p < 3U; p++) {
+        uint8_t dx = (uint8_t)(54U + p * 10U);
+        if (p == page) {
+            HalUIRect_t dot = { .x = (uint8_t)(dx - 2U), .y = 60U,
+                                .w = 5U, .h = 3U };
+            hal_ui_rect_fill(&dot, HAL_UI_WHITE);
+        } else {
+            draw_pixel(dx, 61U);
+        }
+    }
+
+    /* DIAG badge on top-right so user always knows they're in DIAG */
+    hal_ui_text(104U, 0U, "[DIAG]", HAL_UI_WHITE);
+
+    switch (page) {
+
+    /* ── Page 0: BLE / Session ──────────────────────────────────────────── */
+    case 0U: {
+        hal_ui_text(0U, 0U, "SESSION/BLE", HAL_UI_WHITE);
+        draw_hline(0U, 9U, 100U);
+
+        char ln[22U];
+        uint8_t phase = session_get_phase();
+        static const char *const PHASE_NAMES[4] = { "IDLE","DISC","PAIR","ACTIVE" };
+        const char *pname = (phase < 4U) ? PHASE_NAMES[phase] : "?";
+        (void)snprintf(ln, sizeof(ln), "Phase: %s", pname);
+        hal_ui_text(0U, 12U, ln, HAL_UI_WHITE);
+
+        /* BLE state */
+        const char *bname = "IDLE";
+        switch (transport_ble_get_state()) {
+            case BLE_ADVERTISING:              bname = "ADV";     break;
+            case BLE_SCANNING:                 bname = "SCAN";    break;
+            case BLE_ADVERTISING_AND_SCANNING: bname = "ADV+SCN"; break;
+            case BLE_CONNECTED:                bname = "CONN";    break;
+            case BLE_PAIRING:                  bname = "PAIR";    break;
+            case BLE_DONE:                     bname = "DONE";    break;
+            default: break;
+        }
+        (void)snprintf(ln, sizeof(ln), "BLE: %s", bname);
+        hal_ui_text(0U, 21U, ln, HAL_UI_WHITE);
+
+        /* Peer MAC (last 3 bytes) */
+        if (g_ble_ctx.discovered) {
+            (void)snprintf(ln, sizeof(ln), "Peer:%02X%02X%02X r:%d",
+                           g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4],
+                           g_ble_ctx.peer_mac[5], (int)g_ble_ctx.peer_rssi);
+            hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
+            (void)snprintf(ln, sizeof(ln), "Hits:%u Seen:%lu",
+                           (unsigned)g_ble_ctx.scan_hit_count,
+                           (unsigned long)g_ble_ctx.scan_seen_count);
+            hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
+        } else {
+            hal_ui_text(0U, 30U, "Peer: none", HAL_UI_WHITE);
+            (void)snprintf(ln, sizeof(ln), "Seen:%lu",
+                           (unsigned long)g_ble_ctx.scan_seen_count);
+            hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
+        }
+
+        /* Commitment / handoff flags */
+        (void)snprintf(ln, sizeof(ln), "Cmit:%s Hoff:%s Act:%s",
+                       g_ble_ctx.commitment_verified ? "Y" : "N",
+                       g_ble_ctx.handoff_ready       ? "Y" : "N",
+                       session_is_active()            ? "Y" : "N");
+        hal_ui_text(0U, 48U, ln, HAL_UI_WHITE);
+    } break;
+
+    /* ── Page 1: Crypto / Nonce ─────────────────────────────────────────── */
+    case 1U: {
+        hal_ui_text(0U, 0U, "CRYPTO/NONCE", HAL_UI_WHITE);
+        draw_hline(0U, 9U, 100U);
+
+        char ln[22U];
+        bool active = session_is_active();
+        (void)snprintf(ln, sizeof(ln), "Session: %s", active ? "ACTIVE" : "IDLE");
+        hal_ui_text(0U, 12U, ln, HAL_UI_WHITE);
+
+        uint64_t nonce = session_get_nonce_counter();
+        (void)snprintf(ln, sizeof(ln), "Nonce:%08lX",
+                       (unsigned long)(nonce & 0xFFFFFFFFUL));
+        hal_ui_text(0U, 21U, ln, HAL_UI_WHITE);
+
+        /* Nonce health bar — 100px wide */
+        uint8_t nonce_pct = (nonce > 0U)
+            ? (uint8_t)((nonce * 100ULL) / (CEEPEW_NONCE_HARD_LIMIT / 100ULL + 1ULL))
+            : 0U;
+        if (nonce_pct > 100U) { nonce_pct = 100U; }
+        HalUIRect_t nb = { .x = 0U, .y = 30U, .w = 100U, .h = 6U };
+        hal_ui_rect(&nb, HAL_UI_WHITE);
+        if (nonce_pct > 0U) {
+            HalUIRect_t nf = { .x = 1U, .y = 31U,
+                               .w = (uint8_t)((uint16_t)98U * nonce_pct / 100U),
+                               .h = 4U };
+            hal_ui_rect_fill(&nf, HAL_UI_WHITE);
+        }
+        (void)snprintf(ln, sizeof(ln), "Used:%u%%", (unsigned)nonce_pct);
+        hal_ui_text(104U, 30U, ln, HAL_UI_WHITE);
+
+        /* Session ID (lower 32-bit) */
+        uint64_t sid = session_get_id();
+        (void)snprintf(ln, sizeof(ln), "SID:%08lX",
+                       (unsigned long)(sid & 0xFFFFFFFFUL));
+        hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
+
+        /* Current UI state */
+        uint8_t si = (uint8_t)g_ui_ctx.current_state;
+        const char *sname = (si < 17U) ? s_ui_state_names[si] : "?";
+        (void)snprintf(ln, sizeof(ln), "UI:%s", sname);
+        hal_ui_text(0U, 48U, ln, HAL_UI_WHITE);
+    } break;
+
+    /* ── Page 2: System ─────────────────────────────────────────────────── */
+    case 2U: {
+        hal_ui_text(0U, 0U, "SYSTEM", HAL_UI_WHITE);
+        draw_hline(0U, 9U, 100U);
+
+        char ln[22U];
+
+        /* Uptime */
+        uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+        (void)snprintf(ln, sizeof(ln), "Up:%luh%02lum%02lus",
+                       (unsigned long)(uptime_s / 3600U),
+                       (unsigned long)((uptime_s / 60U) % 60U),
+                       (unsigned long)(uptime_s % 60U));
+        hal_ui_text(0U, 12U, ln, HAL_UI_WHITE);
+
+        /* Free heap */
+        uint32_t heap = esp_get_free_heap_size();
+        (void)snprintf(ln, sizeof(ln), "Heap: %luKB free", (unsigned long)(heap / 1024U));
+        hal_ui_text(0U, 21U, ln, HAL_UI_WHITE);
+
+        /* Pot raw value (useful for ADC calibration) */
+        (void)snprintf(ln, sizeof(ln), "Pot: %u/255", (unsigned)g_ui_ctx.user_input);
+        hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
+
+        /* Adv / scan counts */
+        (void)snprintf(ln, sizeof(ln), "Adv pkts: %lu",
+                       (unsigned long)g_ble_ctx.adv_packet_count);
+        hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
+
+        /* Loop frame rate estimate: 1000/30ms ≈ 33 Hz */
+        hal_ui_text(0U, 48U, "Loop ~33Hz (30ms)", HAL_UI_WHITE);
+    } break;
+
+    default:
+        break;
+    }
+
+    return CEEPEW_OK;
+}
+
 CeePewErr_t ui_manager_draw(void)
 {
     CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
 
-    /* Dispatch to current screen renderer */
+    /* ── DIAG MODE OVERRIDE ────────────────────────────────────────────
+     * The push-lock switch on GPIO 5 (active LOW, CEEPEW_DIAG_SWITCH_ACTIVE)
+     * sets g_ui_ctx.diag_mode. When active we always render DIAG, bypassing
+     * all normal screen logic. Session FSM on Core 1 is unaffected.
+     * ─────────────────────────────────────────────────────────────────── */
+    if (g_ui_ctx.diag_mode) {
+        CeePewErr_t diag_err = render_diag_page();
+        if (diag_err != CEEPEW_OK) { return diag_err; }
+        return hal_ui_flush();
+    }
+
+    /* Normal screen dispatch */
     CeePewErr_t err = CEEPEW_OK;
 
     switch (g_ui_ctx.current_state) {
-        case UI_STATE_BOOT:
-            err = render_boot_anim();
-            break;
-        case UI_STATE_DISCOVERY:
-            err = render_discovery();
-            break;
-        case UI_STATE_CODE_ENTRY:
-            err = render_code_entry();
-            break;
-        case UI_STATE_COUNTDOWN:
-            err = render_countdown();
-            break;
-        case UI_STATE_CONFIRM:
-            err = render_confirm();
-            break;
-        case UI_STATE_KEYDER:
-            err = render_keyder_anim();
-            break;
-        case UI_STATE_FINGERPRINT:
-            err = render_fingerprint();
-            break;
-        case UI_STATE_FINGERPRINT_CONFIRM:
-            err = render_fingerprint_confirm();
-            break;
-        case UI_STATE_CHAT:
-            err = render_chat_menu();
-            break;
-        case UI_STATE_CHAT_MENU:
-            err = render_chat_menu();
-            break;
-        case UI_STATE_CHAT_COMPOSE:
-            err = render_chat_compose();
-            break;
-        case UI_STATE_CRYPTOGRAM:
-            err = render_cryptogram();
-            break;
-        case UI_STATE_NONCE_EXHAUSTED:
-            err = ui_show_nonce_exhausted();
-            break;
-        case UI_STATE_CODE_INCORRECT:
-            err = render_code_incorrect();
-            break;
-        case UI_STATE_CODE_DIFFERENT:
-            err = render_code_different();
-            break;
-        case UI_STATE_INFO:
-            err = render_info();
-            break;
-        case UI_STATE_ERROR:
-            err = render_error();
-            break;
-        default:
-            return CEEPEW_ERR_PARAM;
+        case UI_STATE_BOOT:               err = render_boot_anim();          break;
+        case UI_STATE_DISCOVERY:          err = render_discovery();           break;
+        case UI_STATE_CODE_ENTRY:         err = render_code_entry();          break;
+        case UI_STATE_COUNTDOWN:          err = render_countdown();           break;
+        case UI_STATE_CONFIRM:            err = render_confirm();             break;
+        case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
+        case UI_STATE_FINGERPRINT:        err = render_fingerprint();         break;
+        case UI_STATE_FINGERPRINT_CONFIRM:err = render_fingerprint_confirm(); break;
+        case UI_STATE_CHAT:               err = render_chat_menu();           break;
+        case UI_STATE_CHAT_MENU:          err = render_chat_menu();           break;
+        case UI_STATE_CHAT_COMPOSE:       err = render_chat_compose();        break;
+        case UI_STATE_CRYPTOGRAM:         err = render_cryptogram();          break;
+        case UI_STATE_NONCE_EXHAUSTED:    err = ui_show_nonce_exhausted();    break;
+        case UI_STATE_CODE_INCORRECT:     err = render_code_incorrect();      break;
+        case UI_STATE_CODE_DIFFERENT:     err = render_code_different();      break;
+        case UI_STATE_INFO:               err = render_info();                break;
+        case UI_STATE_ERROR:              err = render_error();               break;
+        default:                          return CEEPEW_ERR_PARAM;
     }
 
     if (err != CEEPEW_OK) { return err; }
-
-    /* Flush framebuffer to display */
     return hal_ui_flush();
 }
 

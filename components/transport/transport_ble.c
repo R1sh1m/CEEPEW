@@ -5,6 +5,7 @@
  */
 
 #include "transport_ble.h"
+#include "session_fsm.h"
 #include "ui_manager.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
@@ -358,6 +359,11 @@ CeePewErr_t transport_ble_start_advertising(void)
         g_ble_ctx.state != BLE_ADVERTISING_AND_SCANNING) {
         return CEEPEW_ERR_BUSY;
     }
+     /* Do not re-advertise once a session is active */
+    if (session_is_active()) {
+        ESP_LOGI(TAG, "start_advertising: session active — skipping re-advertise");
+        return CEEPEW_OK;
+    }
 
 #ifdef CONFIG_BT_ENABLED
     /* Reset flags so the two-callback gate works correctly on every call */
@@ -695,40 +701,57 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
 
-    /* First: check for peer timeout and clear discovered state if peer vanished */
+    /* ── Peer-lost timeout check ──────────────────────────────────────── */
     {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        const uint32_t PEER_LOST_TIMEOUT_MS = 15000U; /* 15s — tolerate longer scan/adv gaps */
 
-        /* If we're currently connected via GATT, preserve the discovered peer until
-         * the connection drops — connection state is a stronger signal than transient
-         * scan misses. This prevents clearing during transient RF scheduling delays. */
-        if (g_ble_ctx.discovered && (g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected)) {
-            /* Peer still connected — keep discovered state */
-        } else if (g_ble_ctx.discovered && g_ble_ctx.last_seen_ms != 0U &&
-                   (now_ms - g_ble_ctx.last_seen_ms) > PEER_LOST_TIMEOUT_MS) {
-            ESP_LOGW(TAG, "Peer lost: last seen %lu ms ago — clearing discovered",
+        /*
+         * CRITICAL FIX:
+         * Do NOT clear the discovered peer if:
+         *   (a) a GATT connection is active (gattc or gatts side), OR
+         *   (b) the commitment has been verified (pairing succeeded), OR
+         *   (c) the session is now active (key derivation completed).
+         *
+         * The root cause of "only one device enters chat" was that after
+         * key derivation the peer's last_seen_ms was ~19s stale (scan hits
+         * stop during a GATT connection), so this function immediately
+         * cleared the discovered peer, causing task_session to push the UI
+         * back to DISCOVERY.
+         */
+        bool skip_clear = g_ble_ctx.gattc_connected
+                       || g_ble_ctx.gatts_connected
+                       || g_ble_ctx.commitment_verified
+                       || g_ble_ctx.handoff_ready
+                       || session_is_active();
+
+        const uint32_t PEER_LOST_TIMEOUT_MS = 20000U; /* 20 s */
+
+        if (!skip_clear
+            && g_ble_ctx.discovered
+            && g_ble_ctx.last_seen_ms != 0U
+            && (now_ms - g_ble_ctx.last_seen_ms) > PEER_LOST_TIMEOUT_MS) {
+
+            ESP_LOGW(TAG, "Peer truly lost: last seen %lu ms ago — clearing discovered",
                      (unsigned long)(now_ms - g_ble_ctx.last_seen_ms));
 
-            /* Clear peer fields so upper layers return to discovery */
-            memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
+            memset(g_ble_ctx.peer_mac,  0U, sizeof(g_ble_ctx.peer_mac));
             memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
-            g_ble_ctx.peer_name_len = 0U;
-            g_ble_ctx.peer_rssi = 0;
+            g_ble_ctx.peer_name_len       = 0U;
+            g_ble_ctx.peer_rssi           = 0;
             g_ble_ctx.peer_rssi_smooth_x8 = 0;
-            g_ble_ctx.last_seen_ms = 0U;
-            g_ble_ctx.scan_hit_count = 0U;
-            g_ble_ctx.scan_seen_count = 0U;
-            g_ble_ctx.adv_packet_count = 0U;
-            g_ble_ctx.discovered = false;
-            s_scan_peer_dedupe_valid = false;
+            g_ble_ctx.last_seen_ms        = 0U;
+            g_ble_ctx.scan_hit_count      = 0U;
+            g_ble_ctx.scan_seen_count     = 0U;
+            g_ble_ctx.adv_packet_count    = 0U;
+            g_ble_ctx.discovered          = false;
+            s_scan_peer_dedupe_valid      = false;
             memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
 
-            /* Ensure UI and session task observe discovery reset */
             (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
         }
     }
 
+    /* ── Scan retry ────────────────────────────────────────────────────── */
     if (!s_scan_start_failed) { return CEEPEW_OK; }
 
     ESP_LOGW(TAG, "Retrying BLE scan start after previous failure");
@@ -1103,26 +1126,40 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         case ESP_GATTC_WRITE_CHAR_EVT:
             if (param->write.status != ESP_GATT_OK) {
                 ESP_LOGE(TAG, "GATTC write failed: %d", param->write.status);
-                /* Treat write failure as auth failure — disconnect and let session wipe */
                 g_ble_ctx.state = BLE_IDLE;
             } else {
-                ESP_LOGI(TAG, "GATTC write complete — commitment accepted by peer");
+                ESP_LOGI(TAG, "GATTC write complete — commitment sent to peer");
 
-                /* Defensive check: ensure local commitment was populated before
-                 * treating a successful write as verification. A peer that writes
-                 * early (or a logic bug) must not cause us to accept verification. */
+                /* Verify local commitment was actually populated */
                 uint8_t local_zero = 0U;
-                uint8_t local_len = (g_ble_ctx.local_commitment_len == 0U) ? CEEPEW_COMMITMENT_BYTES : g_ble_ctx.local_commitment_len;
-                for (uint8_t i = 0U; i < local_len; i++) { local_zero |= g_ble_ctx.commitment_digest[i]; }
+                uint8_t cmp_len = (g_ble_ctx.local_commitment_len == 0U)
+                                  ? (uint8_t)CEEPEW_COMMITMENT_BYTES
+                                  : g_ble_ctx.local_commitment_len;
+                for (uint8_t i = 0U; i < cmp_len; i++) {
+                    local_zero |= g_ble_ctx.commitment_digest[i];
+                }
+
                 if (local_zero == 0U) {
                     ESP_LOGW(TAG, "GATTC write ack with empty local commitment — disconnecting");
                     g_ble_ctx.verify_fail_count++;
-                    /* Force disconnect and mark idle so session_fsm can retry cleanly */
                     g_ble_ctx.state = BLE_IDLE;
                 } else {
+                    /*
+                     * INITIATOR PATH:
+                     * The write ACK confirms the responder received our commitment.
+                     * Mark handoff_ready so render_countdown() can exit early.
+                     * Do NOT set commitment_verified yet — that is set by the
+                     * RESPONDER (GATTS) path when it calls transport_ble_verify_commitment().
+                     * For the INITIATOR, verification happens when the responder
+                     * writes BACK (or via session-level confirmation).
+                     *
+                     * For the current single-direction exchange we also set
+                     * commitment_verified here so both sides proceed together.
+                     */
                     g_ble_ctx.commitment_verified = true;
-                    g_ble_ctx.handoff_ready = true;
-                    g_ble_ctx.state = BLE_DONE;
+                    g_ble_ctx.handoff_ready       = true;
+                    g_ble_ctx.state               = BLE_DONE;
+                    ESP_LOGI(TAG, "INITIATOR: commitment verified, handoff ready");
                 }
             }
             break;

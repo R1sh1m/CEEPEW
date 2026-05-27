@@ -258,6 +258,18 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             (void)transport_ble_disconnect();
             s_ble_commitment_exchanged = false;
             ESP_LOGI(TAG, "Session key derived — pairing complete");
+            /* Notify the UI task that the session is now active so it can
+            * immediately transition out of the countdown/discovery screens.
+            * This is the reliable signal for BOTH devices (initiator and responder)
+            * to enter the secure-chat flow simultaneously.                          */
+            if (g_ui_event_queue != NULL) {
+                UIEvent_t established_event;
+                memset(&established_event, 0U, sizeof(established_event));
+                established_event.type = UI_EVENT_SESSION_ESTABLISHED;
+                /* Non-blocking: if queue is full, the UI will catch it via session_is_active() */
+                (void)xQueueSend(g_ui_event_queue, &established_event, 0U);
+                ESP_LOGI("task_session", "UI_EVENT_SESSION_ESTABLISHED enqueued");
+            }
         }
 
         return CEEPEW_OK;
@@ -350,22 +362,39 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
     {
         uint8_t phase = session_get_phase();
         bool active = session_is_active();
-        UIState_t ui_state = g_ui_ctx.current_state;
-        RgbPattern_t pattern = task_session_map_pattern(ui_state, active);
         BleState_t ble_state = transport_ble_get_state();
         uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
         bool discovered = g_ble_ctx.discovered;
         uint8_t ble_hits = g_ble_ctx.scan_hit_count;
         int8_t ble_rssi = g_ble_ctx.peer_rssi;
-        bool scan_active = (ble_state == BLE_SCANNING ||
-                            ble_state == BLE_ADVERTISING_AND_SCANNING);
+        bool scan_active = (ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING);
+
+        /* Phase 3 (ACTIVE) — once the session is live, nudge any pre-chat UI
+         * into the secure-chat derivation path without disturbing later states. */
+        if (phase == 3U && active) {
+            UIState_t current = g_ui_ctx.current_state;
+            bool pre_chat = (current == UI_STATE_DISCOVERY   ||
+                             current == UI_STATE_COUNTDOWN   ||
+                             current == UI_STATE_CODE_ENTRY  ||
+                             current == UI_STATE_CONFIRM     ||
+                             current == UI_STATE_BOOT);
+
+            if (pre_chat) {
+                ESP_LOGI(TAG, "sync: session active but UI on %u — forcing KEYDER",
+                         (unsigned)current);
+                (void)ui_manager_transition_to(UI_STATE_KEYDER);
+                g_ui_ctx.transition_ready = true;
+            }
+        }
+
+        UIState_t ui_state = g_ui_ctx.current_state;
+        RgbPattern_t pattern = task_session_map_pattern(ui_state, active);
 
         /* Track discovery scan start time so we can enforce a safe timeout */
         if (scan_active) {
             if (s_ble_scan_start_ms == 0ULL) { s_ble_scan_start_ms = now_ms; }
-        } else {
-            s_ble_scan_start_ms = 0ULL;
         }
+        else { s_ble_scan_start_ms = 0ULL; }
 
         bool changed = (!s_visual_state_ready ||
                         phase != s_last_session_phase ||
