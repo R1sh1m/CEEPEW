@@ -641,10 +641,47 @@ bool transport_ble_handoff_ready(void)
     return g_ble_ctx.handoff_ready && g_ble_ctx.commitment_verified;
 }
 
+static CeePewErr_t transport_ble_send_ready_signal(void)
+{
+#ifdef CONFIG_BT_ENABLED
+    if (!g_ble_ctx.gattc_connected || g_ble_ctx.gattc_char_handle == 0U) {
+        return CEEPEW_ERR_BUSY;
+    }
+
+    uint8_t val = 0x01U;
+    esp_err_t err = esp_ble_gattc_write_char(
+        g_ble_ctx.gattc_if,
+        g_ble_ctx.conn_id,
+        g_ble_ctx.gattc_char_handle,
+        1U,
+        &val,
+        ESP_GATT_WRITE_TYPE_RSP,
+        ESP_GATT_AUTH_REQ_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to send ready signal (gattc_write_char): %d", err);
+        return CEEPEW_ERR_HW;
+    }
+    ESP_LOGI(TAG, "Sent READY signal to peer");
+    return CEEPEW_OK;
+#else
+    /* BLE disabled: simulate immediate success */
+    (void)g_ble_ctx;
+    return CEEPEW_OK;
+#endif
+}
+
 void transport_ble_set_ready_for_chat(void)
 {
     g_ble_ctx.ready_for_chat = true;
     ESP_LOGI(TAG, "Local ready_for_chat set to true");
+
+    /* Send application-level READY signal to peer if possible */
+#ifdef CONFIG_BT_ENABLED
+    CeePewErr_t err = transport_ble_send_ready_signal();
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "Could not send ready signal: %d", (int)err);
+    }
+#endif
 }
 
 bool transport_ble_peer_ready_for_chat(void)
@@ -1187,6 +1224,9 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                     g_ble_ctx.handoff_ready       = true;
                     g_ble_ctx.state               = BLE_DONE;
                     ESP_LOGI(TAG, "INITIATOR: commitment verified, handoff ready");
+
+                    /* Signal local readiness and attempt to notify peer */
+                    transport_ble_set_ready_for_chat();
                 }
             }
             break;
@@ -1314,17 +1354,23 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     ESP_GATT_OK,
                     NULL);
             }
-            if (!param->write.is_prep &&
-                param->write.handle == g_ble_ctx.gatts_char_handle &&
-                (param->write.len == CEEPEW_COMMITMENT_BYTES || param->write.len == CEEPEW_COMMITMENT_LEGACY_BYTES)) {
-                CeePewErr_t verify_err = transport_ble_verify_commitment(param->write.value, (uint8_t)param->write.len);
-                if (verify_err != CEEPEW_OK) {
-                    ESP_LOGW(TAG, "transport_ble_verify_commitment failed: %d", (int)verify_err);
-                    /* Show a distinct UI state indicating the remote code differs */
-                    (void)ui_manager_transition_to(UI_STATE_CODE_DIFFERENT);
-                    /* Reset BLE pairing state and disconnect so local device returns to scanning */
-                    (void)transport_ble_disconnect();
-                    (void)transport_ble_restart_discovery_session();
+            if (!param->write.is_prep && param->write.handle == g_ble_ctx.gatts_char_handle) {
+                if (param->write.len == CEEPEW_COMMITMENT_BYTES || param->write.len == CEEPEW_COMMITMENT_LEGACY_BYTES) {
+                    CeePewErr_t verify_err = transport_ble_verify_commitment(param->write.value, (uint8_t)param->write.len);
+                    if (verify_err != CEEPEW_OK) {
+                        ESP_LOGW(TAG, "transport_ble_verify_commitment failed: %d", (int)verify_err);
+                        /* Show a distinct UI state indicating the remote code differs */
+                        (void)ui_manager_transition_to(UI_STATE_CODE_DIFFERENT);
+                        /* Reset BLE pairing state and disconnect so local device returns to scanning */
+                        (void)transport_ble_disconnect();
+                        (void)transport_ble_restart_discovery_session();
+                    }
+                } else if (param->write.len == 1U && param->write.value[0] == 0x01U) {
+                    /* Peer signalled READY for chat; record timestamp and flag */
+                    g_ble_ctx.peer_ready_for_chat = true;
+                    g_ble_ctx.peer_ready_timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                    ESP_LOGI(TAG, "GATTS: peer signalled READY (timestamp=%lu)", (unsigned long)g_ble_ctx.peer_ready_timestamp_ms);
+                    /* If both ready, UI may proceed; UI thread polls transport_ble_both_ready_for_chat() */
                 }
             }
             break;
