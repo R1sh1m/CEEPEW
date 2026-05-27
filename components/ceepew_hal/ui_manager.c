@@ -4,6 +4,7 @@
 
 #include "ui_manager.h"
 #include "hal_ui.h"
+#include "layout.h"
 #include "../transport/transport_ble.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
@@ -50,7 +51,7 @@ CeePewErr_t ui_manager_init(void){
     g_ui_ctx.current_state = UI_STATE_BOOT;
     g_ui_ctx.next_state = UI_STATE_BOOT;
     g_ui_ctx.anim.frame_count = 0U;
-    g_ui_ctx.anim.frame_rate_ms = 50U;  /* 20 FPS */
+    g_ui_ctx.anim.frame_rate_ms = CEEPEW_UI_LOOP_DELAY_MS;  /* align with UI loop */
     g_ui_ctx.anim.active = true;
     g_ui_ctx.last_draw_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
     g_ui_ctx.user_input = 0U;
@@ -59,6 +60,10 @@ CeePewErr_t ui_manager_init(void){
     g_ui_ctx.transition_ready = false;
     g_ui_ctx.code_entry_start_ms = 0U;
     s_ui_manager_initialised = true;
+
+    CeePewErr_t err = layout_validate_state_regions();
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+
     return CEEPEW_OK;
 }
 
@@ -915,7 +920,7 @@ static CeePewErr_t ui_restart_discovery_from_pairing(void)
         return err;
     }
 
-    err = session_restart_discovery(local_device_id);
+    err = session_phase1_init(local_device_id);
     if (err != CEEPEW_OK) {
         return err;
     }
@@ -1886,7 +1891,7 @@ static CeePewErr_t render_code_incorrect(void)
 /* Helper: render code different screen — subtle variant */
 static CeePewErr_t render_code_different(void)
 {
-    hal_ui_clear();
+    hal_ui_clear();     
     uint32_t f = g_ui_ctx.anim.frame_count;
 
     hal_ui_text(12U, 8U, "CODE DIFFER", HAL_UI_WHITE);
@@ -2026,11 +2031,9 @@ static CeePewErr_t render_chat_menu(void)
         HalUIRect_t box = { .x = 8U, .y = y, .w = 112U, .h = 14U };
         if (i == sel) {
             hal_ui_rect_fill(&box, HAL_UI_WHITE);
-            /* Text appears as BLACK on white fill — use inverted draw.
-             * Since we can't invert on monochrome SSD1306 easily, just
-             * draw outline instead and let the fill show selection.      */
+            /* Text appears as BLACK on white fill — draw by inverting pixels */
             hal_ui_rect(&box, HAL_UI_WHITE);
-            hal_ui_text(14U, (uint8_t)(y + 4U), OPTS[i], HAL_UI_BLACK);
+            (void)hal_ui_text_invert(14U, (uint8_t)(y + 4U), OPTS[i]);
         } else {
             hal_ui_rect(&box, HAL_UI_WHITE);
             hal_ui_text(14U, (uint8_t)(y + 4U), OPTS[i], HAL_UI_WHITE);

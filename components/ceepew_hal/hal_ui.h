@@ -78,6 +78,12 @@ CeePewErr_t hal_ui_char(uint8_t x, uint8_t y, char c, HalUIColor_t color);
 /* Measure text width in pixels (6 pixels per character) */
 uint16_t hal_ui_text_width(const char *str);
 
+/* Fit text into pixel width, safe output buffer. If truncated, appends '...' when space allows. */
+CeePewErr_t hal_ui_fit_text(const char *src, uint8_t max_px_width, char *out, uint8_t out_size);
+
+/* Draw text by inverting pixels over existing background; useful for black-on-white text. */
+CeePewErr_t hal_ui_text_invert(uint8_t x, uint8_t y, const char *str);
+
 /* Get current framebuffer pointer (for advanced drawing) */
 uint8_t *hal_ui_framebuffer(void);
 

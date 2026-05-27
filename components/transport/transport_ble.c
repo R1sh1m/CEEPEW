@@ -114,7 +114,7 @@ static CeePewErr_t transport_ble_restart_discovery_session(void)
         return err;
     }
 
-    err = session_restart_discovery(local_device_id);
+    err = session_phase1_init(local_device_id);
     if (err != CEEPEW_OK) {
         ESP_LOGW(TAG, "session_restart_discovery failed during pairing reset: %d", (int)err);
         return err;

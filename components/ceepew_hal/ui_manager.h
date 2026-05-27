@@ -36,6 +36,7 @@ typedef enum {
     UI_STATE_NONCE_EXHAUSTED = 14U, /* Phase 4: Nonce limit exhausted */
     UI_STATE_INFO = 15U,           /* DIAG-only: Info / diagnostics display */
     UI_STATE_ERROR = 16U,         /* Phase 4: Generic error display */
+    UI_STATE_PAIRING = 17U,       /* Sprint 9: Pairing countdown state (legacy name) */
 } UIState_t;
 
 /* Animation frame context */
@@ -63,6 +64,7 @@ typedef struct {
     uint8_t       code_selected; /* index 0-3 */
     uint32_t      code_entry_start_ms; /* ms timestamp when code entry became visible */
     uint32_t      countdown_start_ms; /* ms timestamp when countdown began */
+    uint32_t      pairing_start_ms; /* ms timestamp when pairing began */
     /* Sprint-12 cryptogram context */
     uint8_t       commitment[CEEPEW_COMMITMENT_BYTES];        /* Local session commitment (SHA256 truncated) */
     uint8_t       peer_commitment[CEEPEW_COMMITMENT_BYTES];   /* Peer commitment from BLE */
