@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_system.h"   /* esp_get_free_heap_size() */
 #include <string.h>
 #include <stdio.h>
 
@@ -29,7 +30,7 @@ __attribute__((weak)) BleContext_t g_ble_ctx = {0};
 /* Forward declarations of session FSM accessors for Sprint 10 integration */
 extern uint64_t session_get_id(void);
 extern uint64_t session_get_nonce_counter(void);
-extern CeePewErr_t session_get_commitment(uint8_t commitment[8]);
+extern CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
 extern CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16]);
 
 UIContext_t g_ui_ctx = {0};
@@ -864,8 +865,8 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
     uint8_t reverse = (uint8_t)((sweep_pos + 16U - display_idx) % 16U);
     uint8_t dist = (forward < reverse) ? forward : reverse;
 
-    /* When sweep aligns (dist == 0) show an expanded visual pulse */
-    if (dist == 0U) {
+    /* When sweep passes near blip (dist <= 1) show an expanded visual pulse */
+    if (dist <= 1U) {
         HalUIRect_t blip = {
             .x = (uint8_t)((bx > 1U) ? (bx - 1U) : 0U),
             .y = (uint8_t)((by > 1U) ? (by - 1U) : 0U),
@@ -877,14 +878,6 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
         if (age_ms < 800U) {
             draw_circle((int16_t)bx, (int16_t)by, 5U);
         }
-    } else if (dist == 1U) {
-        HalUIRect_t blip = {
-            .x = (uint8_t)((bx > 0U) ? (bx - 1U) : 0U),
-            .y = (uint8_t)((by > 0U) ? (by - 1U) : 0U),
-            .w = 4U,
-            .h = 4U
-        };
-        hal_ui_rect_fill(&blip, HAL_UI_WHITE);
     } else if (dist <= 3U) {
         /* Keep a slightly larger base for near-alignment so the blip remains
          * perceptible even when the sweep is nearby. */
@@ -930,13 +923,13 @@ static CeePewErr_t render_discovery(void)
     #define RPANEL_WIDTH    73U     /* 128 - 55 = 73px available (expanded from 67) */
     #define LINE_HEIGHT     9U      /* 7px glyph + 2px gap */
     #define Y_TITLE         1U      /* Rotating title row */
-    #define Y_PEER_ID       10U     /* Peer info section */
-    #define Y_RSSI_BARS     18U     /* RSSI signal bars */
-    #define Y_RSSI_DBM      27U     /* dBm value — moved down 3px for spacing */
-    #define Y_PAIR_BTN      36U     /* PAIR button — moved down 3px for spacing */
-    #define Y_HINT          44U     /* Pairing hint text — NEW dedicated line */
-    #define Y_BLE_STATE     48U     /* BLE: XXXX state (only shown when NO peer) */
-    #define Y_STATUS        56U     /* Status line */
+    #define Y_PEER_ID       10U     /* Peer info section (gap: 9px) */
+    #define Y_RSSI_BARS     18U     /* RSSI signal bars (gap: 8px, draws 10px tall) */
+    #define Y_RSSI_DBM      27U     /* dBm value (gap: 9px after bars bottom) */
+    #define Y_PAIR_BTN      36U     /* PAIR button (gap: 9px) */
+    #define Y_HINT          45U     /* Pairing hint text (gap: 9px) — moved from 44 */
+    #define Y_BLE_STATE     54U     /* BLE: XXXX state (gap: 9px) — moved from 48, hidden when peer found */
+    #define Y_STATUS        63U     /* Status line (gap: 9px) — moved from 56 */
 
     /* ── Left panel: Radar ── */
     draw_radar_static();
@@ -1014,8 +1007,8 @@ static CeePewErr_t render_discovery(void)
            case BLE_IDLE:        ble_state = "BLE: IDLE"; break;
            case BLE_ADVERTISING: ble_state = "BLE: ADV";  break;
            case BLE_SCANNING:    ble_state = "BLE: SCAN"; break;
-           case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: ADV+SCN"; break;
-           case BLE_CONNECTED:   ble_state = "BLE: CONN"; break;
+           case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: AS";   break;  /* Shortened from ADV+SCN */
+           case BLE_CONNECTED:   ble_state = "BLE: CON";  break;  /* Shortened from CONN */
            case BLE_PAIRING:     ble_state = "BLE: PAIR"; break;
            case BLE_DONE:        ble_state = "BLE: DONE"; break;
            default:              ble_state = "BLE: ?";    break;
@@ -1682,21 +1675,21 @@ static CeePewErr_t render_chat(void)
 }
 
 /* Sprint 12: Helper function to display cryptogram with two hex rows.
- * Displays 8-byte commitment as 16 hex digits (8×2 layout).
+ * Displays 16-byte commitment as 32 hex digits (16×2 layout).
  * Centered on display in monospace font.
  * No dynamic allocation; static hex conversion buffer.
  * Two CEEPEW_ASSERTs for bounds checking.
  */
-CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[8])
+CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
 
-    /* Convert 8 bytes to 16 hex characters */
-    char hex_str[17];
-    CEEPEW_ASSERT(sizeof(hex_str) >= 17U, CEEPEW_ERR_BOUNDS);
+    /* Convert 16 bytes to 32 hex characters */
+    char hex_str[33];
+    CEEPEW_ASSERT(sizeof(hex_str) >= 33U, CEEPEW_ERR_BOUNDS);
 
-    /* Format as 16 hex digits */
-    for (uint8_t i = 0U; i < 8U; i++) {
+    /* Format as 32 hex digits */
+    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
         uint8_t byte_val = commitment[i];
         uint8_t nibble_h = (byte_val >> 4U) & 0x0FU;
         uint8_t nibble_l = byte_val & 0x0FU;
@@ -1707,21 +1700,21 @@ CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[8])
         hex_str[i * 2U] = hex_h;
         hex_str[i * 2U + 1U] = hex_l;
     }
-    hex_str[16] = '\0';
+    hex_str[32] = '\0';
 
     /* Display title */
     hal_ui_text(20U, 8U, "Commitment", HAL_UI_WHITE);
 
-    /* Display first 8 hex chars on line 1 (centered) */
-    char line1[9];
-    memcpy(line1, hex_str, 8U);
-    line1[8] = '\0';
+    /* Display first 16 hex chars on line 1 (centered) */
+    char line1[17];
+    memcpy(line1, hex_str, 16U);
+    line1[16] = '\0';
     hal_ui_text(20U, 22U, line1, HAL_UI_WHITE);
 
-    /* Display second 8 hex chars on line 2 (centered) */
-    char line2[9];
-    memcpy(line2, hex_str + 8U, 8U);
-    line2[8] = '\0';
+    /* Display second 16 hex chars on line 2 (centered) */
+    char line2[17];
+    memcpy(line2, hex_str + 16U, 16U);
+    line2[16] = '\0';
     hal_ui_text(20U, 32U, line2, HAL_UI_WHITE);
 
     return CEEPEW_OK;
@@ -1838,19 +1831,19 @@ static CeePewErr_t render_cryptogram(void)
     }
 
     /* Build final hex string */
-    char final_hex[17U];
-    for (uint8_t i = 0U; i < 8U; i++) {
+    char final_hex[33U];
+    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
         uint8_t b = g_ui_ctx.commitment[i];
         uint8_t h = (b >> 4U) & 0x0FU;
         uint8_t l = b & 0x0FU;
         final_hex[i * 2U]      = (h < 10U) ? (char)('0' + h) : (char)('A' + h - 10U);
         final_hex[i * 2U + 1U] = (l < 10U) ? (char)('0' + l) : (char)('A' + l - 10U);
     }
-    final_hex[16U] = '\0';
+    final_hex[32U] = '\0';
 
     /* Roll-up animation: characters count up for first 32 frames */
-    char disp_hex[17U];
-    for (uint8_t c = 0U; c < 16U; c++) {
+    char disp_hex[33U];
+    for (uint8_t c = 0U; c < 32U; c++) {
         if (f < 32U) {
             /* Roll: start from '0', reach final in 32 frames, staggered by char */
             uint32_t char_f = (f > (uint32_t)c) ? (f - (uint32_t)c) : 0U;
@@ -1865,30 +1858,30 @@ static CeePewErr_t render_cryptogram(void)
             disp_hex[c] = final_hex[c];
         }
     }
-    disp_hex[16U] = '\0';
+    disp_hex[32U] = '\0';
 
     /* Title */
     hal_ui_text(20U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
 
-    /* Two rows of 8 hex chars — centred */
-    char line1[9U]; (void)memcpy(line1, disp_hex, 8U); line1[8U] = '\0';
-    char line2[9U]; (void)memcpy(line2, disp_hex + 8U, 8U); line2[8U] = '\0';
+    /* Two rows of 16 hex chars — centred */
+    char line1[17U]; (void)memcpy(line1, disp_hex, 16U); line1[16U] = '\0';
+    char line2[17U]; (void)memcpy(line2, disp_hex + 16U, 16U); line2[16U] = '\0';
 
     /* Decorative bracket around each row */
-    hal_ui_text(10U, 16U, "[", HAL_UI_WHITE);
-    hal_ui_text(18U, 16U, line1, HAL_UI_WHITE);
-    hal_ui_text(66U, 16U, "]", HAL_UI_WHITE);
+    hal_ui_text(4U, 16U, "[", HAL_UI_WHITE);
+    hal_ui_text(12U, 16U, line1, HAL_UI_WHITE);
+    hal_ui_text(100U, 16U, "]", HAL_UI_WHITE);
 
-    hal_ui_text(10U, 26U, "[", HAL_UI_WHITE);
-    hal_ui_text(18U, 26U, line2, HAL_UI_WHITE);
-    hal_ui_text(66U, 26U, "]", HAL_UI_WHITE);
+    hal_ui_text(4U, 26U, "[", HAL_UI_WHITE);
+    hal_ui_text(12U, 26U, line2, HAL_UI_WHITE);
+    hal_ui_text(100U, 26U, "]", HAL_UI_WHITE);
 
     /* Determine match status */
     uint8_t status = 0U;
     if (g_ble_ctx.commitment_verified) {
         uint8_t match = 1U;
-        for (uint8_t i = 0U; i < 8U; i++) {
+        for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
             if (g_ui_ctx.commitment[i] != g_ble_ctx.commitment_digest[i]) {
                 match = 0U; break;
             }
@@ -2153,8 +2146,8 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.error_start_ms = 0U;
         } else if (g_ui_ctx.current_state == UI_STATE_CRYPTOGRAM) {
             /* Initialize cryptogram confirmation context */
-            memset(g_ui_ctx.commitment, 0U, 8U);
-            memset(g_ui_ctx.peer_commitment, 0U, 8U);
+            memset(g_ui_ctx.commitment, 0U, CEEPEW_COMMITMENT_BYTES);
+            memset(g_ui_ctx.peer_commitment, 0U, CEEPEW_COMMITMENT_BYTES);
             /* FIX: seed peer commitment from BLE context so renderer can compare */
             memcpy(g_ui_ctx.peer_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
             g_ui_ctx.commitment_verified   = g_ble_ctx.commitment_verified;

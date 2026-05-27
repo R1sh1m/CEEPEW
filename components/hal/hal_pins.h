@@ -5,8 +5,8 @@
  * NO other file in the project may contain raw GPIO numbers.
  *
  * Wiring is corrected to the spec:
- *   OLED SDA → GPIO21
- *   OLED SCL → GPIO22
+ *   OLED SDA → GPIO26 (was 21, changed to fix I2C conflicts)
+ *   OLED SCL → GPIO27 (was 22, changed to fix I2C conflicts)
  *   POT      → GPIO33
  *   BUTTON   → GPIO19
  *   DIAG SW  → GPIO5
@@ -25,8 +25,8 @@
 #include "ceepew_assert.h"
 
 /* ── OLED Display (SSD1306, I2C) ─────────────────────────────────── */
-#define CEEPEW_PIN_I2C_SDA          GPIO_NUM_21
-#define CEEPEW_PIN_I2C_SCL          GPIO_NUM_22
+#define CEEPEW_PIN_I2C_SDA          GPIO_NUM_26
+#define CEEPEW_PIN_I2C_SCL          GPIO_NUM_27
 #define CEEPEW_I2C_PORT             ((i2c_port_t)0)
 #define CEEPEW_I2C_FREQ_HZ          400000U
 #define CEEPEW_OLED_I2C_ADDR        0x3CU

@@ -261,19 +261,19 @@ uint64_t session_get_nonce_counter(void);
 /* Get session ID (derived from peer MAC + timestamp + self MAC) */
 uint64_t session_get_id(void);
 
-/* Get 8-byte cryptographic commitment digest of session code (SHA256 truncated).
+/* Get 16-byte cryptographic commitment digest of session code (SHA256 truncated).
  * This is used during pairing to cryptographically verify both devices have
  * the same session code. Available in Phase 2 and Phase 3.
  *
  * PARAMETERS:
- *   commitment: Output buffer for 8-byte commitment digest (not NULL)
+ *   commitment: Output buffer for 16-byte commitment digest (not NULL)
  *
  * RETURNS:
  *   CEEPEW_OK — Commitment populated
  *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
  *   CEEPEW_ERR_NULL_PTR — commitment is NULL
  */
-CeePewErr_t session_get_commitment(uint8_t commitment[8]);
+CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
 
 #ifdef __cplusplus
 }

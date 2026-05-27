@@ -596,6 +596,7 @@ CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t 
     }
 
     g_ble_ctx.commitment_verified = true;
+    g_ble_ctx.ready_for_chat = true;        /* Signal local readiness */
     g_ble_ctx.handoff_ready = true;
     g_ble_ctx.state = BLE_DONE;
 

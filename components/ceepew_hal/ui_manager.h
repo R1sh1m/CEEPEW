@@ -64,8 +64,8 @@ typedef struct {
     uint32_t      code_entry_start_ms; /* ms timestamp when code entry became visible */
     uint32_t      countdown_start_ms; /* ms timestamp when countdown began */
     /* Sprint-12 cryptogram context */
-    uint8_t       commitment[8];        /* Local session commitment (SHA256 truncated) */
-    uint8_t       peer_commitment[8];   /* Peer commitment from BLE */
+    uint8_t       commitment[CEEPEW_COMMITMENT_BYTES];        /* Local session commitment (SHA256 truncated) */
+    uint8_t       peer_commitment[CEEPEW_COMMITMENT_BYTES];   /* Peer commitment from BLE */
     bool          commitment_verified;  /* true = commitments match */
     uint32_t      crypto_confirm_start_ms; /* ms timestamp when confirmation started */
     /* Phase 4: Fingerprint confirmation and error states */
@@ -132,13 +132,13 @@ CeePewErr_t ui_chat_show_pool(uint8_t char_budget);
  */
 CeePewErr_t ui_chat_show_compose(uint8_t pot_value, uint8_t selected_idx);
 
-/* Sprint 12: Cryptogram display with two 16-character hex rows.
- * Displays 8-byte session commitment as hex (session_code SHA256 digest).
+/* Sprint 12: Cryptogram display with four 8-character hex rows (32 hex chars total).
+ * Displays 16-byte session commitment as hex (session_code SHA256 digest).
  * Centered on display in monospace font.
  * No dynamic allocation; static hex conversion buffer.
  * Two CEEPEW_ASSERTs for bounds checking.
  */
-CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[8]);
+CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
 
 /* Sprint 12: Cryptogram status display (match/mismatch/waiting).
  * Shows visual indicator (checkmark or X) and status text.
