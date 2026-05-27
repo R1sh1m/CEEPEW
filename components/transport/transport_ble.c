@@ -105,6 +105,31 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                                 esp_ble_gatts_cb_param_t *param);
 #endif
 
+static CeePewErr_t transport_ble_restart_discovery_session(void)
+{
+    uint8_t local_device_id[CEEPEW_DEVICE_ID_BYTES] = {0U};
+    CeePewErr_t err = session_get_device_id(local_device_id);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "session_get_device_id failed during pairing reset: %d", (int)err);
+        return err;
+    }
+
+    err = session_restart_discovery(local_device_id);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "session_restart_discovery failed during pairing reset: %d", (int)err);
+        return err;
+    }
+
+    /* Ensure BLE stack is in a clean state: disconnect and re-arm advertising/scan
+     * so discovery can proceed without requiring a reboot. Ignore errors; caller logs */
+    (void)transport_ble_disconnect();
+    (void)transport_ble_start_advertising();
+    (void)transport_ble_start_scan();
+    ESP_LOGI(TAG, "transport_ble: discovery restarted (adv + scan requested)");
+
+    return CEEPEW_OK;
+}
+
 
 /* Design note: The BLE transport uses Bluedroid (ESP-IDF's built-in BLE stack).
    Phase 1 uses advertisements for discovery. Phase 2 uses GATT for commitment
@@ -598,6 +623,8 @@ CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t 
         /* Defensive: record failure and log for diagnostics. Do NOT reveal details. */
         g_ble_ctx.verify_fail_count++;
         ESP_LOGW(TAG, "commitment mismatch — verify_fail_count=%u", (unsigned)g_ble_ctx.verify_fail_count);
+        (void)transport_ble_disconnect();
+        (void)transport_ble_restart_discovery_session();
         return CEEPEW_ERR_AUTH_FAIL;  /* Mismatch */
     }
 
@@ -1274,6 +1301,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 s_scan_peer_dedupe_valid = false;
                 memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
                 (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+                (void)transport_ble_restart_discovery_session();
             }
             break;
 
@@ -1296,6 +1324,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     (void)ui_manager_transition_to(UI_STATE_CODE_DIFFERENT);
                     /* Reset BLE pairing state and disconnect so local device returns to scanning */
                     (void)transport_ble_disconnect();
+                    (void)transport_ble_restart_discovery_session();
                 }
             }
             break;

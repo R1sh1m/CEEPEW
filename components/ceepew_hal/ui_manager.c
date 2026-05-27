@@ -42,6 +42,7 @@ static CeePewErr_t render_error(void);
 static CeePewErr_t render_code_incorrect(void);
 static CeePewErr_t render_info(void);
 static CeePewErr_t render_code_different(void);
+static CeePewErr_t ui_restart_discovery_from_pairing(void);
 
 CeePewErr_t ui_manager_init(void){
     CEEPEW_ASSERT(!s_ui_manager_initialised, CEEPEW_ERR_BUSY);
@@ -405,6 +406,72 @@ static void ui_draw_text_wrapped(uint8_t x, uint8_t y, const char *str,
     }
 }
 
+static uint8_t ui_map_pot_to_index(uint8_t pot, uint8_t option_count)
+{
+if (option_count == 0U) {
+    return 0U;
+}
+uint8_t idx = (uint8_t)(((uint16_t)pot * option_count) / 256U);
+if (idx >= option_count) {
+    idx = (uint8_t)(option_count - 1U);
+}
+return idx;
+}
+
+static void ui_draw_hex_rows(const uint8_t *bytes, uint8_t byte_count, uint8_t x, uint8_t y)
+{
+    if (bytes == NULL || byte_count == 0U) {
+        return;
+    }
+
+    /* Dynamically choose bytes per row so the hex output never overruns the OLED.
+     * Each character consumes 6px (5px glyph + 1px gap). Two hex chars per byte.
+     * Line format: '[' + (N*2 chars) + ']' => total_chars = 2 + N*2 */
+    uint8_t available_px = (x >= 128U) ? 0U : (uint8_t)(128U - x);
+    if (available_px < 6U) { return; } /* not enough room for any char */
+    uint8_t max_chars = (uint8_t)(available_px / 6U);
+    if (max_chars < 3U) { return; } /* need at least [] + 1 byte */
+
+    uint8_t bytes_per_row = (uint8_t)((max_chars - 2U) / 2U);
+    if (bytes_per_row == 0U) { bytes_per_row = 1U; }
+
+    uint8_t row_count = (uint8_t)((byte_count + bytes_per_row - 1U) / bytes_per_row);
+    for (uint8_t row = 0U; row < row_count; row++) {
+        char line[2U + (bytes_per_row * 2U) + 1U];
+        uint8_t off = 0U;
+        line[off++] = '[';
+        uint8_t start = (uint8_t)(row * bytes_per_row);
+        uint8_t end = start + bytes_per_row;
+        if (end > byte_count) {
+            end = byte_count;
+        }
+        for (uint8_t i = start; i < end; i++) {
+            uint8_t byte_val = bytes[i];
+            uint8_t hi = (uint8_t)((byte_val >> 4U) & 0x0FU);
+            uint8_t lo = (uint8_t)(byte_val & 0x0FU);
+            line[off++] = (hi < 10U) ? (char)('0' + hi) : (char)('A' + hi - 10U);
+            line[off++] = (lo < 10U) ? (char)('0' + lo) : (char)('A' + lo - 10U);
+        }
+        line[off++] = ']';
+        line[off] = '\0';
+        hal_ui_text(x, (uint8_t)(y + row * 8U), line, HAL_UI_WHITE);
+    }
+}
+
+static void diag_draw_header(const char *title)
+{
+if (title == NULL) {
+    return;
+}
+
+hal_ui_text(0U, 0U, title, HAL_UI_WHITE);
+
+HalUIRect_t badge = { .x = 88U, .y = 0U, .w = 40U, .h = 8U };
+hal_ui_rect(&badge, HAL_UI_WHITE);
+hal_ui_text(80U, 0U, "[DIAG]", HAL_UI_WHITE);
+draw_hline(0U, 9U, 128U);
+}
+
 /* Render rotating/scrolling text that moves left continuously.
  * Used for long labels like "DISCOVERING PEERS" that exceed screen width.
  * Text scrolls at 1 pixel per frame (~50ms per pixel with 50ms frame rate).
@@ -679,7 +746,7 @@ static CeePewErr_t render_boot_anim(void)
     /* ── Phase 3 (f 60–89): Chunky loading bar fills ── */
     if (f >= 60U) {
        /* Bar border (moved up to increase gap below with frame) */
-       HalUIRect_t border = { .x = 14U, .y = 50U, .w = 100U, .h = 9U };
+       HalUIRect_t border = { .x = 14U, .y = 42U, .w = 100U, .h = 9U };
        hal_ui_rect(&border, HAL_UI_WHITE);
 
        /* Chunky fill — 4-px wide segments with 1-px gaps */
@@ -697,7 +764,7 @@ static CeePewErr_t render_boot_anim(void)
        uint8_t pct = (seg_count * 100U) / 12U;
        char pct_str[5U];
        (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-       hal_ui_text(50U, 61U, pct_str, HAL_UI_WHITE);
+       hal_ui_text(50U, 54U, pct_str, HAL_UI_WHITE);
     }
 
     /* ── Phase 4 (f 90–109): Border frame draws in from corners ── */
@@ -788,25 +855,22 @@ static void draw_radar_static(void)
 
 static void draw_sweep_arm(uint8_t pos)
 {
-    /* Trail 4 (faintest, oldest): outer ring only */
+    /* Restore the older, longer-lived sweep tail so the radar reads cleanly. */
     uint8_t t4 = (pos + 12U) % 16U;
     draw_radial_segment(RDR_CX, RDR_CY,
                         SWEEP16[t4].ex, SWEEP16[t4].ey,
                         RDR_R3 - 4U, RDR_R3);
 
-    /* Trail 3: arm to 45% of outer radius */
     uint8_t t3 = (pos + 13U) % 16U;
     draw_radial_segment(RDR_CX, RDR_CY,
                         SWEEP16[t3].ex, SWEEP16[t3].ey,
                         RDR_R2 + 2U, RDR_R3);
 
-    /* Trail 2: arm to 65% */
     uint8_t t2 = (pos + 14U) % 16U;
     draw_radial_segment(RDR_CX, RDR_CY,
                         SWEEP16[t2].ex, SWEEP16[t2].ey,
                         RDR_R1 + 4U, RDR_R3);
 
-    /* Trail 1: arm to 85% */
     uint8_t t1 = (pos + 15U) % 16U;
     draw_radial_segment(RDR_CX, RDR_CY,
                         SWEEP16[t1].ex, SWEEP16[t1].ey,
@@ -832,13 +896,47 @@ static void draw_sweep_arm(uint8_t pos)
     hal_ui_rect_fill(&centre, HAL_UI_WHITE);
 }
 
+static CeePewErr_t ui_restart_discovery_from_pairing(void)
+{
+    CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(g_ui_ctx.current_state == UI_STATE_PAIRING ||
+                  g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+                  g_ui_ctx.current_state == UI_STATE_CODE_ENTRY,
+                  CEEPEW_ERR_PARAM);
+
+    uint8_t local_device_id[CEEPEW_DEVICE_ID_BYTES] = {0U};
+    CeePewErr_t err = transport_ble_disconnect();
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    err = session_get_device_id(local_device_id);
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    err = session_restart_discovery(local_device_id);
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    g_ui_ctx.pairing_start_ms = 0U;
+    g_ui_ctx.countdown_start_ms = 0U;
+    g_ui_ctx.button_press_start_ms = 0U;
+    g_ui_ctx.anim.frame_count = 0U;
+
+    (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+    g_ui_ctx.transition_ready = true;
+    return CEEPEW_OK;
+}
+
 /* Peer blip renderer.
  * The blip becomes more persistent and exhibits a slow, periodic drift in
  * displayed location so transient scan gaps don't make it disappear instantly
  * and to increase visual salience during discovery. */
 static void draw_peer_blip(uint8_t bx, uint8_t by,
                            uint8_t sweep_pos, uint8_t blip_idx,
-                           uint32_t age_ms)
+                           uint8_t pulse_phase, uint32_t age_ms)
 {
     /* Extend lifetime so transient scan gaps do not immediately hide the blip */
     if (age_ms >= 25000U) {
@@ -875,7 +973,7 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
         };
         hal_ui_rect_fill(&blip, HAL_UI_WHITE);
         /* Slight radial highlight for very fresh sightings */
-        if (age_ms < 800U) {
+        if (age_ms < 800U && pulse_phase == 0U) {
             draw_circle((int16_t)bx, (int16_t)by, 5U);
         }
     } else if (dist <= 3U) {
@@ -893,15 +991,19 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
     }
 }
 
-static void draw_rssi_bars(uint8_t x, uint8_t y, uint8_t bars)
+static void draw_rssi_bars(uint8_t x, uint8_t y, uint8_t bars, uint8_t pulse_phase)
 {
+    /* compact layout: 4px spacing, smaller heights to free vertical space */
     for (uint8_t b = 0U; b < 5U; b++) {
-        uint8_t bx  = (uint8_t)(x + b * 6U);
-        uint8_t bh  = (uint8_t)(2U + b * 2U);
-        uint8_t by  = (uint8_t)(y + 10U - bh);
-        HalUIRect_t bar = { .x = bx, .y = by, .w = 5U, .h = bh };
+        uint8_t bx  = (uint8_t)(x + b * 4U);
+        uint8_t bh  = (uint8_t)(1U + b); /* heights 1..5 */
+        uint8_t by  = (uint8_t)(y + 6U - bh);
+        HalUIRect_t bar = { .x = bx, .y = by, .w = 3U, .h = bh };
         if (b < bars) {
             hal_ui_rect_fill(&bar, HAL_UI_WHITE);
+            if (pulse_phase == 0U && b == (bars - 1U) && by > 0U) {
+                draw_pixel((uint8_t)(bx + 1U), (uint8_t)(by - 1U));
+            }
         } else {
             hal_ui_rect(&bar, HAL_UI_WHITE);
         }
@@ -924,17 +1026,18 @@ static CeePewErr_t render_discovery(void)
     #define LINE_HEIGHT     9U      /* 7px glyph + 2px gap */
     #define Y_TITLE         1U      /* Rotating title row */
     #define Y_PEER_ID       10U     /* Peer info section (gap: 9px) */
-    #define Y_RSSI_BARS     18U     /* RSSI signal bars (gap: 8px, draws 10px tall) */
-    #define Y_RSSI_DBM      27U     /* dBm value (gap: 9px after bars bottom) */
-    #define Y_PAIR_BTN      36U     /* PAIR button (gap: 9px) */
-    #define Y_HINT          45U     /* Pairing hint text (gap: 9px) — moved from 44 */
-    #define Y_BLE_STATE     54U     /* BLE: XXXX state (gap: 9px) — moved from 48, hidden when peer found */
-    #define Y_STATUS        63U     /* Status line (gap: 9px) — moved from 56 */
+    #define Y_RSSI_BARS     14U     /* RSSI signal bars (moved up) */
+    #define Y_RSSI_DBM      22U     /* dBm value (closer to bars) */
+    #define Y_PAIR_BTN      34U     /* PAIR button */
+    #define Y_HINT          43U     /* Pairing hint text */
+    #define Y_BLE_STATE     43U     /* BLE: XXXX state */
+    #define Y_STATUS        54U     /* Status line (gap: 9px) — bottom row, can scroll if long */
 
     /* ── Left panel: Radar ── */
     draw_radar_static();
 
     uint8_t sweep_pos = (uint8_t)((now_ms / 150U) % 16U);
+    uint8_t pulse_phase = (uint8_t)((now_ms / 300U) % 4U);
     draw_sweep_arm(sweep_pos);
 
     /* ── Right panel: header + status ── */
@@ -959,7 +1062,7 @@ static CeePewErr_t render_discovery(void)
        if (rssi_smooth > -30) { rssi_smooth = -30; }
 
        uint8_t bars = rssi_to_bars((int8_t)rssi_smooth);
-       draw_rssi_bars(RPANEL_X, Y_RSSI_BARS, bars);
+       draw_rssi_bars(RPANEL_X, Y_RSSI_BARS, bars, pulse_phase);
 
        char rssi_str[10U];
        (void)snprintf(rssi_str, sizeof(rssi_str), "%ddBm", (int)rssi_smooth);
@@ -993,7 +1096,7 @@ static CeePewErr_t render_discovery(void)
        if (bx >= 0 && bx < 52 && by >= 0 && by < 64) {
            uint32_t age_ms = (g_ble_ctx.last_seen_ms == 0U)
                            ? 0U : (now_ms - g_ble_ctx.last_seen_ms);
-           draw_peer_blip((uint8_t)bx, (uint8_t)by, sweep_pos, blip_idx, age_ms);
+           draw_peer_blip((uint8_t)bx, (uint8_t)by, sweep_pos, blip_idx, pulse_phase, age_ms);
        }
     } else {
        /* Peer not yet found: show scanning prompt (synchronized with title above) */
@@ -1025,7 +1128,7 @@ static CeePewErr_t render_discovery(void)
                       (unsigned long)g_ble_ctx.scan_seen_count,
                       (unsigned)g_ble_ctx.scan_hit_count,
                       (unsigned long)(age_ms / 1000U));
-       hal_ui_text(RPANEL_X, Y_STATUS, status_str, HAL_UI_WHITE);
+       ui_draw_rotating_text(RPANEL_X, Y_STATUS, status_str, RPANEL_WIDTH, shared_scroll_px);
     } else {
        /* Scanning: show activity summary */
        if (transport_ble_get_state() == BLE_ADVERTISING ||
@@ -1034,7 +1137,7 @@ static CeePewErr_t render_discovery(void)
            char adv_str[20U];
            (void)snprintf(adv_str, sizeof(adv_str), "SCAN S:%lu",
                           (unsigned long)g_ble_ctx.scan_seen_count);
-           hal_ui_text(RPANEL_X, Y_STATUS, adv_str, HAL_UI_WHITE);
+           ui_draw_rotating_text(RPANEL_X, Y_STATUS, adv_str, RPANEL_WIDTH, shared_scroll_px);
        } else {
            static const char *const SCAN_STATES[4] = { "SCAN", "SCAN.", "SCAN..", "SCAN..." };
            uint8_t dot_idx = (uint8_t)((now_ms / 500U) % 4U);
@@ -1060,11 +1163,10 @@ static CeePewErr_t render_code_entry(void)
     }
     draw_hline(0U, 12U, 128U);
 
-    /* Four digit cells — each 24px wide, 22px tall */
-    /* Cells at x: 4, 30, 56, 82 (centred across 128px) */
-    const uint8_t cell_x[4U] = { 8U, 34U, 60U, 86U };
-    const uint8_t cell_w     = 24U;
-    const uint8_t cell_h     = 28U;
+    /* Four aligned cells spread across the full width. */
+    const uint8_t cell_x[4U] = { 8U, 38U, 68U, 98U };
+    const uint8_t cell_w     = 22U;
+    const uint8_t cell_h     = 22U;
     const uint8_t cell_y     = 18U;
 
     for (uint8_t i = 0U; i < 4U; i++) {
@@ -1073,8 +1175,8 @@ static CeePewErr_t render_code_entry(void)
         if (is_active) {
             /* Active cell: double border blinks at ~4Hz */
             uint8_t blink = (uint8_t)((f / 8U) % 2U);
-            HalUIRect_t outer = { .x = cell_x[i] - 2U, .y = cell_y - 2U,
-                                  .w = cell_w + 4U, .h = cell_h + 4U };
+            HalUIRect_t outer = { .x = (uint8_t)(cell_x[i] - 2U), .y = (uint8_t)(cell_y - 2U),
+                                  .w = (uint8_t)(cell_w + 4U), .h = (uint8_t)(cell_h + 4U) };
             if (blink == 0U) { hal_ui_rect(&outer, HAL_UI_WHITE); }
             HalUIRect_t inner = { .x = cell_x[i], .y = cell_y,
                                   .w = cell_w, .h = cell_h };
@@ -1104,7 +1206,7 @@ static CeePewErr_t render_code_entry(void)
             show_digit = (uint8_t)((f / 6U) % 3U) != 2U; /* 2 frames on, 1 off */
         }
         if (show_digit) {
-            hal_ui_text(cell_x[i] + 9U, cell_y + 10U, digit_str, HAL_UI_WHITE);
+            hal_ui_text((uint8_t)(cell_x[i] + 7U), (uint8_t)(cell_y + 7U), digit_str, HAL_UI_WHITE);
         }
     }
 
@@ -1112,33 +1214,26 @@ static CeePewErr_t render_code_entry(void)
     for (uint8_t i = 0U; i < 4U; i++) {
         uint8_t dot_x = (uint8_t)(cell_x[i] + cell_w / 2U);
         if (g_ui_ctx.code_selected == i) {
-            HalUIRect_t dot = { .x = dot_x - 2U, .y = 50U, .w = 5U, .h = 5U };
+            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 2U), .y = 48U, .w = 5U, .h = 5U };
             hal_ui_rect_fill(&dot, HAL_UI_WHITE);
         } else if (i < g_ui_ctx.code_selected) {
-            HalUIRect_t dot = { .x = dot_x - 1U, .y = 51U, .w = 3U, .h = 3U };
+            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 1U), .y = 49U, .w = 3U, .h = 3U };
             hal_ui_rect_fill(&dot, HAL_UI_WHITE);
         } else {
-            draw_pixel(dot_x, 52U);
+            draw_pixel(dot_x, 50U);
         }
     }
-
-    /* Instructions */
-    hal_ui_text(4U, 56U, "Turn pot / press", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
 }
 
-/* Module-level retry counter — lives between countdown re-entries */
-static uint8_t s_countdown_fail_count = 0U;
-
 static CeePewErr_t render_countdown(void)
 {
     hal_ui_clear();
 
-    /* ── EARLY EXIT: session became active before countdown expired ─── */
+    /* Dedicated pairing stage with a 15-second window. */
     if (session_is_active() || transport_ble_handoff_ready()) {
-        s_countdown_fail_count = 0U;
         g_ui_ctx.anim.frame_count = 0U;
         (void)ui_manager_transition_to(UI_STATE_KEYDER);
         g_ui_ctx.transition_ready = true;
@@ -1147,64 +1242,49 @@ static CeePewErr_t render_countdown(void)
 
     uint32_t f    = g_ui_ctx.anim.frame_count;
     uint32_t now  = (uint32_t)(esp_timer_get_time() / 1000LL);
-    uint32_t elapsed = (now >= g_ui_ctx.countdown_start_ms)
-                     ? (now - g_ui_ctx.countdown_start_ms) : 0U;
-    uint32_t total_ms = (uint32_t)CEEPEW_PAIRING_TIMEOUT_S * 1000U;
+    uint32_t elapsed = (now >= g_ui_ctx.pairing_start_ms)
+                     ? (now - g_ui_ctx.pairing_start_ms) : 0U;
+    uint32_t total_ms = 15000U;
     uint32_t rem_ms   = (elapsed < total_ms) ? (total_ms - elapsed) : 0U;
-    uint8_t  secs     = (uint8_t)(rem_ms / 1000U);
 
     /* Title */
-    hal_ui_text(30U, 2U, "SYNCING", HAL_UI_WHITE);
+    hal_ui_text(34U, 2U, "PAIRING", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
 
-    char sec_str[4U];
-    (void)snprintf(sec_str, sizeof(sec_str), "%2u", (unsigned)secs);
-    hal_ui_text(14U, 20U, "Syncing in", HAL_UI_WHITE);
-    hal_ui_text(14U, 30U, sec_str, HAL_UI_WHITE);
-    hal_ui_text(42U, 30U, "sec", HAL_UI_WHITE);
+    /* Show the fixed 4-digit code while the pairing window runs. */
+    const uint8_t code_x[4U] = { 8U, 38U, 68U, 98U };
+    for (uint8_t i = 0U; i < 4U; i++) {
+        HalUIRect_t box = { .x = code_x[i], .y = 18U, .w = 22U, .h = 18U };
+        hal_ui_rect(&box, HAL_UI_WHITE);
+        char digit[2U] = { (char)g_ui_ctx.code_digits[i], '\0' };
+        hal_ui_text((uint8_t)(code_x[i] + 7U), 23U, digit, HAL_UI_WHITE);
+    }
 
-    /* Progress bar — fills as time DECREASES (remaining time shown) */
-    uint32_t fill = (rem_ms * 110U) / total_ms;
-    if (fill > 110U) { fill = 110U; }
+    /* Progress bar — fills as time decreases. (moved up to avoid overflow) */
+    uint32_t fill = (rem_ms * 120U) / total_ms;
+    if (fill > 120U) { fill = 120U; }
 
-    HalUIRect_t border = { .x = 9U, .y = 40U, .w = 110U, .h = 10U };
+    HalUIRect_t border = { .x = 4U, .y = 36U, .w = 120U, .h = 10U };
     hal_ui_rect(&border, HAL_UI_WHITE);
     if (fill > 0U) {
-        HalUIRect_t bar = { .x = 11U, .y = 42U, .w = (uint8_t)fill, .h = 6U };
+        HalUIRect_t bar = { .x = 6U, .y = 38U, .w = (uint8_t)fill, .h = 6U };
         hal_ui_rect_fill(&bar, HAL_UI_WHITE);
-        uint8_t edge_x = (uint8_t)(11U + fill);
-        if (edge_x < 120U) { draw_vline(edge_x, 41U, 8U); }
     }
 
-    /* Pulsing ring */
-    uint8_t ring_r = (uint8_t)((f % 20U));
-    if (ring_r > 0U && ring_r < 12U) {
-        draw_circle(98, 24, (uint8_t)(ring_r / 2U + 2U));
+    /* Pairing pulse on the right. */
+    uint8_t ring_r = (uint8_t)((f / 6U) % 4U);
+    if (ring_r == 0U) {
+        draw_circle(108, 20, 3U);
     }
 
-    /* "Waiting for peer" blink */
+    /* "Waiting for peer" blink — moved up and no numeric countdown shown */
     uint8_t blink = (uint8_t)((f / 10U) % 2U);
     if (blink == 0U) {
-        hal_ui_text(10U, 54U, "Waiting for peer...", HAL_UI_WHITE);
+        ui_draw_text_wrapped(10U, 44U, "Waiting for peer", 108U, 8U);
     }
 
-    draw_vline(9U,  40U, 4U);
-    draw_vline(119U, 40U, 4U);
-
-    /* ── TIMEOUT HANDLING ─────────────────────────────────────────────── */
     if (rem_ms == 0U) {
-        s_countdown_fail_count++;
-        if (s_countdown_fail_count >= 2U) {
-            /* Two consecutive failures → give up and go back to DISCOVERY */
-            s_countdown_fail_count = 0U;
-            (void)transport_ble_disconnect();
-            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
-            g_ui_ctx.transition_ready = true;
-        } else {
-            /* First failure → retry code entry */
-            (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
-            g_ui_ctx.transition_ready = true;
-        }
+        return ui_restart_discovery_from_pairing();
     }
 
     g_ui_ctx.anim.frame_count++;
@@ -1213,81 +1293,7 @@ static CeePewErr_t render_countdown(void)
 
 static CeePewErr_t render_syncing(void)
 {
-    hal_ui_clear();
-
-    uint32_t f    = g_ui_ctx.anim.frame_count;
-    uint32_t now  = (uint32_t)(esp_timer_get_time() / 1000LL);
-    uint32_t elapsed = (now >= g_ui_ctx.countdown_start_ms)
-                     ? (now - g_ui_ctx.countdown_start_ms) : 0U;
-    uint32_t total_ms = (uint32_t)CEEPEW_PAIRING_TIMEOUT_S * 1000U;
-    uint32_t rem_ms   = (elapsed < total_ms) ? (total_ms - elapsed) : 0U;
-    uint8_t  secs     = (uint8_t)(rem_ms / 1000U);
-
-    /* Title */
-    hal_ui_text(30U, 2U, "SYNCING", HAL_UI_WHITE);
-    draw_hline(0U, 11U, 128U);
-
-    /* Large countdown number — left-aligned to leave room for the sync pulse */
-    char sec_str[4U];
-    (void)snprintf(sec_str, sizeof(sec_str), "%2u", (unsigned)secs);
-    hal_ui_text(14U, 20U, "Syncing in", HAL_UI_WHITE);
-    hal_ui_text(14U, 30U, sec_str, HAL_UI_WHITE);
-    hal_ui_text(42U, 30U, "sec", HAL_UI_WHITE);
-
-    /* Animated progress bar — separate from the sync pulse */
-    uint32_t fill = (rem_ms * 110U) / total_ms;  /* 0..110 */
-    if (fill > 110U) { fill = 110U; }
-
-    /* Bar border */
-    HalUIRect_t border = { .x = 9U, .y = 40U, .w = 110U, .h = 10U };
-    hal_ui_rect(&border, HAL_UI_WHITE);
-
-    if (fill > 0U) {
-        /* Pulsing fill — brightest at right edge */
-        HalUIRect_t bar = { .x = 11U, .y = 42U, .w = (uint8_t)fill, .h = 6U };
-        hal_ui_rect_fill(&bar, HAL_UI_WHITE);
-
-        /* Bright leading edge 2px wide */
-        uint8_t edge_x = (uint8_t)(11U + fill);
-        if (edge_x < 120U) {
-            draw_vline(edge_x, 41U, 8U);
-        }
-    }
-
-    /* Pulsing ring on the right side so it never overlaps the timer text */
-    uint8_t ring_r = (uint8_t)((f % 20U));
-    if (ring_r > 0U && ring_r < 12U) {
-        draw_circle(98, 24, (uint8_t)(ring_r / 2U + 2U));
-    }
-
-    /* "Waiting for peer" blink */
-    uint8_t blink = (uint8_t)((f / 10U) % 2U);
-    if (blink == 0U) {
-        hal_ui_text(10U, 54U, "Waiting for peer...", HAL_UI_WHITE);
-    }
-
-    /* Tick marks at bar edges */
-    draw_vline(9U,  40U, 4U);
-    draw_vline(119U,40U, 4U);
-
-    /* Countdown reached zero: decide next UI state based on session result */
-    if (rem_ms == 0U) {
-        uint8_t phase = session_get_phase();
-        /* Require explicit handoff readiness (both peers verified) or an already-active session */
-        if (session_is_active() || phase >= 3U || transport_ble_handoff_ready()) {
-            /* Success: proceed to key derivation / fingerprint display */
-            (void)ui_manager_transition_to(UI_STATE_KEYDER);
-            g_ui_ctx.transition_ready = true;
-        } else {
-            /* Failure: show brief message and return to code entry to retry */
-            hal_ui_text(10U, 54U, "Sync failed - retry", HAL_UI_WHITE);
-            (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
-            g_ui_ctx.transition_ready = true;
-        }
-    }
-
-    g_ui_ctx.anim.frame_count++;
-    return CEEPEW_OK;
+    return render_countdown();
 }
 
 static CeePewErr_t render_confirm(void)
@@ -1316,9 +1322,10 @@ static CeePewErr_t render_confirm(void)
     HalUIRect_t prompt = { .x = 14U, .y = 44U, .w = 100U, .h = 20U };
     if (blink == 0U) {
         hal_ui_rect(&prompt, HAL_UI_WHITE);
-        hal_ui_text(18U, 49U, "HOLD BUTTON TO PAIR", HAL_UI_WHITE);
+        hal_ui_text(18U, 49U, "HOLD BTN TO PAIR", HAL_UI_WHITE);
         /* Small hint for DIAG users about Info Mode */
-        hal_ui_text(18U, 58U, "Hold for Info (DIAG)", HAL_UI_WHITE);
+        hal_ui_text(18U, 54U, "Hold for Info", HAL_UI_WHITE);
+        hal_ui_text(80U, 54U, "[DIAG]", HAL_UI_WHITE);
     } else {
         hal_ui_rect_fill(&prompt, HAL_UI_WHITE);
         /* Invert text — can't truly invert, so just skip text on filled frame */
@@ -1363,30 +1370,100 @@ static CeePewErr_t render_info(void)
         hal_ui_text(4U, 38U, "Last wipe: never", HAL_UI_WHITE);
     }
 
-    /* ADC diagnostics (raw and smoothed) — exposed via input module if initialized */
+    /* DIAG overhaul: build a paginated diagnostic view and let the pot select the page */
+    char lines[24U][28U];
+    uint8_t line_count = 0U;
+
+    /* Basic info */
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "APP: CEEPEW");
+
+    uint64_t up_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "Uptime:%lus", (unsigned long)(up_ms / 1000ULL));
+
+    size_t heap_free = esp_get_free_heap_size();
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "Heap:%uK", (unsigned int)(heap_free / 1024U));
+
+    /* ADC snapshot */
     extern CeePewErr_t input_get_adc_snapshot(uint16_t *raw_out, uint16_t *smoothed_out);
     uint16_t raw = 0U, sm = 0U;
     if (input_get_adc_snapshot(&raw, &sm) == CEEPEW_OK) {
-        char adc_str[32U];
-        (void)snprintf(adc_str, sizeof(adc_str), "ADC raw:%u sm:%u", (unsigned)raw, (unsigned)sm);
-        hal_ui_text(4U, 46U, adc_str, HAL_UI_WHITE);
+        (void)snprintf(lines[line_count++], sizeof(lines[0]), "ADC R:%u S:%u", (unsigned)raw, (unsigned)sm);
     } else {
-        hal_ui_text(4U, 46U, "ADC: <not ready>", HAL_UI_WHITE);
+        (void)snprintf(lines[line_count++], sizeof(lines[0]), "ADC: not ready");
     }
 
     /* BLE state */
-    const char *ble_state = "BLE:?";
+    const char *bst = "BLE:?";
     switch (transport_ble_get_state()) {
-        case BLE_IDLE: ble_state = "BLE:IDLE"; break;
-        case BLE_ADVERTISING: ble_state = "BLE:ADV"; break;
-        case BLE_SCANNING: ble_state = "BLE:SCAN"; break;
-        case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE:ADV+SCN"; break;
-        case BLE_CONNECTED: ble_state = "BLE:CONN"; break;
-        case BLE_PAIRING: ble_state = "BLE:PAIR"; break;
-        case BLE_DONE: ble_state = "BLE:DONE"; break;
+        case BLE_IDLE: bst = "BLE:IDLE"; break;
+        case BLE_ADVERTISING: bst = "BLE:ADV"; break;
+        case BLE_SCANNING: bst = "BLE:SCAN"; break;
+        case BLE_ADVERTISING_AND_SCANNING: bst = "BLE:ADV+SCN"; break;
+        case BLE_CONNECTED: bst = "BLE:CONN"; break;
+        case BLE_PAIRING: bst = "BLE:PAIR"; break;
+        case BLE_DONE: bst = "BLE:DONE"; break;
         default: break;
     }
-    hal_ui_text(4U, 54U, ble_state, HAL_UI_WHITE);
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "%s", bst);
+
+    if (g_ble_ctx.discovered) {
+        (void)snprintf(lines[line_count++], sizeof(lines[0]), "Peer:%02X%02X%02X R:%ddBm",
+                       g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5], (int)g_ble_ctx.peer_rssi);
+        (void)snprintf(lines[line_count++], sizeof(lines[0]), "Seen:%lu Hits:%u", (unsigned long)g_ble_ctx.scan_seen_count, (unsigned)g_ble_ctx.scan_hit_count);
+    }
+
+    /* Session info */
+    uint8_t phase = session_get_phase();
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "Phase:%u", (unsigned)phase);
+    uint64_t sid = session_get_id();
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "SessID:0x%08lX", (unsigned long)(sid & 0xFFFFFFFFUL));
+    uint64_t nc = session_get_nonce_counter();
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "Nonce:%lu", (unsigned long)nc);
+
+    /* Commitment preview (first 8 bytes as hex) */
+    uint8_t commit[CEEPEW_COMMITMENT_BYTES];
+    if (session_get_commitment(commit) == CEEPEW_OK) {
+        char chex[17U];
+        for (uint8_t i = 0U; i < 8U; i++) {
+            uint8_t b = commit[i];
+            chex[i * 2U]     = (char)((b >> 4U) < 10U ? '0' + (b >> 4U) : 'A' + (b >> 4U) - 10U);
+            chex[i * 2U + 1U] = (char)((b & 0x0FU) < 10U ? '0' + (b & 0x0FU) : 'A' + (b & 0x0FU) - 10U);
+        }
+        chex[16U] = '\0';
+        (void)snprintf(lines[line_count++], sizeof(lines[0]), "Commit:%s", chex);
+    }
+
+    (void)snprintf(lines[line_count++], sizeof(lines[0]), "Ticks:%u", (unsigned)g_ui_ctx.anim.frame_count);
+
+    if (line_count > 24U) { line_count = 24U; }
+
+    /* Dynamic paging: allow pot to scroll through lines without fixed page count */
+    uint8_t lines_per_page = (uint8_t)((64U - 12U) / 9U); /* available rows based on header */
+    if (lines_per_page == 0U) { lines_per_page = 1U; }
+
+    uint8_t max_offset = (line_count > lines_per_page) ? (uint8_t)(line_count - lines_per_page) : 0U;
+    uint8_t pot = g_ui_ctx.user_input;
+    uint8_t offset = (uint8_t)(((uint16_t)pot * (uint16_t)(max_offset + 1U)) / 256U);
+
+    uint8_t y = 6U;
+    for (uint8_t i = 0U; i < lines_per_page; i++) {
+        uint8_t idx = (uint8_t)(offset + i);
+        if (idx >= line_count) { break; }
+        hal_ui_text(2U, (uint8_t)(y + i * 9U), lines[idx], HAL_UI_WHITE);
+    }
+
+    /* Show current top-line index and total lines as DIAG L: top/total */
+    char pg_str[16U];
+    (void)snprintf(pg_str, sizeof(pg_str), "DIAG L:%u/%u", (unsigned)(offset + 1U), (unsigned)line_count);
+    hal_ui_text(80U, 0U, pg_str, HAL_UI_WHITE);
+
+    uint8_t fill = (uint8_t)((uint16_t)pot * 40U / 255U);
+    HalUIRect_t pbg = { .x = 4U, .y = 56U, .w = 120U, .h = 6U };
+    hal_ui_rect(&pbg, HAL_UI_WHITE);
+    if (fill > 0U) {
+        HalUIRect_t pf = { .x = 6U, .y = 58U, .w = fill, .h = 2U };
+        hal_ui_rect_fill(&pf, HAL_UI_WHITE);
+    }
 
     return CEEPEW_OK;
 }
@@ -1450,7 +1527,7 @@ static CeePewErr_t render_keyder_anim(void)
     }
 
     /* Label inside the progress bar white band */
-    hal_ui_text(30U, 54U, "DERIVING KEY...", HAL_UI_WHITE);
+    hal_ui_text(24U, 46U, "DERIVING KEY...", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
 
@@ -1712,49 +1789,6 @@ CeePewErr_t ui_chat_show_compose(uint8_t pot_value, uint8_t selected_idx)
     return CEEPEW_OK;
 }
 
-static CeePewErr_t render_chat(void)
-{
-    hal_ui_clear();
-
-    uint32_t f = g_ui_ctx.anim.frame_count;
-
-    /* Status bar */
-    hal_ui_text(0U, 0U, "SECURE CHAT", HAL_UI_WHITE);
-
-    /* Heartbeat indicator — tiny pulsing dot at top-right */
-    uint8_t hb = (uint8_t)((f / 15U) % 4U);
-    if (hb < 2U) {
-        HalUIRect_t hb_dot = { .x = 120U, .y = 1U, .w = 3U, .h = 3U };
-        hal_ui_rect_fill(&hb_dot, HAL_UI_WHITE);
-    }
-    draw_hline(0U, 9U, 128U);
-
-    /* Message area — placeholder text when no messages */
-    uint8_t msg_count = msg_store_count();
-    if (msg_count == 0U) {
-        uint8_t blink = (uint8_t)((f / 20U) % 2U);
-        if (blink == 0U) {
-            hal_ui_text(12U, 24U, "No messages yet.", HAL_UI_WHITE);
-            hal_ui_text(4U,  34U, "Press button to compose", HAL_UI_WHITE);
-        }
-    } else {
-        /* Show up to 2 most recent message bubbles */
-        uint8_t start = (msg_count > 2U) ? (uint8_t)(msg_count - 2U) : 0U;
-        for (uint8_t i = start; i < msg_count && i < start + 2U; i++) {
-            uint8_t slot = (uint8_t)(i - start);
-            uint8_t bubble_y = (uint8_t)(12U + slot * 20U);
-            (void)ui_chat_show_bubble(i, bubble_y, msg_store_get(i)->meta.dir);
-        }
-    }
-
-    /* Compose mode triggered by button press */
-    if (g_ui_ctx.button_pressed) {
-        (void)ui_chat_show_compose(g_ui_ctx.user_input, 0U);
-    }
-
-    g_ui_ctx.anim.frame_count++;
-    return CEEPEW_OK;
-}
 
 /* Sprint 12: Helper function to display cryptogram with two hex rows.
  * Displays 16-byte commitment as 32 hex digits (16×2 layout).
@@ -1765,39 +1799,9 @@ static CeePewErr_t render_chat(void)
 CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
-
-    /* Convert 16 bytes to 32 hex characters */
-    char hex_str[33];
-    CEEPEW_ASSERT(sizeof(hex_str) >= 33U, CEEPEW_ERR_BOUNDS);
-
-    /* Format as 32 hex digits */
-    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
-        uint8_t byte_val = commitment[i];
-        uint8_t nibble_h = (byte_val >> 4U) & 0x0FU;
-        uint8_t nibble_l = byte_val & 0x0FU;
-
-        char hex_h = (nibble_h < 10U) ? (char)('0' + nibble_h) : (char)('A' + nibble_h - 10U);
-        char hex_l = (nibble_l < 10U) ? (char)('0' + nibble_l) : (char)('A' + nibble_l - 10U);
-
-        hex_str[i * 2U] = hex_h;
-        hex_str[i * 2U + 1U] = hex_l;
-    }
-    hex_str[32] = '\0';
-
-    /* Display title */
-    hal_ui_text(20U, 8U, "Commitment", HAL_UI_WHITE);
-
-    /* Display first 16 hex chars on line 1 (centered) */
-    char line1[17];
-    memcpy(line1, hex_str, 16U);
-    line1[16] = '\0';
-    hal_ui_text(20U, 22U, line1, HAL_UI_WHITE);
-
-    /* Display second 16 hex chars on line 2 (centered) */
-    char line2[17];
-    memcpy(line2, hex_str + 16U, 16U);
-    line2[16] = '\0';
-    hal_ui_text(20U, 32U, line2, HAL_UI_WHITE);
+    hal_ui_clear();
+    hal_ui_text(16U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
+    ui_draw_hex_rows(commitment, CEEPEW_COMMITMENT_BYTES, 10U, 14U);
 
     return CEEPEW_OK;
 }
@@ -1912,52 +1916,11 @@ static CeePewErr_t render_cryptogram(void)
         return err;
     }
 
-    /* Build final hex string */
-    char final_hex[33U];
-    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
-        uint8_t b = g_ui_ctx.commitment[i];
-        uint8_t h = (b >> 4U) & 0x0FU;
-        uint8_t l = b & 0x0FU;
-        final_hex[i * 2U]      = (h < 10U) ? (char)('0' + h) : (char)('A' + h - 10U);
-        final_hex[i * 2U + 1U] = (l < 10U) ? (char)('0' + l) : (char)('A' + l - 10U);
-    }
-    final_hex[32U] = '\0';
-
-    /* Roll-up animation: characters count up for first 32 frames */
-    char disp_hex[33U];
-    for (uint8_t c = 0U; c < 32U; c++) {
-        if (f < 32U) {
-            /* Roll: start from '0', reach final in 32 frames, staggered by char */
-            uint32_t char_f = (f > (uint32_t)c) ? (f - (uint32_t)c) : 0U;
-            if (char_f >= 8U) {
-                disp_hex[c] = final_hex[c];        /* settled */
-            } else {
-                /* Cycle through hex chars */
-                uint8_t roll_idx = (uint8_t)(char_f * 2U % MATRIX_CHARSET_LEN);
-                disp_hex[c] = MATRIX_CHARS[roll_idx];
-            }
-        } else {
-            disp_hex[c] = final_hex[c];
-        }
-    }
-    disp_hex[32U] = '\0';
-
     /* Title */
     hal_ui_text(20U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
 
-    /* Two rows of 16 hex chars — centred */
-    char line1[17U]; (void)memcpy(line1, disp_hex, 16U); line1[16U] = '\0';
-    char line2[17U]; (void)memcpy(line2, disp_hex + 16U, 16U); line2[16U] = '\0';
-
-    /* Decorative bracket around each row */
-    hal_ui_text(4U, 16U, "[", HAL_UI_WHITE);
-    hal_ui_text(12U, 16U, line1, HAL_UI_WHITE);
-    hal_ui_text(100U, 16U, "]", HAL_UI_WHITE);
-
-    hal_ui_text(4U, 26U, "[", HAL_UI_WHITE);
-    hal_ui_text(12U, 26U, line2, HAL_UI_WHITE);
-    hal_ui_text(100U, 26U, "]", HAL_UI_WHITE);
+    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 14U);
 
     /* Determine match status */
     uint8_t status = 0U;
@@ -2002,23 +1965,20 @@ static CeePewErr_t render_cryptogram(void)
                              now_ms >= g_ui_ctx.crypto_confirm_start_ms)
                           ? (now_ms - g_ui_ctx.crypto_confirm_start_ms) : 0U;
         uint32_t rem_ms   = (elapsed < 30000U) ? (30000U - elapsed) : 0U;
-        uint8_t  cd_secs  = (uint8_t)(rem_ms / 1000U);
 
         /* Check peer readiness: both must signal ready before transition */
         if (transport_ble_both_ready_for_chat()) {
             char cd_str[20U];
             (void)snprintf(cd_str, sizeof(cd_str), "Ready! Press btn");
-            hal_ui_text(12U, 54U, cd_str, HAL_UI_WHITE);
+            hal_ui_text(12U, 48U, cd_str, HAL_UI_WHITE);
 
             if (g_ui_ctx.button_pressed) {
                 (void)ui_manager_transition_to(UI_STATE_CHAT);
                 g_ui_ctx.transition_ready = true;
             }
         } else {
-            /* Waiting for peer to signal ready */
-            char cd_str[20U];
-            (void)snprintf(cd_str, sizeof(cd_str), "Syncing: %us", (unsigned)cd_secs);
-            hal_ui_text(20U, 54U, cd_str, HAL_UI_WHITE);
+            /* Waiting for peer to signal ready — show simple text and visual cue */
+            hal_ui_text(20U, 48U, "Syncing...", HAL_UI_WHITE);
 
             if (rem_ms == 0U) {
                 /* Timeout: transition anyway */
@@ -2057,8 +2017,8 @@ static CeePewErr_t render_chat_menu(void)
         "  READ INBOX   "
     };
 
-    /* Map pot to 2 options */
-    uint8_t sel = (g_ui_ctx.user_input >= 128U) ? 1U : 0U;
+    /* Map the full potentiometer travel across the visible options. */
+    uint8_t sel = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
     g_ui_ctx.chat_menu_selected = sel;
 
     for (uint8_t i = 0U; i < 2U; i++) {
@@ -2082,10 +2042,10 @@ static CeePewErr_t render_chat_menu(void)
     if (cnt > 0U) {
         char badge[12U];
         (void)snprintf(badge, sizeof(badge), "[%u msg]", (unsigned)cnt);
-        hal_ui_text(4U, 62U, badge, HAL_UI_WHITE);
+        hal_ui_text(4U, 54U, badge, HAL_UI_WHITE);
     }
 
-    hal_ui_text(70U, 62U, "BTN=select", HAL_UI_WHITE);
+    hal_ui_text(66U, 54U, "BTN=select", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2183,7 +2143,7 @@ static CeePewErr_t render_chat_compose(void)
     }
 
     /* ── Button hold indicator ────────────────────────────────────── */
-    draw_hline(0U, 49U, 128U);
+    draw_hline(0U, 47U, 128U);
 
     /* Determine hold duration for live feedback */
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
@@ -2196,12 +2156,12 @@ static CeePewErr_t render_chat_compose(void)
     /* Progressive hold bar (0-1800ms → fills 120px) */
     if (hold_dur > 0U && hold_dur < 2000U) {
         uint8_t hold_fill = (uint8_t)((hold_dur * 120U) / 2000U);
-        HalUIRect_t hb = { .x = 4U, .y = 52U, .w = hold_fill, .h = 5U };
+        HalUIRect_t hb = { .x = 4U, .y = 50U, .w = hold_fill, .h = 5U };
         hal_ui_rect_fill(&hb, HAL_UI_WHITE);
     }
 
     /* Legend */
-    hal_ui_text(0U, 58U, "TAP=add  HLD=del  2s=SEND", HAL_UI_WHITE);
+    hal_ui_text(0U, 56U, "TAP=add  HLD=del  2s=SEND", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2229,6 +2189,11 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_prev = false;
             g_ui_ctx.button_press_start_ms = 0U;
             g_ui_ctx.code_entry_start_ms = now_ms;
+            g_ui_ctx.countdown_start_ms = 0U;
+            g_ui_ctx.pairing_start_ms = 0U;
+        } else if (g_ui_ctx.current_state == UI_STATE_PAIRING) {
+            g_ui_ctx.pairing_start_ms = now_ms;
+            g_ui_ctx.countdown_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
             /* BLE is initialized once by app_main; discovery entry only
              * restarts advertising if the transport is idle. */
@@ -2247,9 +2212,13 @@ CeePewErr_t ui_manager_update(void)
                 /* Advertising is up but scan may have been lost — restart it */
                 (void)transport_ble_start_scan();
             }
-        } else if (g_ui_ctx.current_state == UI_STATE_COUNTDOWN) {
+            g_ui_ctx.countdown_start_ms = 0U;
+            g_ui_ctx.pairing_start_ms = 0U;
+        } else if (g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+                   g_ui_ctx.current_state == UI_STATE_PAIRING) {
             /* Mark countdown start time */
             g_ui_ctx.countdown_start_ms = now_ms;
+            g_ui_ctx.pairing_start_ms = now_ms;
 
             /* Connect to peer; session FSM will derive and publish the canonical commitment
              * so do not set g_ble_ctx.commitment_digest or commit-write-pending here. */
@@ -2347,6 +2316,32 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
+    if (g_ui_ctx.diag_mode) {
+        uint8_t diag_page = ui_map_pot_to_index(g_ui_ctx.user_input, 4U);
+
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                         ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+
+            if (diag_page == 3U) {
+                if (dur >= 1800U) {
+                    session_wipe();
+                } else if (dur >= 700U) {
+                    (void)ui_manager_reset_to_discovery();
+                } else {
+                    g_ui_ctx.anim.frame_count = 0U;
+                }
+            } else if (dur < 500U) {
+                g_ui_ctx.anim.frame_count = 0U;
+            }
+        }
+
+        g_ui_ctx.button_prev = g_ui_ctx.button_pressed;
+        return CEEPEW_OK;
+    }
+
     /* Input handling for interactive states */
     if (state_changed) {
         g_ui_ctx.button_prev = g_ui_ctx.button_pressed;
@@ -2376,7 +2371,8 @@ CeePewErr_t ui_manager_update(void)
                 now_ms >= g_ui_ctx.code_entry_start_ms &&
                 (now_ms - g_ui_ctx.code_entry_start_ms) >= ENTRY_ARM_MS) {
                 /* Confirm code and start countdown */
-                (void)ui_manager_transition_to(UI_STATE_COUNTDOWN);
+                (void)ui_manager_transition_to(UI_STATE_PAIRING);
+                g_ui_ctx.pairing_start_ms = now_ms;
                 g_ui_ctx.countdown_start_ms = now_ms;
                 g_ui_ctx.transition_ready = true;
             } else {
@@ -2541,9 +2537,7 @@ CeePewErr_t ui_manager_update(void)
         if (now_ms - s_last_ui_wipe_ms > 5000U) {
             ESP_LOGW("ui", "pairing timeout — aborting pairing and returning to discovery (no wipe)");
             s_last_ui_wipe_ms = now_ms;
-            (void)transport_ble_disconnect();
-            (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
-            g_ui_ctx.transition_ready = true;
+            (void)ui_restart_discovery_from_pairing();
         }
     }
 
@@ -2554,10 +2548,10 @@ CeePewErr_t ui_manager_update(void)
 }
 
 /* 62-entry ASCII charset used by render_diag_page state names */
-static const char *const s_ui_state_names[17] = {
+static const char *const s_ui_state_names[18] = {
     "BOOT","DISC","CODE","COUNT","BADCOD","DIFF",
     "CONFIRM","KEYDER","FP","FPCONF","CHAT","CHATMNU",
-    "COMPOSE","CRYPTO","NONCE","INFO","ERROR"
+    "COMPOSE","CRYPTO","NONCE","INFO","ERROR","PAIR"
 };
 
 static CeePewErr_t render_diag_page(void)
@@ -2567,159 +2561,123 @@ static CeePewErr_t render_diag_page(void)
 
     hal_ui_clear();
 
-    /* Map pot (0-255) to 3 DIAG pages */
-    uint8_t page = (uint8_t)(((uint16_t)g_ui_ctx.user_input * 3U) / 256U);
-    if (page > 2U) { page = 2U; }
+    static const char *const SECTION_NAMES[] = {
+        "SESSION", "RADIO", "INPUT", "TOOLS"
+    };
+    const uint8_t section_count = (uint8_t)(sizeof(SECTION_NAMES) / sizeof(SECTION_NAMES[0]));
+    uint8_t section = ui_map_pot_to_index(g_ui_ctx.user_input, section_count);
+    char ln[32U];
 
-    /* Page indicator dots — centred at y=62 */
-    for (uint8_t p = 0U; p < 3U; p++) {
-        uint8_t dx = (uint8_t)(54U + p * 10U);
-        if (p == page) {
-            HalUIRect_t dot = { .x = (uint8_t)(dx - 2U), .y = 60U,
-                                .w = 5U, .h = 3U };
-            hal_ui_rect_fill(&dot, HAL_UI_WHITE);
-        } else {
-            draw_pixel(dx, 61U);
-        }
+    diag_draw_header(SECTION_NAMES[section]);
+
+    switch (section) {
+        case 0U: {
+            uint8_t phase = session_get_phase();
+            static const char *const PHASE_NAMES[4U] = { "IDLE", "DISC", "PAIR", "ACTIVE" };
+            const char *pname = (phase < 4U) ? PHASE_NAMES[phase] : "?";
+            (void)snprintf(ln, sizeof(ln), "Phase: %s", pname);
+            hal_ui_text(0U, 23U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "UI: %s", s_ui_state_names[(uint8_t)g_ui_ctx.current_state]);
+            hal_ui_text(0U, 32U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "Active: %s  Diag: %s",
+                           session_is_active() ? "Y" : "N",
+                           g_ui_ctx.diag_mode ? "Y" : "N");
+            hal_ui_text(0U, 41U, ln, HAL_UI_WHITE);
+
+            if (g_ble_ctx.discovered) {
+                (void)snprintf(ln, sizeof(ln), "Peer:%02X%02X%02X RSSI:%d",
+                               g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4],
+                               g_ble_ctx.peer_mac[5], (int)g_ble_ctx.peer_rssi);
+            } else {
+                (void)snprintf(ln, sizeof(ln), "Peer: none");
+            }
+            hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
+        } break;
+
+        case 1U: {
+            const char *bname = "IDLE";
+            switch (transport_ble_get_state()) {
+                case BLE_ADVERTISING:              bname = "ADV"; break;
+                case BLE_SCANNING:                 bname = "SCAN"; break;
+                case BLE_ADVERTISING_AND_SCANNING: bname = "ADV+SCAN"; break;
+                case BLE_CONNECTED:                bname = "CONN"; break;
+                case BLE_PAIRING:                  bname = "PAIR"; break;
+                case BLE_DONE:                     bname = "DONE"; break;
+                default: break;
+            }
+            (void)snprintf(ln, sizeof(ln), "BLE: %s", bname);
+            hal_ui_text(0U, 23U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "Adv:%u Scan:%u Conn:%u/%u",
+                           g_ble_ctx.is_advertising ? 1U : 0U,
+                           g_ble_ctx.is_scanning ? 1U : 0U,
+                           g_ble_ctx.gattc_connected ? 1U : 0U,
+                           g_ble_ctx.gatts_connected ? 1U : 0U);
+            hal_ui_text(0U, 32U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "Seen:%lu Hits:%u",
+                           (unsigned long)g_ble_ctx.scan_seen_count,
+                           (unsigned)g_ble_ctx.scan_hit_count);
+            hal_ui_text(0U, 41U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "Commit:%s Handoff:%s",
+                           g_ble_ctx.commitment_verified ? "Y" : "N",
+                           g_ble_ctx.handoff_ready ? "Y" : "N");
+            hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
+        } break;
+
+        case 2U: {
+            (void)snprintf(ln, sizeof(ln), "Pot: %u/255  Section:%u/%u",
+                           (unsigned)g_ui_ctx.user_input,
+                           (unsigned)(section + 1U),
+                           (unsigned)section_count);
+            hal_ui_text(0U, 23U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "Btn:%s  Hold:%lums",
+                           g_ui_ctx.button_pressed ? "DOWN" : "UP",
+                           (unsigned long)((g_ui_ctx.button_pressed && g_ui_ctx.button_press_start_ms != 0U)
+                               ? ((uint32_t)(esp_timer_get_time() / 1000LL) - g_ui_ctx.button_press_start_ms)
+                               : 0U));
+            hal_ui_text(0U, 32U, ln, HAL_UI_WHITE);
+
+            (void)snprintf(ln, sizeof(ln), "CodeSel:%u ChatSel:%u",
+                           (unsigned)g_ui_ctx.code_selected,
+                           (unsigned)g_ui_ctx.chat_menu_selected);
+            hal_ui_text(0U, 41U, ln, HAL_UI_WHITE);
+
+            uint8_t pot_fill = (uint8_t)((uint16_t)g_ui_ctx.user_input * 120U / 255U);
+            HalUIRect_t bar = { .x = 4U, .y = 47U, .w = 120U, .h = 4U };
+            hal_ui_rect(&bar, HAL_UI_WHITE);
+            if (pot_fill > 0U) {
+                HalUIRect_t fill = { .x = 5U, .y = 48U, .w = pot_fill, .h = 2U };
+                hal_ui_rect_fill(&fill, HAL_UI_WHITE);
+            }
+        } break;
+
+        case 3U: {
+            ui_draw_text_wrapped(0U, 23U, "Short=refresh  Hold=restart", 128U, 8U);
+            ui_draw_text_wrapped(0U, 33U, "Mid=discover  Long=wipe", 128U, 8U);
+
+            extern uint32_t session_get_last_wipe_ms(void);
+            uint32_t last_wipe = session_get_last_wipe_ms();
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+            if (last_wipe != 0U) {
+                uint32_t age_s = (now_ms > last_wipe) ? (uint32_t)((now_ms - last_wipe) / 1000U) : 0U;
+                (void)snprintf(ln, sizeof(ln), "Last wipe: %lus ago", (unsigned long)age_s);
+            } else {
+                (void)snprintf(ln, sizeof(ln), "Last wipe: never");
+            }
+            hal_ui_text(0U, 44U, ln, HAL_UI_WHITE);
+
+        } break;
+
+        default:
+            break;
     }
 
-    /* DIAG badge on top-right so user always knows they're in DIAG */
-    hal_ui_text(104U, 0U, "[DIAG]", HAL_UI_WHITE);
-
-    switch (page) {
-
-    /* ── Page 0: BLE / Session ──────────────────────────────────────────── */
-    case 0U: {
-        hal_ui_text(0U, 0U, "SESSION/BLE", HAL_UI_WHITE);
-        draw_hline(0U, 9U, 100U);
-
-        char ln[22U];
-        uint8_t phase = session_get_phase();
-        static const char *const PHASE_NAMES[4] = { "IDLE","DISC","PAIR","ACTIVE" };
-        const char *pname = (phase < 4U) ? PHASE_NAMES[phase] : "?";
-        (void)snprintf(ln, sizeof(ln), "Phase: %s", pname);
-        hal_ui_text(0U, 12U, ln, HAL_UI_WHITE);
-
-        /* BLE state */
-        const char *bname = "IDLE";
-        switch (transport_ble_get_state()) {
-            case BLE_ADVERTISING:              bname = "ADV";     break;
-            case BLE_SCANNING:                 bname = "SCAN";    break;
-            case BLE_ADVERTISING_AND_SCANNING: bname = "ADV+SCN"; break;
-            case BLE_CONNECTED:                bname = "CONN";    break;
-            case BLE_PAIRING:                  bname = "PAIR";    break;
-            case BLE_DONE:                     bname = "DONE";    break;
-            default: break;
-        }
-        (void)snprintf(ln, sizeof(ln), "BLE: %s", bname);
-        hal_ui_text(0U, 21U, ln, HAL_UI_WHITE);
-
-        /* Peer MAC (last 3 bytes) */
-        if (g_ble_ctx.discovered) {
-            (void)snprintf(ln, sizeof(ln), "Peer:%02X%02X%02X r:%d",
-                           g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4],
-                           g_ble_ctx.peer_mac[5], (int)g_ble_ctx.peer_rssi);
-            hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
-            (void)snprintf(ln, sizeof(ln), "Hits:%u Seen:%lu",
-                           (unsigned)g_ble_ctx.scan_hit_count,
-                           (unsigned long)g_ble_ctx.scan_seen_count);
-            hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
-        } else {
-            hal_ui_text(0U, 30U, "Peer: none", HAL_UI_WHITE);
-            (void)snprintf(ln, sizeof(ln), "Seen:%lu",
-                           (unsigned long)g_ble_ctx.scan_seen_count);
-            hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
-        }
-
-        /* Commitment / handoff flags */
-        (void)snprintf(ln, sizeof(ln), "Cmit:%s Hoff:%s Act:%s",
-                       g_ble_ctx.commitment_verified ? "Y" : "N",
-                       g_ble_ctx.handoff_ready       ? "Y" : "N",
-                       session_is_active()            ? "Y" : "N");
-        hal_ui_text(0U, 48U, ln, HAL_UI_WHITE);
-    } break;
-
-    /* ── Page 1: Crypto / Nonce ─────────────────────────────────────────── */
-    case 1U: {
-        hal_ui_text(0U, 0U, "CRYPTO/NONCE", HAL_UI_WHITE);
-        draw_hline(0U, 9U, 100U);
-
-        char ln[22U];
-        bool active = session_is_active();
-        (void)snprintf(ln, sizeof(ln), "Session: %s", active ? "ACTIVE" : "IDLE");
-        hal_ui_text(0U, 12U, ln, HAL_UI_WHITE);
-
-        uint64_t nonce = session_get_nonce_counter();
-        (void)snprintf(ln, sizeof(ln), "Nonce:%08lX",
-                       (unsigned long)(nonce & 0xFFFFFFFFUL));
-        hal_ui_text(0U, 21U, ln, HAL_UI_WHITE);
-
-        /* Nonce health bar — 100px wide */
-        uint8_t nonce_pct = (nonce > 0U)
-            ? (uint8_t)((nonce * 100ULL) / (CEEPEW_NONCE_HARD_LIMIT / 100ULL + 1ULL))
-            : 0U;
-        if (nonce_pct > 100U) { nonce_pct = 100U; }
-        HalUIRect_t nb = { .x = 0U, .y = 30U, .w = 100U, .h = 6U };
-        hal_ui_rect(&nb, HAL_UI_WHITE);
-        if (nonce_pct > 0U) {
-            HalUIRect_t nf = { .x = 1U, .y = 31U,
-                               .w = (uint8_t)((uint16_t)98U * nonce_pct / 100U),
-                               .h = 4U };
-            hal_ui_rect_fill(&nf, HAL_UI_WHITE);
-        }
-        (void)snprintf(ln, sizeof(ln), "Used:%u%%", (unsigned)nonce_pct);
-        hal_ui_text(104U, 30U, ln, HAL_UI_WHITE);
-
-        /* Session ID (lower 32-bit) */
-        uint64_t sid = session_get_id();
-        (void)snprintf(ln, sizeof(ln), "SID:%08lX",
-                       (unsigned long)(sid & 0xFFFFFFFFUL));
-        hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
-
-        /* Current UI state */
-        uint8_t si = (uint8_t)g_ui_ctx.current_state;
-        const char *sname = (si < 17U) ? s_ui_state_names[si] : "?";
-        (void)snprintf(ln, sizeof(ln), "UI:%s", sname);
-        hal_ui_text(0U, 48U, ln, HAL_UI_WHITE);
-    } break;
-
-    /* ── Page 2: System ─────────────────────────────────────────────────── */
-    case 2U: {
-        hal_ui_text(0U, 0U, "SYSTEM", HAL_UI_WHITE);
-        draw_hline(0U, 9U, 100U);
-
-        char ln[22U];
-
-        /* Uptime */
-        uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-        (void)snprintf(ln, sizeof(ln), "Up:%luh%02lum%02lus",
-                       (unsigned long)(uptime_s / 3600U),
-                       (unsigned long)((uptime_s / 60U) % 60U),
-                       (unsigned long)(uptime_s % 60U));
-        hal_ui_text(0U, 12U, ln, HAL_UI_WHITE);
-
-        /* Free heap */
-        uint32_t heap = esp_get_free_heap_size();
-        (void)snprintf(ln, sizeof(ln), "Heap: %luKB free", (unsigned long)(heap / 1024U));
-        hal_ui_text(0U, 21U, ln, HAL_UI_WHITE);
-
-        /* Pot raw value (useful for ADC calibration) */
-        (void)snprintf(ln, sizeof(ln), "Pot: %u/255", (unsigned)g_ui_ctx.user_input);
-        hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
-
-        /* Adv / scan counts */
-        (void)snprintf(ln, sizeof(ln), "Adv pkts: %lu",
-                       (unsigned long)g_ble_ctx.adv_packet_count);
-        hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
-
-        /* Loop frame rate estimate: 1000/30ms ≈ 33 Hz */
-        hal_ui_text(0U, 48U, "Loop ~33Hz (30ms)", HAL_UI_WHITE);
-    } break;
-
-    default:
-        break;
-    }
-
+    ui_draw_text_wrapped(0U, 54U, "POT selects section", 128U, 8U);
     return CEEPEW_OK;
 }
 
@@ -2745,7 +2703,8 @@ CeePewErr_t ui_manager_draw(void)
         case UI_STATE_BOOT:               err = render_boot_anim();          break;
         case UI_STATE_DISCOVERY:          err = render_discovery();           break;
         case UI_STATE_CODE_ENTRY:         err = render_code_entry();          break;
-        case UI_STATE_COUNTDOWN:          err = render_countdown();           break;
+        case UI_STATE_COUNTDOWN:          err = render_syncing();             break;
+        case UI_STATE_PAIRING:            err = render_countdown();           break;
         case UI_STATE_CONFIRM:            err = render_confirm();             break;
         case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
         case UI_STATE_FINGERPRINT:        err = render_fingerprint();         break;
@@ -2768,7 +2727,7 @@ CeePewErr_t ui_manager_draw(void)
 
 CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
-    CEEPEW_ASSERT(next_state <= UI_STATE_ERROR, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(next_state <= UI_STATE_PAIRING, CEEPEW_ERR_PARAM);
     g_ui_ctx.next_state = next_state;
     return CEEPEW_OK;
 }
