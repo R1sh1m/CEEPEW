@@ -36,6 +36,13 @@ CeePewErr_t hal_radio_send(const uint8_t *buf, uint16_t len);
 CeePewErr_t hal_radio_set_recv_cb(esp_now_recv_cb_t cb);
 CeePewErr_t hal_radio_set_channel(uint8_t channel);
 
+/* Send status callback: optional hook for upper layers to be notified when
+ * the low-level ESP-NOW send completes (success or failure). Useful for
+ * implementing a transport-layer wait-for-ACK using the radio's send callback.
+ */
+typedef void (*hal_radio_send_status_cb_t)(esp_now_send_status_t status);
+CeePewErr_t hal_radio_set_send_status_cb(hal_radio_send_status_cb_t cb);
+
 /* hal_radio_get_rx_queue: Return the RX frame queue handle.
  *
  * The queue is created during hal_radio_init() and persists for the lifetime

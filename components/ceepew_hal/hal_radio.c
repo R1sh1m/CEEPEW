@@ -76,6 +76,9 @@ static bool mac_is_zero(const uint8_t mac[6]){
 /* ESP-NOW send callback (ESP-IDF v6 signature):
  *   void (*esp_now_send_cb_t)(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
  */
+/* Send status callback registered by upper layers (optional) */
+static hal_radio_send_status_cb_t s_send_status_cb = NULL;
+
 static void radio_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_status_t status){
     CEEPEW_ASSERT_VOID(tx_info != NULL);
     (void)tx_info;
@@ -84,6 +87,17 @@ static void radio_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_statu
     } else {
         ESP_LOGW(TAG, "ESP-NOW TX FAILED (status=%d)", (int)status);
     }
+
+    /* Notify registered upper-layer callback if present */
+    if (s_send_status_cb != NULL) {
+        s_send_status_cb(status);
+    }
+}
+
+CeePewErr_t hal_radio_set_send_status_cb(hal_radio_send_status_cb_t cb){
+    CEEPEW_ASSERT(s_initialised, CEEPEW_ERR_BUSY);
+    s_send_status_cb = cb;
+    return CEEPEW_OK;
 }
 
 /* Receive callback — invoked by WiFi task on Core 0.
@@ -288,14 +302,20 @@ CeePewErr_t hal_radio_set_peer(const uint8_t peer_mac[6]){
     CEEPEW_ASSERT(peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(!mac_is_zero(peer_mac), CEEPEW_ERR_PARAM);
 
+    uint8_t old_peer[6] = {0};
+    if (s_peer_added) {
+        /* Preserve the currently-registered peer before overwriting */
+        memcpy(old_peer, s_peer_mac, 6U);
+    }
+
     memcpy(s_peer_mac, peer_mac, 6U);
     s_peer_set = true;
 
     if (!s_initialised) { return CEEPEW_OK;   /* will be registered when init() is called */}
 
-    /* Remove old peer if registered */
+    /* Remove old peer if registered (delete using preserved old_peer) */
     if (s_peer_added) {
-        (void)esp_now_del_peer(s_peer_mac);
+        (void)esp_now_del_peer(old_peer);
         s_peer_added = false;
     }
 

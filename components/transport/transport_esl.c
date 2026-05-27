@@ -164,10 +164,10 @@ static CeePewErr_t dos_generate_cookie(const uint8_t sender_mac[6], uint32_t tim
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000LL);
     uint32_t elapsed = (now > s_dos_ctx.last_rotate_time)  ? (now - s_dos_ctx.last_rotate_time)  : 0U;
     if (elapsed > CEEPEW_COOKIE_ROTATE_S) {
-        /* In production, use crypto_rng here */
-        for (uint8_t i = 0U; i < 32U; i++) {
-            s_dos_ctx.server_secret[i] ^= (uint8_t)(now >> (i % 4U));
-        }
+        /* Rotate server secret securely using RNG */
+        CeePewErr_t rng_err = crypto_rng_fill(s_dos_ctx.server_secret,
+                                              (uint32_t)sizeof(s_dos_ctx.server_secret));
+        CEEPEW_ASSERT(rng_err == CEEPEW_OK, rng_err);
         s_dos_ctx.last_rotate_time = now;
     }
 
