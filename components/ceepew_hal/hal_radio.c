@@ -95,7 +95,9 @@ static void radio_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_statu
 }
 
 CeePewErr_t hal_radio_set_send_status_cb(hal_radio_send_status_cb_t cb){
-    CEEPEW_ASSERT(s_initialised, CEEPEW_ERR_BUSY);
+    /* Allow registration before full radio init; the callback will be invoked
+     * if/when the ESP-NOW send callback is registered during hal_radio_init().
+     */
     s_send_status_cb = cb;
     return CEEPEW_OK;
 }
