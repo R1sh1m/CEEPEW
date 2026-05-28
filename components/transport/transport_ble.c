@@ -30,7 +30,6 @@ static const char *TAG = "transport_ble";
 
 #ifdef CONFIG_BT_ENABLED
 static void transport_ble_format_mac(const uint8_t mac[6], char out[18]);
-static void transport_ble_clear_discovery_peer_state(void);
 static bool s_discovery_restart_pending = false;
 static void transport_ble_log_peer_snapshot(const char *prefix,
                                             const BlePeerRecord_t *peer)
@@ -112,13 +111,14 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 
 #define CEEPEW_RESTART_DEBOUNCE_MS  2000U
 static uint32_t s_last_restart_ms = 0U;
+static uint32_t s_scan_retry_after_ms = 0U;
 static bool s_scan_requested;
 static bool s_adv_data_set;
 static bool s_scan_rsp_set;
 static bool s_adv_starting;
 static bool s_scan_start_failed;
 
-static CeePewErr_t transport_ble_restart_discovery_session(void)
+CeePewErr_t transport_ble_restart_discovery_session(void)
 {
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
     if (s_last_restart_ms != 0U &&
@@ -149,6 +149,7 @@ static CeePewErr_t transport_ble_restart_discovery_session(void)
     transport_ble_clear_discovery_peer_state();
     s_scan_requested = false;
     s_scan_start_failed = false;
+    s_scan_retry_after_ms = 0U;
     s_adv_data_set = false;
     s_scan_rsp_set = false;
     s_adv_starting = false;
@@ -178,7 +179,7 @@ static bool s_scan_peer_dedupe_valid = false;
 static uint8_t s_scan_peer_dedupe_mac[6U] = {0U};
 static uint32_t s_scan_peer_dedupe_seen_ms = 0U;
 
-static void transport_ble_clear_discovery_peer_state(void)
+void transport_ble_clear_discovery_peer_state(void)
 {
     memset(g_ble_ctx.peer_mac, 0U, sizeof(g_ble_ctx.peer_mac));
     memset(g_ble_ctx.peer_name, 0U, sizeof(g_ble_ctx.peer_name));
@@ -241,6 +242,17 @@ static const char *transport_ble_state_name(BleState_t state)
         case BLE_DONE: return "done";
         default: return "unknown";
     }
+}
+
+static bool transport_ble_peer_is_recent_at(uint32_t now_ms, uint32_t max_age_ms)
+{
+    CEEPEW_ASSERT(max_age_ms > 0U, false);
+
+    if (!g_ble_ctx.discovered || g_ble_ctx.last_seen_ms == 0U) {
+        return false;
+    }
+
+    return (uint32_t)(now_ms - g_ble_ctx.last_seen_ms) <= max_age_ms;
 }
 
 static bool transport_ble_scan_peer_is_duplicate(const uint8_t mac[6U],
@@ -524,6 +536,16 @@ CeePewErr_t transport_ble_start_scan(void)
         return CEEPEW_OK;
     }
 
+    if (g_ble_ctx.is_scanning ||
+        g_ble_ctx.state == BLE_SCANNING ||
+        g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING) {
+        ESP_LOGI(TAG, "Scan already active; clearing retry state");
+        s_scan_requested = false;
+        s_scan_start_failed = false;
+        s_scan_retry_after_ms = 0U;
+        return CEEPEW_OK;
+    }
+
     if (g_ble_ctx.state != BLE_IDLE &&
         g_ble_ctx.state != BLE_ADVERTISING &&
         g_ble_ctx.state != BLE_SCANNING &&
@@ -556,6 +578,10 @@ CeePewErr_t transport_ble_start_scan(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gap_set_scan_params failed: %d (%s)",
                  err, esp_err_to_name(err));
+        s_scan_requested = false;
+        s_scan_start_failed = true;
+        s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
+                                CEEPEW_RESTART_DEBOUNCE_MS;
         return CEEPEW_ERR_HW;
     }
     s_scan_requested = true;
@@ -580,16 +606,33 @@ BleState_t transport_ble_get_state(void)
 
 const BlePeerRecord_t *transport_ble_get_peer(void)
 {
-    if (!g_ble_ctx.discovered) { return NULL; }
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (!transport_ble_peer_is_recent_at(now_ms, CEEPEW_DISCOVERY_PEER_VISIBLE_MS)) {
+        return NULL;
+    }
     return &g_ble_ctx.peer_record;
+}
+
+const BlePeerRecord_t *transport_ble_get_peer_cached(void)
+{
+    if (!g_ble_ctx.discovered) {
+        return NULL;
+    }
+    return &g_ble_ctx.peer_record;
+}
+
+bool transport_ble_has_peer_cached(void)
+{
+    return transport_ble_get_peer_cached() != NULL;
 }
 
 CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6])
 {
     CEEPEW_ASSERT(peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(g_ble_ctx.state == BLE_SCANNING ||
-                  g_ble_ctx.state == BLE_ADVERTISING ||
-                  g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING, CEEPEW_ERR_PARAM);
+
+    if (g_ble_ctx.gattc_connected || g_ble_ctx.connecting) {
+        return CEEPEW_ERR_BUSY;
+    }
 
     memcpy(g_ble_ctx.peer_mac, peer_mac, 6U);
     char peer_mac_str[18];
@@ -724,9 +767,12 @@ CeePewErr_t transport_ble_verify_pending_commitment(void)
     ceepew_secure_zero(g_ble_ctx.pending_peer_commitment, (uint32_t)sizeof(g_ble_ctx.pending_peer_commitment));
     if (err != CEEPEW_OK) {
         ESP_LOGW(TAG, "Deferred commitment verification failed: %d", (int)err);
-        (void)ui_manager_transition_to(UI_STATE_CODE_DIFFERENT);
+        g_ui_ctx.pairing_result_reason =
+            (err == CEEPEW_ERR_AUTH_FAIL) ? UI_PAIRING_RESULT_COMMITMENT_FAIL
+                                          : UI_PAIRING_RESULT_LINK_FAIL;
+        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
         g_ui_ctx.transition_ready = true;
-        (void)transport_ble_restart_discovery_session();
+        (void)transport_ble_disconnect();
     }
     return err;
 }
@@ -809,16 +855,18 @@ CeePewErr_t transport_ble_disconnect(void)
     if (s_discovery_restart_pending) {
         g_ble_ctx.state = BLE_ADVERTISING_AND_SCANNING;
     } else {
-        g_ble_ctx.state = BLE_IDLE;
+        transport_ble_update_state_from_flags();
     }
     g_ble_ctx.handoff_ready = false;
     g_ble_ctx.gattc_connected = false;
     g_ble_ctx.gatts_connected = false;
     g_ble_ctx.connecting = false;
-    g_ble_ctx.is_advertising = false;
-    g_ble_ctx.is_scanning = false;
     s_scan_requested = false;
-    ESP_LOGI(TAG, "BLE disconnected: state=%s", transport_ble_state_name(g_ble_ctx.state));
+    transport_ble_update_state_from_flags();
+    ESP_LOGI(TAG, "BLE disconnected: state=%s adv=%u scan=%u",
+             transport_ble_state_name(g_ble_ctx.state),
+             g_ble_ctx.is_advertising ? 1U : 0U,
+             g_ble_ctx.is_scanning ? 1U : 0U);
 
     return CEEPEW_OK;
 }
@@ -848,6 +896,7 @@ CeePewErr_t transport_ble_deinit(void)
     s_scan_rsp_set = false;
     s_adv_starting = false;
     s_scan_start_failed = false;
+    s_scan_retry_after_ms = 0U;
     s_ble_initialised = false;
     return CEEPEW_OK;
 }
@@ -863,11 +912,10 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
 {
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
     /* ── Peer-lost timeout check ──────────────────────────────────────── */
     {
-        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-
         /*
          * CRITICAL FIX:
          * Do NOT clear the discovered peer if:
@@ -887,12 +935,12 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
                        || g_ble_ctx.handoff_ready
                        || session_is_active();
 
-        const uint32_t PEER_LOST_TIMEOUT_MS = 20000U; /* 20 s */
+        const uint32_t PEER_LOST_TIMEOUT_MS = CEEPEW_DISCOVERY_PEER_CLEAR_MS;
 
         if (!skip_clear
             && g_ble_ctx.discovered
             && g_ble_ctx.last_seen_ms != 0U
-            && (now_ms - g_ble_ctx.last_seen_ms) > PEER_LOST_TIMEOUT_MS) {
+            && !transport_ble_peer_is_recent_at(now_ms, PEER_LOST_TIMEOUT_MS)) {
 
             ESP_LOGW(TAG, "Peer truly lost: last seen %lu ms ago — clearing discovered",
                      (unsigned long)(now_ms - g_ble_ctx.last_seen_ms));
@@ -913,10 +961,30 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     /* ── Scan retry ────────────────────────────────────────────────────── */
     if (!s_scan_start_failed) { return CEEPEW_OK; }
 
+    if (s_scan_retry_after_ms != 0U && now_ms < s_scan_retry_after_ms) {
+        return CEEPEW_OK;
+    }
+
+    if (g_ble_ctx.is_scanning ||
+        g_ble_ctx.state == BLE_SCANNING ||
+        g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING) {
+        ESP_LOGI(TAG, "Scan is already active; dropping retry request");
+        s_scan_requested = false;
+        s_scan_start_failed = false;
+        s_scan_retry_after_ms = 0U;
+        return CEEPEW_OK;
+    }
+
     ESP_LOGW(TAG, "Retrying BLE scan start after previous failure");
     s_scan_requested    = false;
     s_scan_start_failed = false;
-    return transport_ble_start_scan();
+    s_scan_retry_after_ms = 0U;
+    CeePewErr_t err = transport_ble_start_scan();
+    if (err != CEEPEW_OK) {
+        s_scan_start_failed = true;
+        s_scan_retry_after_ms = now_ms + CEEPEW_RESTART_DEBOUNCE_MS;
+    }
+    return err;
 }
 
 #ifdef CONFIG_BT_ENABLED
@@ -993,6 +1061,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                      param->scan_param_cmpl.status);
             s_scan_requested    = false;
             s_scan_start_failed = true;
+            s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
+                                    CEEPEW_RESTART_DEBOUNCE_MS;
             break;
         }
         {
@@ -1002,6 +1072,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                          e, esp_err_to_name(e));
                 s_scan_requested    = false;
                 s_scan_start_failed = true; /* retry via transport_ble_retry_scan_if_needed */
+                s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
+                                        CEEPEW_RESTART_DEBOUNCE_MS;
             } else {
                 ESP_LOGI(TAG, "Scanning started: active, allow-all, continuous");
             }
@@ -1020,6 +1092,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                      param->scan_start_cmpl.status);
             s_scan_requested    = false;
             s_scan_start_failed = true;
+            s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
+                                    CEEPEW_RESTART_DEBOUNCE_MS;
         }
         transport_ble_update_state_from_flags();
         ESP_LOGI(TAG, "State after scan start: %s",
@@ -1125,6 +1199,18 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                               payload_has_ceepew_name);
 
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        if (g_ble_ctx.discovered &&
+            !g_ble_ctx.gattc_connected &&
+            !g_ble_ctx.gatts_connected &&
+            !g_ble_ctx.commitment_verified &&
+            !g_ble_ctx.handoff_ready &&
+            !session_is_active() &&
+            !transport_ble_peer_is_recent_at(now_ms, CEEPEW_DISCOVERY_PEER_CLEAR_MS)) {
+            ESP_LOGI(TAG, "Cached peer expired after %lu ms — clearing discovery cache",
+                     (unsigned long)(now_ms - g_ble_ctx.last_seen_ms));
+            transport_ble_clear_discovery_peer_state();
+        }
+
         bool duplicate_same_peer = false;
         if (is_ceepew_peer &&
             transport_ble_scan_peer_is_duplicate(param->scan_rst.bda, now_ms)) {
@@ -1292,7 +1378,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         case ESP_GATTC_WRITE_CHAR_EVT:
             if (param->write.status != ESP_GATT_OK) {
                 ESP_LOGE(TAG, "GATTC write failed: %d", param->write.status);
-                (void)transport_ble_restart_discovery_session();
+                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                g_ui_ctx.transition_ready = true;
+                (void)transport_ble_disconnect();
             } else {
                 ESP_LOGI(TAG, "GATTC write complete — commitment sent to peer");
 
@@ -1308,7 +1397,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 if (local_zero == 0U) {
                     ESP_LOGW(TAG, "GATTC write ack with empty local commitment — disconnecting");
                     g_ble_ctx.verify_fail_count++;
-                    (void)transport_ble_restart_discovery_session();
+                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                    (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                    g_ui_ctx.transition_ready = true;
+                    (void)transport_ble_disconnect();
                 } else {
                     /*
                      * INITIATOR PATH:
@@ -1339,6 +1431,15 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             g_ble_ctx.gattc_char_handle = 0U;
             ESP_LOGI(TAG, "GATTC disconnected");
 
+            bool pairing_failure_visible_gattc =
+                (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED ||
+                 g_ui_ctx.next_state == UI_STATE_PAIRING_FAILED);
+            if (pairing_failure_visible_gattc) {
+                g_ble_ctx.reconnect_attempts = 0U;
+                g_ble_ctx.state = BLE_IDLE;
+                break;
+            }
+
             /* If disconnect occurred before successful commitment verification,
              * attempt a limited number of reconnects before clearing the peer. */
             if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
@@ -1350,9 +1451,11 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                     /* Try reconnecting */
                     (void)transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
                 } else {
-                    ESP_LOGW(TAG, "Reconnect attempts exhausted — restarting discovery without idling");
+                    ESP_LOGW(TAG, "Reconnect attempts exhausted — reporting pairing failure");
                     g_ble_ctx.reconnect_attempts = 0U;
-                    (void)transport_ble_restart_discovery_session();
+                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                    (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                    g_ui_ctx.transition_ready = true;
                 }
             } else {
                 g_ble_ctx.state = BLE_IDLE;
@@ -1408,19 +1511,31 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         case ESP_GATTS_CONNECT_EVT:
             g_ble_ctx.gatts_connected = true;
             g_ble_ctx.conn_id = param->connect.conn_id;
-            ESP_LOGI(TAG, "GATTS connected: conn_id=%u", (unsigned)g_ble_ctx.conn_id);
+            g_ble_ctx.state = BLE_CONNECTED;
+            g_ble_ctx.is_advertising = false;
+            ESP_LOGI(TAG, "GATTS connected: conn_id=%u state=BLE_CONNECTED",
+                     (unsigned)g_ble_ctx.conn_id);
             break;
 
         case ESP_GATTS_DISCONNECT_EVT:
             g_ble_ctx.gatts_connected = false;
             ESP_LOGI(TAG, "GATTS disconnected");
 
+            bool pairing_failure_visible_gatts =
+                (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED ||
+                 g_ui_ctx.next_state == UI_STATE_PAIRING_FAILED);
+            if (pairing_failure_visible_gatts) {
+                g_ble_ctx.state = BLE_IDLE;
+                break;
+            }
+
             /* If responder disconnected before verification, clear discovered peer */
             if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
-                ESP_LOGI(TAG, "Responder disconnected before verification — clearing discovered peer");
+                ESP_LOGI(TAG, "Responder disconnected before verification — reporting pairing failure");
                 transport_ble_clear_discovery_peer_state();
-                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
-                (void)transport_ble_restart_discovery_session();
+                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                g_ui_ctx.transition_ready = true;
             }
             break;
 

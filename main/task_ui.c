@@ -57,9 +57,11 @@ static CeePewErr_t ui_handle_events(void)
             /* Session established on Core 1 → drive UI to key-derivation screen.
              * This ensures BOTH devices reliably enter the secure-chat flow,
              * not just the one that happened to win the timing race.            */
-            ESP_LOGI("UI", "SESSION_ESTABLISHED — transitioning to KEYDER");
-            if (g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
-                g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
+            ESP_LOGI("UI", "SESSION_ESTABLISHED received");
+            if ((g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+                 g_ui_ctx.current_state == UI_STATE_DISCOVERY) &&
+                g_ui_ctx.next_state != UI_STATE_PAIRING_SUCCESS &&
+                g_ui_ctx.next_state != UI_STATE_PAIRING_FAILED) {
                 (void)ui_manager_transition_to(UI_STATE_KEYDER);
                 g_ui_ctx.transition_ready = true;
             }

@@ -214,7 +214,9 @@ CeePewErr_t session_phase2_derive_key(void){
     memcpy(hkdf_info + info_off, s_session.session_code, 32U);
     info_off += 32U;
 
-    uint32_t t_round = s_session.phase2_timestamp / CEEPEW_T_ROUND_S;
+    /* All devices must hash the exact same info bytes. A device-local boot
+     * timestamp would diverge here, so t_round is intentionally fixed. */
+    uint32_t t_round = 0U;
     memcpy(hkdf_info + info_off, &t_round, 4U);
     info_off += 4U;
 
@@ -400,7 +402,9 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
         uint8_t tmp[6]; memcpy(tmp, id_a, 6U); memcpy(id_a, id_b, 6U); memcpy(id_b, tmp, 6U);
     }
 
-    uint32_t t_round = (uint32_t)(s_session.phase2_timestamp);
+    /* The commitment must be identical on both peers; local timestamps would
+     * never match because each MCU boots at a different time. */
+    uint32_t t_round = 0U;
 
     uint8_t info[64];
     size_t off = 0U;

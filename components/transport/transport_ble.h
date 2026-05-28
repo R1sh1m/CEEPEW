@@ -53,6 +53,9 @@ typedef enum {
     BLE_DONE
 } BleState_t;
 
+#define CEEPEW_DISCOVERY_PEER_VISIBLE_MS 2000U
+#define CEEPEW_DISCOVERY_PEER_CLEAR_MS   8000U
+
 /* Peer discovery record (found during scan) */
 typedef struct {
     uint8_t  peer_mac[6];
@@ -122,17 +125,32 @@ CeePewErr_t transport_ble_start_advertising(void);
 /* Start BLE scan (Phase 1 responder). Scans for peer advertisements. */
 CeePewErr_t transport_ble_start_scan(void);
 
+/* Restart discovery from a clean slate (disconnect, clear peer cache, re-arm adv/scan). */
+CeePewErr_t transport_ble_restart_discovery_session(void);
+
 /* Get current BLE state */
 BleState_t transport_ble_get_state(void);
 
-/* Get discovered peer (after scan completes). Returns NULL if no peer found. */
+/* Get discovered peer for UI freshness-gated rendering only. */
 const BlePeerRecord_t *transport_ble_get_peer(void);
+
+/* Get discovered peer cache regardless of freshness (pairing control path). */
+const BlePeerRecord_t *transport_ble_get_peer_cached(void);
+
+/* True if a peer has been discovered and cached for pairing. */
+bool transport_ble_has_peer_cached(void);
+
+/* Clear cached discovery peer state (used when restarting pairing). */
+void transport_ble_clear_discovery_peer_state(void);
 
 /* Initiate BLE connection to discovered peer (Phase 1 → Phase 2) */
 CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6]);
 
 /* Retry a previously failed scan start (called periodically from task_session) */
 CeePewErr_t transport_ble_retry_scan_if_needed(void);
+
+/* Retry pending commitment writes/handshake retries (called from task_session tick). */
+CeePewErr_t transport_ble_retry_commitment_if_needed(void);
 
 /* Exchange commitment hash via GATT (Phase 2).
  * Sets g_ble_ctx.commitment_digest and waits for peer to confirm. */

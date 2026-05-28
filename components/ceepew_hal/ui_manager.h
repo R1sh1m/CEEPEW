@@ -37,7 +37,18 @@ typedef enum {
     UI_STATE_INFO = 15U,           /* DIAG-only: Info / diagnostics display */
     UI_STATE_ERROR = 16U,         /* Phase 4: Generic error display */
     UI_STATE_PAIRING = 17U,       /* Sprint 9: Pairing countdown state (legacy name) */
+    UI_STATE_PAIRING_SUCCESS = 18U, /* Pairing outcome: success banner */
+    UI_STATE_PAIRING_FAILED = 19U,  /* Pairing outcome: failure banner */
 } UIState_t;
+
+typedef enum {
+    UI_PAIRING_RESULT_NONE = 0U,
+    UI_PAIRING_RESULT_SUCCESS = 1U,
+    UI_PAIRING_RESULT_TIMED_OUT = 2U,
+    UI_PAIRING_RESULT_LINK_FAIL = 3U,
+    UI_PAIRING_RESULT_COMMITMENT_FAIL = 4U,
+    UI_PAIRING_RESULT_UNKNOWN = 5U,
+} PairingResultReason_t;
 
 /* Animation frame context */
 typedef struct {
@@ -65,6 +76,8 @@ typedef struct {
     uint32_t      code_entry_start_ms; /* ms timestamp when code entry became visible */
     uint32_t      countdown_start_ms; /* ms timestamp when countdown began */
     uint32_t      pairing_start_ms; /* ms timestamp when pairing began */
+    uint32_t      pairing_result_start_ms; /* ms timestamp when result banner began */
+    uint8_t       pairing_result_reason; /* PairingResultReason_t */
     /* Sprint-12 cryptogram context */
     uint8_t       commitment[CEEPEW_COMMITMENT_BYTES];        /* Local session commitment (SHA256 truncated) */
     uint8_t       peer_commitment[CEEPEW_COMMITMENT_BYTES];   /* Peer commitment from BLE */

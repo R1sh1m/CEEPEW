@@ -126,6 +126,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
         uint8_t    phase     = session_get_phase();
         BleState_t ble_state = transport_ble_get_state();
+        const BlePeerRecord_t *peer = transport_ble_get_peer();
+        if (g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS ||
+            g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
+            return CEEPEW_OK;
+        }
         /* Nothing to do once active session is established */
         if (phase == 3U && session_is_active()) {return CEEPEW_OK;}
 
@@ -138,27 +143,24 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         }
 
         /* ── STEP 1: Accept peer MAC into session FSM once discovered ────────── */
-        if (phase == 1U && g_ble_ctx.discovered && !s_ble_peer_latched) {
-            const BlePeerRecord_t *peer = transport_ble_get_peer();
-            if (peer != NULL) {
-                char peer_mac[18];
-                task_session_format_mac(peer->peer_mac, peer_mac);
-                ESP_LOGI(TAG, "Discovery peer latched: mac=%s rssi=%d hits=%u name_len=%u",
-                        peer_mac, (int)peer->rssi, (unsigned)g_ble_ctx.scan_hit_count,
-                        (unsigned)peer->name_len);
-                (void)session_phase1_accept_peer(peer->peer_mac);
-                s_ble_peer_latched = true;
-            }
+        if (phase == 1U && peer != NULL && !s_ble_peer_latched) {
+            char peer_mac[18];
+            task_session_format_mac(peer->peer_mac, peer_mac);
+            ESP_LOGI(TAG, "Discovery peer latched: mac=%s rssi=%d hits=%u name_len=%u",
+                    peer_mac, (int)peer->rssi, (unsigned)g_ble_ctx.scan_hit_count,
+                    (unsigned)peer->name_len);
+            (void)session_phase1_accept_peer(peer->peer_mac);
+            s_ble_peer_latched = true;
         }
 
         /* ── STEP 2: Determine initiator / responder role ─────────────────────
         * Lower MAC = initiator (opens GATT connection).
         * Higher MAC = responder (listens, never calls connect_to_peer).          */
         bool is_initiator = false;
-        if (g_ble_ctx.discovered) {
+        if (peer != NULL) {
             uint8_t self_mac[CEEPEW_DEVICE_ID_BYTES] = {0U};
             if (session_get_device_id(self_mac) == CEEPEW_OK) {
-                is_initiator = (memcmp(self_mac, g_ble_ctx.peer_mac,
+                is_initiator = (memcmp(self_mac, peer->peer_mac,
                                     CEEPEW_DEVICE_ID_BYTES) < 0);
             }
             ceepew_secure_zero(self_mac, sizeof(self_mac));
@@ -166,13 +168,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
         /* ── STEP 3: Initiator connects during code-entry ─────────────────────
         * Only the initiator calls connect_to_peer. Responder stays passive.      */
-        if (phase == 1U && is_initiator && g_ble_ctx.discovered && !g_ble_ctx.connecting &&
+        if (phase == 1U && is_initiator && peer != NULL && !g_ble_ctx.connecting &&
             !g_ble_ctx.gattc_connected && g_ui_ctx.current_state == UI_STATE_CODE_ENTRY &&
             (ble_state == BLE_ADVERTISING || ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING)) {
-            const BlePeerRecord_t *peer = transport_ble_get_peer();
-            if (peer != NULL) {
-                CeePewErr_t err = transport_ble_connect_to_peer(peer->peer_mac);
-                if (err != CEEPEW_OK) { return err; }}
+            CeePewErr_t err = transport_ble_connect_to_peer(peer->peer_mac);
+            if (err != CEEPEW_OK) { return err; }
             /* Connection completes asynchronously; yield now */
             return CEEPEW_OK;
         }
@@ -180,7 +180,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* ── STEP 4: Both devices — initiate phase 2 when user confirms code ──
         * Runs exactly once per pairing when the UI transitions to COUNTDOWN
         * or PAIRING. Both states represent user confirmation of the code.      */
-        if (phase == 1U && g_ble_ctx.discovered &&
+        if (phase == 1U && peer != NULL &&
             (g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
              g_ui_ctx.current_state == UI_STATE_PAIRING)) {
 
@@ -256,8 +256,9 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             CeePewErr_t err = session_phase2_derive_key();
             if (err != CEEPEW_OK) { return err; }
 
-            /* Transition UI to key-derivation animation so user sees progress */
-            (void)ui_manager_transition_to(UI_STATE_KEYDER);
+            /* Show a dedicated pairing success banner before moving on. */
+            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_SUCCESS;
+            (void)ui_manager_transition_to(UI_STATE_PAIRING_SUCCESS);
             g_ui_ctx.transition_ready = true;
 
             (void)transport_ble_disconnect();
@@ -315,6 +316,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             case UI_STATE_INFO: return "info";
             case UI_STATE_ERROR: return "error";
             case UI_STATE_PAIRING: return "pairing";
+            case UI_STATE_PAIRING_SUCCESS: return "pair_ok";
+            case UI_STATE_PAIRING_FAILED: return "pair_fail";
             default: return "unknown";
         }
     }
@@ -375,7 +378,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         bool active = session_is_active();
         BleState_t ble_state = transport_ble_get_state();
         uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
-        bool discovered = g_ble_ctx.discovered;
+        const BlePeerRecord_t *peer = transport_ble_get_peer();
+        bool discovered = (peer != NULL);
         uint8_t ble_hits = g_ble_ctx.scan_hit_count;
         int8_t ble_rssi = g_ble_ctx.peer_rssi;
         bool scan_active = (ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING);
@@ -420,8 +424,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         if (changed) {
             char peer_mac[18] = "<none>";
             char peer_name[17] = "<none>";
-            if (discovered) {
-                task_session_format_mac(g_ble_ctx.peer_mac, peer_mac);
+            if (peer != NULL) {
+                task_session_format_mac(peer->peer_mac, peer_mac);
                 if (g_ble_ctx.peer_record.name_len > 0U) {
                     uint8_t name_len = g_ble_ctx.peer_record.name_len;
                     if (name_len > 16U) { name_len = 16U; }
@@ -452,8 +456,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         if (scan_active && (s_last_ble_scan_heartbeat_ms == 0ULL ||
             (now_ms - s_last_ble_scan_heartbeat_ms) >= 2000ULL)) {
             char peer_mac[18] = "<none>";
-            if (discovered) {
-                task_session_format_mac(g_ble_ctx.peer_mac, peer_mac);
+            if (peer != NULL) {
+                task_session_format_mac(peer->peer_mac, peer_mac);
             }
 
             ESP_LOGI(TAG, "scan heartbeat: state=%s seen=%lu peer_hits=%u peer=%s rssi=%d adv=%u scan=%u",
@@ -753,15 +757,16 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                             continue;
                         }
                     }
+                }
 
-                    /* Re-check deferred peer commitment on the normal session tick so
-                     * late GATTS writes are consumed even if they arrive after Step 4. */
-                    if (session_get_phase() == 2U && g_ble_ctx.peer_commitment_pending) {
-                        CeePewErr_t verify_err = transport_ble_verify_pending_commitment();
-                        if (verify_err != CEEPEW_OK) {
-                            ESP_LOGW(TAG, "Periodic commitment re-check failed: %d",
-                                    (int)verify_err);
-                        }
+                /* Re-check deferred peer commitment on the normal session tick so
+                 * late GATTS writes are consumed even if they arrive after Step 4.
+                 * This must run during Phase 2 before session_is_active() becomes true. */
+                if (session_get_phase() == 2U && g_ble_ctx.peer_commitment_pending) {
+                    CeePewErr_t verify_err = transport_ble_verify_pending_commitment();
+                    if (verify_err != CEEPEW_OK) {
+                        CEEPEW_LOG(TAG, "Periodic commitment re-check failed: %d",
+                                (int)verify_err);
                     }
                 }
 
