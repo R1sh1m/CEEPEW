@@ -958,6 +958,14 @@ static void draw_peer_blip(uint8_t bx, uint8_t by,
     };
     hal_ui_rect_fill(&base, HAL_UI_WHITE);
 
+    /* Small ring so the blip stays readable on the 128x64 radar. */
+    if (age_ms < 25000U) {
+        draw_circle((int16_t)bx, (int16_t)by, 3U);
+        if (pulse_phase == 0U || age_ms < 800U) {
+            draw_circle((int16_t)bx, (int16_t)by, 5U);
+        }
+    }
+
     /* Compute a slow time-based offset so the blip drifts visibly over time.
      * This only affects the displayed index; the actual peer coordinates
      * (bx,by) remain the source of the marker. The offset updates every 2s. */
@@ -1031,13 +1039,13 @@ static CeePewErr_t render_discovery(void)
     #define RPANEL_WIDTH    73U     /* 128 - 55 = 73px available (expanded from 67) */
     #define LINE_HEIGHT     9U      /* 7px glyph + 2px gap */
     #define Y_TITLE         1U      /* Rotating title row */
-    #define Y_PEER_ID       10U     /* Peer info section (gap: 9px) */
-    #define Y_RSSI_BARS     14U     /* RSSI signal bars (moved up) */
-    #define Y_RSSI_DBM      22U     /* dBm value (closer to bars) */
-    #define Y_PAIR_BTN      34U     /* PAIR button */
-    #define Y_HINT          43U     /* Pairing hint text */
-    #define Y_BLE_STATE     43U     /* BLE: XXXX state */
-    #define Y_STATUS        54U     /* Status line (gap: 9px) — bottom row, can scroll if long */
+    #define Y_PEER_ID       10U     /* Peer info section */
+    #define Y_RSSI_BARS     18U     /* RSSI signal bars */
+    #define Y_RSSI_DBM      27U     /* dBm value */
+    #define Y_PAIR_BTN      36U     /* PAIR button */
+    #define Y_HINT          45U     /* Pairing hint text */
+    #define Y_BLE_STATE     45U     /* BLE: XXXX state */
+    #define Y_STATUS        54U     /* Status line (bottom row) */
 
     /* ── Left panel: Radar ── */
     draw_radar_static();
@@ -1172,8 +1180,8 @@ static CeePewErr_t render_code_entry(void)
     /* Four aligned cells spread across the full width. */
     const uint8_t cell_x[4U] = { 8U, 38U, 68U, 98U };
     const uint8_t cell_w     = 22U;
-    const uint8_t cell_h     = 22U;
-    const uint8_t cell_y     = 18U;
+    const uint8_t cell_h     = 18U;
+    const uint8_t cell_y     = 14U;
 
     for (uint8_t i = 0U; i < 4U; i++) {
         bool is_active = (g_ui_ctx.code_selected == i);
@@ -1212,7 +1220,7 @@ static CeePewErr_t render_code_entry(void)
             show_digit = (uint8_t)((f / 6U) % 3U) != 2U; /* 2 frames on, 1 off */
         }
         if (show_digit) {
-            hal_ui_text((uint8_t)(cell_x[i] + 7U), (uint8_t)(cell_y + 7U), digit_str, HAL_UI_WHITE);
+            hal_ui_text((uint8_t)(cell_x[i] + 7U), (uint8_t)(cell_y + 5U), digit_str, HAL_UI_WHITE);
         }
     }
 
@@ -1220,13 +1228,13 @@ static CeePewErr_t render_code_entry(void)
     for (uint8_t i = 0U; i < 4U; i++) {
         uint8_t dot_x = (uint8_t)(cell_x[i] + cell_w / 2U);
         if (g_ui_ctx.code_selected == i) {
-            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 2U), .y = 48U, .w = 5U, .h = 5U };
+            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 2U), .y = 38U, .w = 5U, .h = 5U };
             hal_ui_rect_fill(&dot, HAL_UI_WHITE);
         } else if (i < g_ui_ctx.code_selected) {
-            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 1U), .y = 49U, .w = 3U, .h = 3U };
+            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 1U), .y = 39U, .w = 3U, .h = 3U };
             hal_ui_rect_fill(&dot, HAL_UI_WHITE);
         } else {
-            draw_pixel(dot_x, 50U);
+            draw_pixel(dot_x, 40U);
         }
     }
 
@@ -1259,21 +1267,23 @@ static CeePewErr_t render_countdown(void)
 
     /* Show the fixed 4-digit code while the pairing window runs. */
     const uint8_t code_x[4U] = { 8U, 38U, 68U, 98U };
+    const uint8_t code_y = 14U;
+    const uint8_t code_h = 18U;
     for (uint8_t i = 0U; i < 4U; i++) {
-        HalUIRect_t box = { .x = code_x[i], .y = 18U, .w = 22U, .h = 18U };
+        HalUIRect_t box = { .x = code_x[i], .y = code_y, .w = 22U, .h = code_h };
         hal_ui_rect(&box, HAL_UI_WHITE);
         char digit[2U] = { (char)g_ui_ctx.code_digits[i], '\0' };
-        hal_ui_text((uint8_t)(code_x[i] + 7U), 23U, digit, HAL_UI_WHITE);
+        hal_ui_text((uint8_t)(code_x[i] + 7U), (uint8_t)(code_y + 5U), digit, HAL_UI_WHITE);
     }
 
     /* Progress bar — fills as time decreases. (moved up to avoid overflow) */
     uint32_t fill = (rem_ms * 120U) / total_ms;
     if (fill > 120U) { fill = 120U; }
 
-    HalUIRect_t border = { .x = 4U, .y = 36U, .w = 120U, .h = 10U };
+    HalUIRect_t border = { .x = 4U, .y = 37U, .w = 120U, .h = 8U };
     hal_ui_rect(&border, HAL_UI_WHITE);
     if (fill > 0U) {
-        HalUIRect_t bar = { .x = 6U, .y = 38U, .w = (uint8_t)fill, .h = 6U };
+        HalUIRect_t bar = { .x = 6U, .y = 39U, .w = (uint8_t)fill, .h = 4U };
         hal_ui_rect_fill(&bar, HAL_UI_WHITE);
     }
 
@@ -1286,7 +1296,7 @@ static CeePewErr_t render_countdown(void)
     /* "Waiting for peer" blink — moved up and no numeric countdown shown */
     uint8_t blink = (uint8_t)((f / 10U) % 2U);
     if (blink == 0U) {
-        ui_draw_text_wrapped(10U, 44U, "Waiting for peer", 108U, 8U);
+        ui_draw_text_wrapped(10U, 48U, "Waiting for peer", 108U, 8U);
     }
 
     if (rem_ms == 0U) {
@@ -1533,7 +1543,7 @@ static CeePewErr_t render_keyder_anim(void)
     }
 
     /* Label inside the progress bar white band */
-    hal_ui_text(24U, 46U, "DERIVING KEY...", HAL_UI_WHITE);
+    hal_ui_text(24U, 44U, "DERIVING KEY...", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
 
@@ -1697,34 +1707,68 @@ CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir)
     if (msg == NULL) { return CEEPEW_OK; /* Skip if not available */ }
 
     /* Map direction: 0=RX (left), 1=TX (right) */
-    uint8_t bubble_x = (dir == 0U) ? 4U : 74U;
-    uint8_t bubble_w = 50U;
-    uint8_t text_x = (dir == 0U) ? 8U : 78U;
+    uint8_t bubble_dir = (msg->meta.dir <= 1U) ? msg->meta.dir : dir;
+    uint8_t bubble_x = (bubble_dir == 0U) ? 4U : 28U;
+    uint8_t bubble_w = 96U;
+    uint8_t text_x = (bubble_dir == 0U) ? 8U : 32U;
 
     /* Draw bubble outline */
-    HalUIRect_t bubble = {.x = bubble_x, .y = y_pos, .w = bubble_w, .h = 10U};
+    HalUIRect_t bubble = {.x = bubble_x, .y = y_pos, .w = bubble_w, .h = 11U};
     hal_ui_rect(&bubble, HAL_UI_WHITE);
 
-    /* Display first 8 characters of message (or less if shorter) */
-    char preview[9];
-    uint8_t chars_to_show = (msg->meta.payload_len < 8U) ? msg->meta.payload_len : 8U;
-    for (uint8_t i = 0U; i < chars_to_show; i++) {
-        preview[i] = (char)((msg->encrypted[i] >= 32U && msg->encrypted[i] < 127U) ? msg->encrypted[i] : '?');
-    }
-    preview[chars_to_show] = '\0';
-
+    /* Show compact metadata rather than ciphertext bytes. */
+    char preview[24U];
+    const char *side = (bubble_dir == 0U) ? "RX" : "TX";
+    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint32_t age_s = (now_s > msg->meta.created_at) ? (now_s - msg->meta.created_at) : 0U;
+    (void)snprintf(preview, sizeof(preview), "%s %uB %lus",
+                   side, (unsigned)msg->meta.payload_len, (unsigned long)age_s);
     hal_ui_text(text_x, (uint8_t)(y_pos + 2U), preview, HAL_UI_WHITE);
 
     /* Add status indicator (TTL countdown or delivery) */
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    uint32_t age_s = (now_s > msg->meta.created_at) ? (now_s - msg->meta.created_at) : 0U;
     uint32_t ttl_remaining = (age_s < CEEPEW_MSG_TTL_S) ? (CEEPEW_MSG_TTL_S - age_s) : 0U;
 
     /* Draw TTL indicator as small circle at top-right of bubble */
     if (ttl_remaining > 0U) {
-        uint8_t status_x = (dir == 0U) ? 50U : 120U;
+        uint8_t status_x = (bubble_dir == 0U) ? 96U : 120U;
         hal_ui_circle(status_x, y_pos, 1U, HAL_UI_WHITE);
     }
+
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t render_chat_thread(void)
+{
+    hal_ui_clear();
+
+    hal_ui_text(20U, 1U, "SECURE CHAT", HAL_UI_WHITE);
+    draw_hline(0U, 11U, 128U);
+
+    uint8_t count = msg_store_count();
+    char badge[16U];
+    (void)snprintf(badge, sizeof(badge), "M%u", (unsigned)count);
+    hal_ui_text(102U, 1U, badge, HAL_UI_WHITE);
+
+    if (count == 0U) {
+        hal_ui_text(22U, 28U, "No messages yet", HAL_UI_WHITE);
+        hal_ui_text(30U, 48U, "BTN=menu", HAL_UI_WHITE);
+        return CEEPEW_OK;
+    }
+
+    uint8_t shown = (count < 3U) ? count : 3U;
+    uint8_t start = (count > shown) ? (uint8_t)(count - shown) : 0U;
+
+    for (uint8_t i = 0U; i < shown; i++) {
+        uint8_t idx = (uint8_t)(start + i);
+        const StoredMsg_t *msg = msg_store_get(idx);
+        if (msg == NULL) {
+            continue;
+        }
+        uint8_t y = (uint8_t)(14U + i * 14U);
+        (void)ui_chat_show_bubble(idx, y, msg->meta.dir);
+    }
+
+    hal_ui_text(74U, 54U, "BTN=menu", HAL_UI_WHITE);
 
     return CEEPEW_OK;
 }
@@ -1925,6 +1969,7 @@ static CeePewErr_t render_cryptogram(void)
     /* Title */
     hal_ui_text(20U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
+    hal_ui_text(4U, 12U, "SHA-256 / 32B", HAL_UI_WHITE);
 
     ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 14U);
 
@@ -1945,16 +1990,16 @@ static CeePewErr_t render_cryptogram(void)
         /* Waiting — animated spinner at left */
         const char *spin = "|/-\\";
         char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
-        hal_ui_text(4U, 38U, sp, HAL_UI_WHITE);
-        hal_ui_text(14U, 38U, "Waiting for peer", HAL_UI_WHITE);
+        hal_ui_text(4U, 48U, sp, HAL_UI_WHITE);
+        hal_ui_text(14U, 48U, "Waiting for peer", HAL_UI_WHITE);
 
         /* Sweeping underline */
         uint8_t ul_x = (uint8_t)((f * 3U) % 128U);
-        draw_hline(ul_x, 37U, 10U);
+        draw_hline(ul_x, 46U, 10U);
 
     } else if (status == 1U) {
         /* MATCH — expanding rings from centre of display */
-        hal_ui_text(4U, 38U, "\x7e MATCH \x7e", HAL_UI_WHITE);
+        hal_ui_text(4U, 48U, "\x7e MATCH \x7e", HAL_UI_WHITE);
 
         uint8_t ring_r = (uint8_t)((f % 16U) * 2U);
         if (ring_r > 0U && ring_r < 30U) {
@@ -1997,11 +2042,11 @@ static CeePewErr_t render_cryptogram(void)
         /* MISMATCH — pulsing X with bracket animation */
         uint8_t blink = (uint8_t)((f / 5U) % 2U);
         if (blink == 0U) {
-            hal_ui_text(4U,  38U, ">", HAL_UI_WHITE);
-            hal_ui_text(14U, 38U, "MISMATCH", HAL_UI_WHITE);
-            hal_ui_text(62U, 38U, "<", HAL_UI_WHITE);
+            hal_ui_text(4U,  48U, ">", HAL_UI_WHITE);
+            hal_ui_text(14U, 48U, "MISMATCH", HAL_UI_WHITE);
+            hal_ui_text(62U, 48U, "<", HAL_UI_WHITE);
         }
-        hal_ui_text(4U, 50U, "Restart to re-pair", HAL_UI_WHITE);
+        hal_ui_text(4U, 56U, "Restart to re-pair", HAL_UI_WHITE);
     }
 
     g_ui_ctx.anim.frame_count++;
@@ -2020,7 +2065,7 @@ static CeePewErr_t render_chat_menu(void)
     /* Two options only */
     static const char *const OPTS[2U] = {
         " WRITE MESSAGE ",
-        "  READ INBOX   "
+        "  VIEW THREAD  "
     };
 
     /* Map the full potentiometer travel across the visible options. */
@@ -2261,7 +2306,9 @@ CeePewErr_t ui_manager_update(void)
                 transport_ble_set_ready_for_chat();
                 ESP_LOGI("ui", "Cryptogram state: signaled ready_for_chat to peer");
             }
-        } else if (g_ui_ctx.current_state == UI_STATE_CHAT || g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
+        } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
+            g_ui_ctx.button_prev = false;
+        } else if (g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
             /* Initialize chat menu */
             g_ui_ctx.chat_menu_selected = 0U;
             g_ui_ctx.button_prev = false;
@@ -2403,7 +2450,22 @@ CeePewErr_t ui_manager_update(void)
             (void)ui_manager_transition_to(UI_STATE_CHAT);
             g_ui_ctx.transition_ready = true;
         }
-    } else if (g_ui_ctx.current_state == UI_STATE_CHAT || g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
+    } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
+        /* Chat thread: short press opens menu, long hold returns to cryptogram */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                           ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 1500U) {
+                (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
+                g_ui_ctx.transition_ready = true;
+            } else {
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
+            }
+        }
+    } else if (g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
         /* Chat menu: button selects option */
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
@@ -2421,7 +2483,7 @@ CeePewErr_t ui_manager_update(void)
                     (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
                     g_ui_ctx.transition_ready = true;
                 } else {
-                    /* Read — TODO show inbox; for now stay in chat */
+                    /* Read — return to thread */
                     (void)ui_manager_transition_to(UI_STATE_CHAT);
                     g_ui_ctx.transition_ready = true;
                 }
@@ -2714,7 +2776,7 @@ CeePewErr_t ui_manager_draw(void)
         case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
         case UI_STATE_FINGERPRINT:        err = render_fingerprint();         break;
         case UI_STATE_FINGERPRINT_CONFIRM:err = render_fingerprint_confirm(); break;
-        case UI_STATE_CHAT:               err = render_chat_menu();           break;
+        case UI_STATE_CHAT:               err = render_chat_thread();         break;
         case UI_STATE_CHAT_MENU:          err = render_chat_menu();           break;
         case UI_STATE_CHAT_COMPOSE:       err = render_chat_compose();        break;
         case UI_STATE_CRYPTOGRAM:         err = render_cryptogram();          break;

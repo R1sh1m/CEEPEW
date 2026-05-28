@@ -25,6 +25,14 @@
 #include <time.h>
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#ifdef CONFIG_BT_ENABLED
+#include "esp_bt_defs.h"
+#else
+typedef uint8_t esp_ble_addr_type_t;
+#ifndef BLE_ADDR_TYPE_PUBLIC
+#define BLE_ADDR_TYPE_PUBLIC 0U
+#endif
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,10 +67,14 @@ typedef struct {
     BleState_t     state;
     uint8_t        local_mac[6];
     uint8_t        peer_mac[6];
+    esp_ble_addr_type_t peer_addr_type;
     uint8_t        commitment_digest[CEEPEW_COMMITMENT_BYTES];      /* Truncated SHA256(session_code) */
     uint8_t        local_commitment_len; /* bytes stored for local commitment */
     uint8_t        peer_commitment_len;  /* bytes received from peer (8 or 16) */
     bool           peer_commitment_legacy; /* true if peer uses legacy 8-byte commit */
+    uint8_t        pending_peer_commitment[CEEPEW_COMMITMENT_BYTES];
+    uint8_t        pending_peer_commitment_len;
+    bool           peer_commitment_pending;
     uint8_t        reconnect_attempts;   /* reconnect attempts after disconnect */
     uint32_t       discovery_start_ts;
     uint32_t       pairing_start_ts;
@@ -128,6 +140,9 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
 
 /* Verify peer's commitment matches ours (call after exchange completes) */
 CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t len);
+
+/* Verify any commitment buffered by the responder before its local commitment was ready. */
+CeePewErr_t transport_ble_verify_pending_commitment(void);
 
 /* Set local readiness flag after commitment verified (for sync handshake) */
 void transport_ble_set_ready_for_chat(void);

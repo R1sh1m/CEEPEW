@@ -178,11 +178,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         }
 
         /* ── STEP 4: Both devices — initiate phase 2 when user confirms code ──
-        * Runs exactly once per pairing when UI transitions to COUNTDOWN.
-        * Both devices pre-populate commitment_digest so the GATTS verify path
-        * on the responder works when the GATT write arrives.                     */
+        * Runs exactly once per pairing when the UI transitions to COUNTDOWN
+        * or PAIRING. Both states represent user confirmation of the code.      */
         if (phase == 1U && g_ble_ctx.discovered &&
-            g_ui_ctx.current_state == UI_STATE_COUNTDOWN) {
+            (g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+             g_ui_ctx.current_state == UI_STATE_PAIRING)) {
 
             uint8_t session_code[32U];
             CeePewErr_t err = task_session_build_session_code(session_code);
@@ -192,8 +192,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             ceepew_secure_zero(session_code, (uint32_t)sizeof(session_code));
             if (err != CEEPEW_OK) { return err; }
 
-            /* Pre-populate commitment_digest so responder verify_commitment() works
-            * when the initiator's GATT write arrives on the next tick.            */
+            /* Pre-populate commitment_digest before checking any buffered peer
+             * commitment so the responder compares against a real local value. */
             uint8_t commitment[CEEPEW_COMMITMENT_BYTES];
             err = session_get_commitment(commitment);
             if (err == CEEPEW_OK) {
@@ -202,6 +202,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                 g_ble_ctx.local_commitment_len = CEEPEW_COMMITMENT_BYTES;
             }
             ceepew_secure_zero(commitment, sizeof(commitment));
+            if (err != CEEPEW_OK) { return err; }
+
+            /* F-2 fix: if the responder already buffered the initiator's
+             * commitment, verify it only after the local commitment is ready. */
+            err = transport_ble_verify_pending_commitment();
             if (err != CEEPEW_OK) { return err; }
 
             /* Do NOT send the commitment this tick — yield so the responder also
@@ -296,14 +301,20 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             case UI_STATE_DISCOVERY: return "discovery";
             case UI_STATE_CODE_ENTRY: return "code_entry";
             case UI_STATE_COUNTDOWN: return "countdown";
+            case UI_STATE_CODE_INCORRECT: return "code_incorrect";
+            case UI_STATE_CODE_DIFFERENT: return "code_different";
             case UI_STATE_CONFIRM: return "confirm";
             case UI_STATE_KEYDER: return "keyder";
             case UI_STATE_FINGERPRINT: return "fingerprint";
-            case UI_STATE_FINGERPRINT_CONFIRM: return "fingerprint_confirm";
+            case UI_STATE_FINGERPRINT_CONFIRM: return "fp_confirm";
             case UI_STATE_CHAT: return "chat";
+            case UI_STATE_CHAT_MENU: return "chat_menu";
+            case UI_STATE_CHAT_COMPOSE: return "compose";
             case UI_STATE_CRYPTOGRAM: return "cryptogram";
             case UI_STATE_NONCE_EXHAUSTED: return "nonce_exhausted";
+            case UI_STATE_INFO: return "info";
             case UI_STATE_ERROR: return "error";
+            case UI_STATE_PAIRING: return "pairing";
             default: return "unknown";
         }
     }
@@ -740,6 +751,16 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                                     (unsigned long)ttl_limit);
                             session_wipe();
                             continue;
+                        }
+                    }
+
+                    /* Re-check deferred peer commitment on the normal session tick so
+                     * late GATTS writes are consumed even if they arrive after Step 4. */
+                    if (session_get_phase() == 2U && g_ble_ctx.peer_commitment_pending) {
+                        CeePewErr_t verify_err = transport_ble_verify_pending_commitment();
+                        if (verify_err != CEEPEW_OK) {
+                            ESP_LOGW(TAG, "Periodic commitment re-check failed: %d",
+                                    (int)verify_err);
                         }
                     }
                 }
