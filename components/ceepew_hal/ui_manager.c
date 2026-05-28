@@ -8,6 +8,7 @@
 #include "../transport/transport_ble.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
+#include "ceepew_security_utils.h"
 #include "../../main/session_fsm.h"
 #include "../../main/session_msgstore.h"
 #include "esp_timer.h"
@@ -2265,57 +2266,15 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.chat_menu_selected = 0U;
             g_ui_ctx.button_prev = false;
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
-             if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            /* Edge: button just went down */
-            g_ui_ctx.button_press_start_ms = now_ms;
-        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
-            /* Edge: button just released — classify by hold duration */
-            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
-                           ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-
-            if (dur >= 1800U) {
-                /* ── LONG HOLD: send message ──────────────────────── */
-                if (g_ui_ctx.compose_length > 0U) {
-                    /* TODO: call session_send_message() here once integrated */
-                    ESP_LOGI("ui", "SEND: '%.*s'",
-                             (int)g_ui_ctx.compose_length,
-                             g_ui_ctx.compose_buffer);
-                    /* Clear compose buffer */
-                    for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
-                        g_ui_ctx.compose_buffer[ci] = 0U;
-                    }
-                    g_ui_ctx.compose_length = 0U;
-                }
-                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
-                g_ui_ctx.transition_ready = true;
-
-            } else if (dur >= 600U) {
-                /* ── MEDIUM HOLD: backspace ───────────────────────── */
-                if (g_ui_ctx.compose_length > 0U) {
-                    g_ui_ctx.compose_length--;
-                    g_ui_ctx.compose_buffer[g_ui_ctx.compose_length] = 0U;
-                }
-                /* Stay in compose — do NOT transition */
-
-            } else {
-                /* ── SHORT TAP: append character ──────────────────── */
-                uint8_t char_idx = (uint8_t)(
-                    ((uint16_t)g_ui_ctx.user_input * COMPOSE_CHARSET_LEN) / 256U);
-                if (char_idx >= COMPOSE_CHARSET_LEN) {
-                    char_idx = (uint8_t)(COMPOSE_CHARSET_LEN - 1U);
-                }
-                if (g_ui_ctx.compose_length < 255U) {
-                    g_ui_ctx.compose_buffer[g_ui_ctx.compose_length] = COMPOSE_CHARSET[char_idx];
-                    g_ui_ctx.compose_length++;
-                }
-                /* Stay in compose — do NOT transition */
-            }
-        }
+            g_ui_ctx.button_prev = false;
+            g_ui_ctx.button_press_start_ms = 0U;
         } else if (g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
             g_ui_ctx.error_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_ERROR) {
-            g_ui_ctx.reject_sequence_start_ms = now_ms;
-            g_ui_ctx.error_start_ms = now_ms;
+            if (g_ui_ctx.reject_sequence_start_ms != 0U || g_ui_ctx.error_start_ms == 0U) {
+                g_ui_ctx.reject_sequence_start_ms = now_ms;
+                g_ui_ctx.error_start_ms = now_ms;
+            }
         }
     }
 
@@ -2474,14 +2433,41 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms) ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 1000U) {
+            if (dur >= 1800U) {
                 /* Long press: send message and return to menu */
                 if (g_ui_ctx.compose_length > 0U) {
-                    /* TODO: send message via session API */
-                    ESP_LOGI("ui", "Sending message: %.*s", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
+                    uint8_t peer_pk[32U];
+                    CeePewErr_t peer_err = session_get_peer_public_key(peer_pk);
+                    if (peer_err == CEEPEW_OK) {
+                        CeePewErr_t send_err = session_send_message(
+                            (const uint8_t *)g_ui_ctx.compose_buffer,
+                            (uint16_t)g_ui_ctx.compose_length,
+                            g_ble_ctx.peer_mac,
+                            peer_pk);
+                        ceepew_secure_zero(peer_pk, sizeof(peer_pk));
+                        if (send_err == CEEPEW_OK) {
+                            ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
+                            for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
+                                g_ui_ctx.compose_buffer[ci] = 0U;
+                            }
+                            g_ui_ctx.compose_length = 0U;
+                            (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                            g_ui_ctx.transition_ready = true;
+                        } else {
+                            ESP_LOGW("ui", "session_send_message failed: %d", (int)send_err);
+                            g_ui_ctx.reject_sequence_start_ms = 0U;
+                            g_ui_ctx.error_start_ms = now_ms;
+                            (void)ui_manager_transition_to(UI_STATE_ERROR);
+                            g_ui_ctx.transition_ready = true;
+                        }
+                    } else {
+                        ESP_LOGW("ui", "session_get_peer_public_key failed: %d", (int)peer_err);
+                        g_ui_ctx.reject_sequence_start_ms = 0U;
+                        g_ui_ctx.error_start_ms = now_ms;
+                        (void)ui_manager_transition_to(UI_STATE_ERROR);
+                        g_ui_ctx.transition_ready = true;
+                    }
                 }
-                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
-                g_ui_ctx.transition_ready = true;
             } else {
                 /* Short press: add selected character to message */
                 static const char KEYBOARD_GRID[60] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-,?!';: ";
@@ -2494,18 +2480,34 @@ CeePewErr_t ui_manager_update(void)
         }
     } else if (g_ui_ctx.current_state == UI_STATE_ERROR ||
                g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
-        uint32_t start_ms = (g_ui_ctx.current_state == UI_STATE_ERROR)
-                            ? g_ui_ctx.reject_sequence_start_ms
-                            : g_ui_ctx.error_start_ms;
-        if (start_ms != 0U) {
-            uint32_t elapsed_ms = (now_ms >= start_ms) ? (now_ms - start_ms) : 0U;
-            uint32_t seq_ms = (uint32_t)(CEEPEW_RGB_REJECT_SEQUENCE_CT * 2U * CEEPEW_RGB_ERROR_BLINK_MS);
-            if (elapsed_ms >= seq_ms) {
-                /* Debounce UI-originated wipes to prevent rapid repeated wipes during transient UI animations */
-                if (now_ms - s_last_ui_wipe_ms > 5000U) {
-                    ESP_LOGW("ui", "session_wipe requested by UI (error timeout) — debounced");
-                    s_last_ui_wipe_ms = now_ms;
-                    session_wipe();
+        if (g_ui_ctx.current_state == UI_STATE_ERROR && g_ui_ctx.reject_sequence_start_ms == 0U) {
+            if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+                g_ui_ctx.button_press_start_ms = now_ms;
+            } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+                uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                             ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+                if (dur >= 1000U) {
+                    (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                    g_ui_ctx.transition_ready = true;
+                } else {
+                    (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
+                    g_ui_ctx.transition_ready = true;
+                }
+            }
+        } else {
+            uint32_t start_ms = (g_ui_ctx.current_state == UI_STATE_ERROR)
+                                ? g_ui_ctx.reject_sequence_start_ms
+                                : g_ui_ctx.error_start_ms;
+            if (start_ms != 0U) {
+                uint32_t elapsed_ms = (now_ms >= start_ms) ? (now_ms - start_ms) : 0U;
+                uint32_t seq_ms = (uint32_t)(CEEPEW_RGB_REJECT_SEQUENCE_CT * 2U * CEEPEW_RGB_ERROR_BLINK_MS);
+                if (elapsed_ms >= seq_ms) {
+                    /* Debounce UI-originated wipes to prevent rapid repeated wipes during transient UI animations */
+                    if (now_ms - s_last_ui_wipe_ms > 5000U) {
+                        ESP_LOGW("ui", "session_wipe requested by UI (error timeout) — debounced");
+                        s_last_ui_wipe_ms = now_ms;
+                        session_wipe();
+                    }
                 }
             }
         }
@@ -2860,14 +2862,17 @@ CeePewErr_t ui_show_nonce_exhausted(void)
 static CeePewErr_t render_error(void)
 {
     hal_ui_clear();
-    hal_ui_text(16U, 8U, "SECURITY RESET", HAL_UI_WHITE);
-    hal_ui_text(8U, 22U, "Fingerprint rejected", HAL_UI_WHITE);
-    hal_ui_text(8U, 34U, "Wiping session...", HAL_UI_WHITE);
+    bool send_fail = (g_ui_ctx.reject_sequence_start_ms == 0U);
+    hal_ui_text(16U, 8U, send_fail ? "SEND FAILED" : "SECURITY RESET", HAL_UI_WHITE);
+    hal_ui_text(8U, 22U, send_fail ? "Could not send" : "Fingerprint rejected", HAL_UI_WHITE);
+    hal_ui_text(8U, 34U, send_fail ? "Draft kept" : "Wiping session...", HAL_UI_WHITE);
+    if (send_fail) {
+        hal_ui_text(4U, 46U, "Tap=retry  Hold=menu", HAL_UI_WHITE);
+    }
 
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-    uint32_t elapsed_ms = (now_ms >= g_ui_ctx.reject_sequence_start_ms)
-                          ? (now_ms - g_ui_ctx.reject_sequence_start_ms)
-                          : 0U;
+    uint32_t start_ms = send_fail ? g_ui_ctx.error_start_ms : g_ui_ctx.reject_sequence_start_ms;
+    uint32_t elapsed_ms = (now_ms >= start_ms) ? (now_ms - start_ms) : 0U;
     uint8_t blink_phase = (uint8_t)((elapsed_ms / CEEPEW_RGB_ERROR_BLINK_MS) % 2U);
     if (blink_phase == 0U) {
         HalUIRect_t blink_box = {.x = 56U, .y = 52U, .w = 16U, .h = 4U};

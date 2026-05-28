@@ -12,8 +12,10 @@
 #include "crypto_box_wrap.h"
 #include "compress_huffman.h"
 #include "ecc_hamming.h"
-#include "ecc_crc32.h"
+#include "hal_radio.h"
+#include "session_msgstore.h"
 #include "transport_esl.h"
+#include "esp_crc.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -26,9 +28,6 @@ CeePewErr_t crypto_ascon_aead_encrypt(const uint8_t key[16],
                                       uint16_t pt_len,
                                       uint8_t *ct,
                                       uint16_t *ct_len);
-CeePewErr_t transport_espnow_send(const uint8_t *peer_mac,
-                                  const uint8_t *data,
-                                  uint16_t len);
 
 CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
                                  const uint8_t peer_mac[6],
@@ -92,16 +91,22 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
 
     CEEPEW_ASSERT((uint32_t)fec_len + sizeof(uint32_t) <= sizeof(s_frame), CEEPEW_ERR_BOUNDS);
     memcpy(s_frame, s_fec_buf, fec_len);
-    uint32_t crc = 0U;
-    err = ecc_crc32_compute(s_frame, fec_len, &crc);
-    if (err != CEEPEW_OK) { return err; }
+    uint32_t crc = esp_crc32_le(0U, s_frame, fec_len);
     memcpy(s_frame + fec_len, &crc, sizeof(crc));
 
     uint16_t frame_len = (uint16_t)(fec_len + sizeof(uint32_t));
     err = transport_esl_process_outgoing(s_frame, &frame_len, (uint16_t)sizeof(s_frame));
     if (err != CEEPEW_OK) { return err; }
 
-    err = transport_espnow_send(peer_mac, s_frame, frame_len);
+    err = hal_radio_set_peer(peer_mac);
+    if (err != CEEPEW_OK) { return err; }
+    err = hal_radio_init();
+    if (err != CEEPEW_OK) { return err; }
+
+    err = hal_radio_send(s_frame, frame_len);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = msg_store_add(s_frame, frame_len, len, 1U);
     if (err != CEEPEW_OK) { return err; }
 
     err = session_update_last_message_time();
