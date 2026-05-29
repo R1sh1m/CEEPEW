@@ -490,18 +490,16 @@ static void ui_draw_hex_rows(const uint8_t *bytes, uint8_t byte_count, uint8_t x
     }
 }
 
-static void diag_draw_header(const char *title)
+static void diag_draw_header(const char *title, uint8_t page_num)
 {
-if (title == NULL) {
-    return;
-}
+    if (title == NULL) {
+        return;
+    }
 
-hal_ui_text(0U, 0U, title, HAL_UI_WHITE);
-
-HalUIRect_t badge = { .x = 88U, .y = 0U, .w = 40U, .h = 8U };
-hal_ui_rect(&badge, HAL_UI_WHITE);
-hal_ui_text(80U, 0U, "[DIAG]", HAL_UI_WHITE);
-draw_hline(0U, 9U, 128U);
+    char header[32U];
+    (void)snprintf(header, sizeof(header), "[DIAG MODE]   Page-%u", (unsigned)(page_num + 1U));
+    hal_ui_text(0U, 0U, header, HAL_UI_WHITE);
+    draw_hline(0U, 9U, 128U);
 }
 
 /* Render rotating/scrolling text that moves left continuously.
@@ -2834,95 +2832,41 @@ static void diag_collect_metrics(DiagMetrics_t *m)
     }
 }
 
-static void diag_draw_page_dots(uint8_t page, uint8_t total_pages)
-{
-    uint8_t base_x = 16U;
-    uint8_t y = 62U;
-    for (uint8_t i = 0U; i < total_pages; i++) {
-        uint8_t x = (uint8_t)(base_x + (i * 16U));
-        if (i == page) {
-            hal_ui_rect_fill(&(HalUIRect_t){ .x = (uint8_t)(x - 1U), .y = (uint8_t)(y - 1U), .w = 3U, .h = 3U }, HAL_UI_WHITE);
-        } else {
-            hal_ui_rect(&(HalUIRect_t){ .x = (uint8_t)(x - 1U), .y = (uint8_t)(y - 1U), .w = 3U, .h = 3U }, HAL_UI_WHITE);
-        }
-    }
-}
-
-static void diag_draw_metric_bar(uint8_t x, uint8_t y, uint8_t width,
+static void diag_draw_metric_bar(uint8_t x, uint8_t y, uint8_t bar_width,
                                  const char *label, uint8_t pct,
                                  const char *value_text)
 {
     uint8_t clamped = (pct > 100U) ? 100U : pct;
-    uint8_t fill_w = (uint8_t)(((uint16_t)width * clamped) / 100U);
 
+    /* Draw label first (e.g., "CPU") */
     hal_ui_text(x, y, label, HAL_UI_WHITE);
+    
+    /* Draw inline bar [||||    ] */
+    uint8_t bar_x = (uint8_t)(x + 24U);  /* 4 chars (label) + 6 per char = ~24px */
+    hal_ui_text(bar_x, y, "[", HAL_UI_WHITE);
+    
+    /* Draw filled portion with pipe characters */
+    uint8_t pipe_x = (uint8_t)(bar_x + 6U);
+    uint8_t pipes = (uint8_t)((bar_width * clamped) / 100U / 5U);  /* ~5px per pipe char */
+    if (pipes > 8U) { pipes = 8U; }  /* Max 8 pipes to fit in display */
+    
+    for (uint8_t i = 0U; i < pipes; i++) {
+        hal_ui_text((uint8_t)(pipe_x + (i * 6U)), y, "|", HAL_UI_WHITE);
+    }
+    
+    /* Draw empty space */
+    uint8_t empty_pipes = (uint8_t)(8U - pipes);
+    for (uint8_t i = 0U; i < empty_pipes; i++) {
+        hal_ui_text((uint8_t)(pipe_x + ((pipes + i) * 6U)), y, " ", HAL_UI_WHITE);
+    }
+    
+    /* Close bracket and percentage */
+    uint8_t close_x = (uint8_t)(pipe_x + (8U * 6U));
+    hal_ui_text(close_x, y, "]", HAL_UI_WHITE);
+    
     if (value_text != NULL) {
-        hal_ui_text((uint8_t)(x + 54U), y, value_text, HAL_UI_WHITE);
-    }
-
-    HalUIRect_t border = { .x = x, .y = (uint8_t)(y + 9U), .w = width, .h = 6U };
-    hal_ui_rect(&border, HAL_UI_WHITE);
-    if (fill_w > 2U) {
-        HalUIRect_t fill = { .x = (uint8_t)(x + 1U), .y = (uint8_t)(y + 10U), .w = (uint8_t)(fill_w - 2U), .h = 4U };
-        hal_ui_rect_fill(&fill, HAL_UI_WHITE);
-    }
-}
-
-static void diag_draw_input_bar(const char *text, bool show_prompt, bool show_cursor)
-{
-    char line[24U];
-    uint8_t off = 0U;
-    if (show_prompt) {
-        line[off++] = '>';
-    }
-    if (text != NULL) {
-        while (*text != '\0' && off < (uint8_t)(sizeof(line) - 2U)) {
-            line[off++] = *text++;
-        }
-    }
-    if (show_cursor && off < (uint8_t)(sizeof(line) - 1U)) {
-        line[off++] = '_';
-    }
-    line[off] = '\0';
-    hal_ui_text(0U, 0U, line, HAL_UI_WHITE);
-}
-
-static void diag_draw_grid(uint8_t cursor_idx)
-{
-    static const char *const GRID[36U] = {
-        "A","B","C","D","E","F",
-        "G","H","I","J","K","L",
-        "M","N","O","P","Q","R",
-        "S","T","U","V","W","X",
-        "Y","Z","0","1","2","3",
-        "4","5","6","7","8","9"
-    };
-
-    const uint8_t grid_x = 4U;
-    const uint8_t grid_y = 16U;
-    const uint8_t cell_w = 20U;
-    const uint8_t cell_h = 8U;
-
-    for (uint8_t i = 0U; i < 36U; i++) {
-        uint8_t col = (uint8_t)(i % 6U);
-        uint8_t row = (uint8_t)(i / 6U);
-        uint8_t x = (uint8_t)(grid_x + (col * cell_w));
-        uint8_t y = (uint8_t)(grid_y + (row * cell_h));
-
-        HalUIRect_t box = { .x = x, .y = y, .w = cell_w, .h = cell_h };
-        bool selected = (i == cursor_idx);
-        if (selected) {
-            hal_ui_rect_fill(&box, HAL_UI_WHITE);
-        } else {
-            hal_ui_rect(&box, HAL_UI_WHITE);
-        }
-
-        const char *label = GRID[i];
-        uint8_t tx = (uint8_t)(x + 7U);
-        if (label[1] != '\0') {
-            tx = (uint8_t)(x + 4U);
-        }
-        hal_ui_text(tx, (uint8_t)(y + 0U), label, HAL_UI_WHITE);
+        uint8_t pct_x = (uint8_t)(close_x + 8U);
+        hal_ui_text(pct_x, y, value_text, HAL_UI_WHITE);
     }
 }
 
@@ -2940,13 +2884,15 @@ static CeePewErr_t render_diag_page(void)
     uint8_t page = ui_map_pot_to_index(g_ui_ctx.user_input, page_count);
     char ln[48U];
 
+    /* Fixed page names */
     const char *const PAGE_NAMES[4U] = {
-        "CPU&MEM", "MEMORY", "INPUT", "RUNTIME"
+        "CPU&MEM", "TASKS", "STORAGE", "RUNTIME"
     };
-    diag_draw_header(PAGE_NAMES[page]);
+    diag_draw_header(PAGE_NAMES[page], page);
 
     switch (page) {
         case 0U: {
+            /* Page 1: CPU, HEAP, PSRAM with inline HTOP-style bars */
             char cpu_val[12U];
             char heap_val[18U];
             char psram_val[18U];
@@ -2959,70 +2905,103 @@ static CeePewErr_t render_diag_page(void)
             } else {
                 (void)snprintf(psram_val, sizeof(psram_val), "n/a");
             }
-            diag_draw_metric_bar(0U, 14U, 128U, "CPU", metrics.cpu_load_pct, cpu_val);
-            diag_draw_metric_bar(0U, 26U, 128U, "HEAP",
+            diag_draw_metric_bar(0U, 14U, 60U, "CPU", metrics.cpu_load_pct, cpu_val);
+            diag_draw_metric_bar(0U, 24U, 60U, "HEAP",
                                  (metrics.heap_total_bytes > 0U)
                                      ? (uint8_t)((metrics.heap_used_bytes * 100U) / metrics.heap_total_bytes)
                                      : 0U,
                                  heap_val);
-            diag_draw_metric_bar(0U, 38U, 128U, "PSRAM",
+            diag_draw_metric_bar(0U, 34U, 60U, "PSRAM",
                                  (metrics.psram_total_bytes > 0U)
                                      ? (uint8_t)((metrics.psram_used_bytes * 100U) / metrics.psram_total_bytes)
                                      : 0U,
                                  psram_val);
-            (void)snprintf(ln, sizeof(ln), "Uptime:%lus Draw:%luus",
-                           (unsigned long)metrics.uptime_seconds,
-                           (unsigned long)metrics.draw_cost_us);
-            hal_ui_text(0U, 51U, ln, HAL_UI_WHITE);
-            diag_draw_page_dots(page, page_count);
+            (void)snprintf(ln, sizeof(ln), "Uptime:%lus", (unsigned long)metrics.uptime_seconds);
+            hal_ui_text(0U, 44U, ln, HAL_UI_WHITE);
+            (void)snprintf(ln, sizeof(ln), "Draw:%luus Hz:%lu",
+                           (unsigned long)metrics.draw_cost_us,
+                           (unsigned long)metrics.loop_rate_hz);
+            hal_ui_text(0U, 52U, ln, HAL_UI_WHITE);
         } break;
 
         case 1U: {
+            /* Page 2: Task/process information */
+            uint32_t task_count = uxTaskGetNumberOfTasks();
             uint32_t heap_free_k = metrics.heap_free_bytes / 1024U;
-            uint32_t heap_total_k = metrics.heap_total_bytes / 1024U;
-            uint8_t heap_pct = (metrics.heap_total_bytes > 0U)
-                             ? (uint8_t)((metrics.heap_used_bytes * 100U) / metrics.heap_total_bytes)
-                             : 0U;
-            diag_draw_metric_bar(0U, 14U, 128U, "Heap", heap_pct, "used");
-
-            (void)snprintf(ln, sizeof(ln), "Used:%luK Free:%luK",
-                           (unsigned long)(metrics.heap_used_bytes / 1024U),
-                           (unsigned long)heap_free_k);
+            
+            (void)snprintf(ln, sizeof(ln), "Tasks:%lu", (unsigned long)task_count);
+            hal_ui_text(0U, 14U, ln, HAL_UI_WHITE);
+            
+            (void)snprintf(ln, sizeof(ln), "FreeHeap:%luK", (unsigned long)heap_free_k);
+            hal_ui_text(0U, 22U, ln, HAL_UI_WHITE);
+            
+            (void)snprintf(ln, sizeof(ln), "StackHWM:%luW", (unsigned long)uxTaskGetStackHighWaterMark(NULL));
             hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
-
-            (void)snprintf(ln, sizeof(ln), "Total:%luK Stack:%luW",
-                           (unsigned long)heap_total_k,
-                           (unsigned long)uxTaskGetStackHighWaterMark(NULL));
-            hal_ui_text(0U, 39U, ln, HAL_UI_WHITE);
-
-            uint32_t fragment_k = (metrics.heap_free_bytes > 4096U)
-                                ? ((metrics.heap_free_bytes - 4096U) / 1024U)
-                                : 0U;
-            (void)snprintf(ln, sizeof(ln), "Frag:%luK", (unsigned long)fragment_k);
-            hal_ui_text(0U, 48U, ln, HAL_UI_WHITE);
-            diag_draw_page_dots(page, page_count);
+            
+            /* Show CPU load details */
+            uint32_t period_us = CEEPEW_UI_LOOP_DELAY_MS * 1000U;
+            if (period_us > 0U) {
+                uint32_t busy_us = metrics.draw_cost_us;
+                (void)snprintf(ln, sizeof(ln), "UI Draw:%luus/%luus", 
+                               (unsigned long)busy_us, 
+                               (unsigned long)period_us);
+                hal_ui_text(0U, 38U, ln, HAL_UI_WHITE);
+            }
+            
+            /* Session info */
+            bool sess_active = session_is_active();
+            BleState_t ble_state = transport_ble_get_state();
+            (void)snprintf(ln, sizeof(ln), "Sess:%s BLE:%s",
+                           sess_active ? "Y" : "N",
+                           diag_ble_state_name(ble_state));
+            hal_ui_text(0U, 46U, ln, HAL_UI_WHITE);
+            
+            /* Peer info if available */
+            const BlePeerRecord_t *peer = transport_ble_get_peer();
+            if (peer != NULL) {
+                (void)snprintf(ln, sizeof(ln), "Peer:%02X%02X%02X",
+                               peer->peer_mac[3], peer->peer_mac[4],
+                               peer->peer_mac[5]);
+                hal_ui_text(0U, 54U, ln, HAL_UI_WHITE);
+            }
         } break;
 
         case 2U: {
-            uint8_t cursor = ui_map_pot_to_index(g_ui_ctx.user_input, 36U);
-            uint32_t hold_ms = 0U;
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-            if (g_ui_ctx.button_pressed && g_ui_ctx.button_press_start_ms != 0U) {
-                hold_ms = (now_ms >= g_ui_ctx.button_press_start_ms)
-                        ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            /* Page 3: Memory and storage visualization */
+            uint32_t heap_total_k = metrics.heap_total_bytes / 1024U;
+            uint32_t heap_used_k = metrics.heap_used_bytes / 1024U;
+            uint32_t heap_free_k = metrics.heap_free_bytes / 1024U;
+            uint8_t heap_pct = (metrics.heap_total_bytes > 0U)
+                             ? (uint8_t)((metrics.heap_used_bytes * 100U) / metrics.heap_total_bytes)
+                             : 0U;
+            
+            /* Heap bar */
+            diag_draw_metric_bar(0U, 14U, 60U, "Heap", heap_pct, "used");
+            
+            /* Memory details */
+            (void)snprintf(ln, sizeof(ln), "Used:%luK Free:%luK", (unsigned long)heap_used_k, (unsigned long)heap_free_k);
+            hal_ui_text(0U, 24U, ln, HAL_UI_WHITE);
+            
+            (void)snprintf(ln, sizeof(ln), "Total:%luK", (unsigned long)heap_total_k);
+            hal_ui_text(0U, 32U, ln, HAL_UI_WHITE);
+            
+            /* PSRAM if available */
+            if (metrics.psram_total_bytes > 0U) {
+                uint8_t psram_pct = (uint8_t)((metrics.psram_used_bytes * 100U) / metrics.psram_total_bytes);
+                diag_draw_metric_bar(0U, 40U, 60U, "PSRAM", psram_pct, "used");
+                
+                uint32_t psram_used_k = metrics.psram_used_bytes / 1024U;
+                uint32_t psram_total_k = metrics.psram_total_bytes / 1024U;
+                (void)snprintf(ln, sizeof(ln), "PSR:%luK/%luK", (unsigned long)psram_used_k, (unsigned long)psram_total_k);
+                hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
+            } else {
+                (void)snprintf(ln, sizeof(ln), "PSRAM: Not available");
+                hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
             }
-
-            (void)snprintf(ln, sizeof(ln), "Pot:%u  Sel:%u  Hold:%lums",
-                           (unsigned)g_ui_ctx.user_input,
-                           (unsigned)(cursor + 1U),
-                           (unsigned long)hold_ms);
-            diag_draw_input_bar(ln, false, true);
-            ui_draw_text_wrapped(0U, 8U, "Turn pot to choose", 128U, 8U);
-            diag_draw_grid(cursor);
-            diag_draw_page_dots(page, page_count);
         } break;
 
         case 3U: {
+            /* Page 4: Runtime information (unchanged) */
             wifi_mode_t wifi_mode = WIFI_MODE_NULL;
             wifi_ap_record_t ap_info;
             bool wifi_connected = false;
@@ -3051,24 +3030,23 @@ static CeePewErr_t render_diag_page(void)
             } else {
                 (void)snprintf(ln, sizeof(ln), "Peer:none");
             }
-            hal_ui_text(0U, 23U, ln, HAL_UI_WHITE);
+            hal_ui_text(0U, 22U, ln, HAL_UI_WHITE);
 
             (void)snprintf(ln, sizeof(ln), "WiFi:%s  Chip:%uc Rev%u",
                            wifi_enabled ? (wifi_connected ? "conn" : "on") : "off",
                            (unsigned)chip_info.cores,
                            (unsigned)chip_info.revision);
-            hal_ui_text(0U, 32U, ln, HAL_UI_WHITE);
+            hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
 
             (void)snprintf(ln, sizeof(ln), "Uptime:%lus  Rst:%d",
                            (unsigned long)metrics.uptime_seconds,
                            (int)reset_reason);
-            hal_ui_text(0U, 41U, ln, HAL_UI_WHITE);
+            hal_ui_text(0U, 38U, ln, HAL_UI_WHITE);
 
             (void)snprintf(ln, sizeof(ln), "Scan:%lu Hits:%u",
                            (unsigned long)g_ble_ctx.scan_seen_count,
                            (unsigned)g_ble_ctx.scan_hit_count);
-            hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
-            diag_draw_page_dots(page, page_count);
+            hal_ui_text(0U, 46U, ln, HAL_UI_WHITE);
         } break;
 
         default:
