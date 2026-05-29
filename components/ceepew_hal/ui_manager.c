@@ -4,6 +4,7 @@
 
 #include "ui_manager.h"
 #include "hal_ui.h"
+#include "hal_rgb.h"
 #include "layout.h"
 #include "../transport/transport_ble.h"
 #include "ceepew_config.h"
@@ -496,9 +497,16 @@ static void diag_draw_header(const char *title, uint8_t page_num)
         return;
     }
 
-    char header[32U];
-    (void)snprintf(header, sizeof(header), "[DIAG MODE]   Page-%u", (unsigned)(page_num + 1U));
-    hal_ui_text(0U, 0U, header, HAL_UI_WHITE);
+    /* Draw filled rectangle for header background to ensure clean display */
+    HalUIRect_t header_bg = { .x = 0U, .y = 0U, .w = 128U, .h = 9U };
+    hal_ui_rect_fill(&header_bg, HAL_UI_BLACK);
+
+    /* Draw header text: [DIAG MODE]  Page-1 */
+    char header[40U];
+    (void)snprintf(header, sizeof(header), "[DIAG MODE]  Page-%u", (unsigned)(page_num + 1U));
+    hal_ui_text(0U, 1U, header, HAL_UI_WHITE);
+    
+    /* Draw separator line */
     draw_hline(0U, 9U, 128U);
 }
 
@@ -1136,18 +1144,21 @@ static CeePewErr_t render_discovery(void)
 
     /* ── BLE state indicator (only when peer NOT discovered to avoid clutter) ── */
     if (!peer_visible) {
-       const char *ble_state = "BLE: IDLE";
+       const char *ble_state_value = "IDLE";
        switch (transport_ble_get_state()) {
-           case BLE_IDLE:        ble_state = "BLE: IDLE"; break;
-           case BLE_ADVERTISING: ble_state = "BLE: ADV";  break;
-           case BLE_SCANNING:    ble_state = "BLE: SCAN"; break;
-           case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: ADV & SCAN"; break;
-           case BLE_CONNECTED:   ble_state = "BLE: CON";  break;  /* Shortened from CONN */
-           case BLE_PAIRING:     ble_state = "BLE: PAIR"; break;
-           case BLE_DONE:        ble_state = "BLE: DONE"; break;
-           default:              ble_state = "BLE: ?";    break;
+           case BLE_IDLE:        ble_state_value = "IDLE"; break;
+           case BLE_ADVERTISING: ble_state_value = "ADV";  break;
+           case BLE_SCANNING:    ble_state_value = "SCAN"; break;
+           case BLE_ADVERTISING_AND_SCANNING: ble_state_value = "ADV & SCAN"; break;
+           case BLE_CONNECTED:   ble_state_value = "CON";  break;  /* Shortened from CONN */
+           case BLE_PAIRING:     ble_state_value = "PAIR"; break;
+           case BLE_DONE:        ble_state_value = "DONE"; break;
+           default:              ble_state_value = "?";    break;
        }
-       hal_ui_text(RPANEL_X, Y_BLE_STATE, ble_state, HAL_UI_WHITE);
+       /* Draw fixed "BLE: " label, then scroll the state value */
+       hal_ui_text(RPANEL_X, Y_BLE_STATE, "BLE: ", HAL_UI_WHITE);
+       ui_draw_rotating_text((uint8_t)(RPANEL_X + 30U), Y_BLE_STATE, ble_state_value, 
+                             (uint8_t)(RPANEL_WIDTH - 30U), shared_scroll_px);
     }
 
     /* ── Bottom status line ── */
@@ -2384,6 +2395,8 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.reject_sequence_start_ms = 0U;
             g_ui_ctx.error_start_ms = 0U;
             (void)transport_ble_disconnect();
+            /* Trigger red LED pulse for 15 seconds on pairing failure */
+            (void)rgb_set_pattern(RGB_RED_BLINK);
         } else if (g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
             /* BLE is initialized once by app_main; discovery entry only
              * restarts advertising if the transport is idle. */
@@ -2838,11 +2851,18 @@ static void diag_draw_metric_bar(uint8_t x, uint8_t y, uint8_t bar_width,
 {
     uint8_t clamped = (pct > 100U) ? 100U : pct;
 
-    /* Draw label first (e.g., "CPU") */
+    /* Draw label first (e.g., "CPU", "HEAP", "PSRAM") */
     hal_ui_text(x, y, label, HAL_UI_WHITE);
     
+    /* Calculate dynamic bar position based on label length
+     * Each character is 6 pixels wide, plus 2 pixels space after label */
+    uint8_t label_len = 0U;
+    while (label != NULL && label[label_len] != '\0' && label_len < 10U) {
+        label_len++;
+    }
+    uint8_t bar_x = (uint8_t)(x + (label_len * 6U) + 2U);
+    
     /* Draw inline bar [||||    ] */
-    uint8_t bar_x = (uint8_t)(x + 24U);  /* 4 chars (label) + 6 per char = ~24px */
     hal_ui_text(bar_x, y, "[", HAL_UI_WHITE);
     
     /* Draw filled portion with pipe characters */
@@ -2985,18 +3005,15 @@ static CeePewErr_t render_diag_page(void)
             (void)snprintf(ln, sizeof(ln), "Total:%luK", (unsigned long)heap_total_k);
             hal_ui_text(0U, 32U, ln, HAL_UI_WHITE);
             
-            /* PSRAM if available */
+            /* PSRAM if available - text summary only, no duplicate bar */
             if (metrics.psram_total_bytes > 0U) {
-                uint8_t psram_pct = (uint8_t)((metrics.psram_used_bytes * 100U) / metrics.psram_total_bytes);
-                diag_draw_metric_bar(0U, 40U, 60U, "PSRAM", psram_pct, "used");
-                
                 uint32_t psram_used_k = metrics.psram_used_bytes / 1024U;
                 uint32_t psram_total_k = metrics.psram_total_bytes / 1024U;
-                (void)snprintf(ln, sizeof(ln), "PSR:%luK/%luK", (unsigned long)psram_used_k, (unsigned long)psram_total_k);
-                hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
+                (void)snprintf(ln, sizeof(ln), "PSRAM:%luK/%luK", (unsigned long)psram_used_k, (unsigned long)psram_total_k);
+                hal_ui_text(0U, 44U, ln, HAL_UI_WHITE);
             } else {
                 (void)snprintf(ln, sizeof(ln), "PSRAM: Not available");
-                hal_ui_text(0U, 50U, ln, HAL_UI_WHITE);
+                hal_ui_text(0U, 44U, ln, HAL_UI_WHITE);
             }
         } break;
 
