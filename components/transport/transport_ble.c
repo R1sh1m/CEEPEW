@@ -110,13 +110,17 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 #endif
 
 #define CEEPEW_RESTART_DEBOUNCE_MS  2000U
+#define CEEPEW_PREVERIFY_RETRY_WINDOW_MS 3000U
 static uint32_t s_last_restart_ms = 0U;
 static uint32_t s_scan_retry_after_ms = 0U;
+static uint32_t s_preverify_disconnect_deadline_ms = 0U;
 static bool s_scan_requested;
 static bool s_adv_data_set;
 static bool s_scan_rsp_set;
 static bool s_adv_starting;
 static bool s_scan_start_failed;
+static uint32_t s_commitment_retry_after_ms = 0U;
+static uint8_t s_commitment_retry_count = 0U;
 
 CeePewErr_t transport_ble_restart_discovery_session(void)
 {
@@ -207,6 +211,9 @@ void transport_ble_clear_discovery_peer_state(void)
     g_ble_ctx.verify_fail_count    = 0U;
     g_ble_ctx.connecting           = false;
     g_ble_ctx.commitment_write_pending = false;
+    s_commitment_retry_after_ms = 0U;
+    s_commitment_retry_count = 0U;
+    s_preverify_disconnect_deadline_ms = 0U;
     memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
     s_scan_peer_dedupe_valid = false;
     memset(s_scan_peer_dedupe_mac, 0U, sizeof(s_scan_peer_dedupe_mac));
@@ -253,6 +260,54 @@ static bool transport_ble_peer_is_recent_at(uint32_t now_ms, uint32_t max_age_ms
     }
 
     return (uint32_t)(now_ms - g_ble_ctx.last_seen_ms) <= max_age_ms;
+}
+
+static uint8_t transport_ble_reason_from_gatt_status(esp_gatt_status_t status)
+{
+    if (status == ESP_GATT_AUTH_FAIL || status == ESP_GATT_INSUF_AUTHENTICATION) {
+        return UI_PAIRING_RESULT_COMMITMENT_FAIL;
+    }
+    return UI_PAIRING_RESULT_LINK_FAIL;
+}
+
+static bool transport_ble_local_commitment_ready(void)
+{
+    if (g_ble_ctx.local_commitment_len != CEEPEW_COMMITMENT_BYTES &&
+        g_ble_ctx.local_commitment_len != CEEPEW_COMMITMENT_LEGACY_BYTES) {
+        return false;
+    }
+
+    uint8_t nonzero = 0U;
+    for (uint8_t i = 0U; i < g_ble_ctx.local_commitment_len; i++) {
+        nonzero |= g_ble_ctx.commitment_digest[i];
+    }
+    return nonzero != 0U;
+}
+
+static CeePewErr_t transport_ble_send_commitment_write(void)
+{
+#ifdef CONFIG_BT_ENABLED
+    if (!g_ble_ctx.gattc_connected || g_ble_ctx.gattc_char_handle == 0U) {
+        return CEEPEW_ERR_BUSY;
+    }
+
+    CEEPEW_ASSERT(transport_ble_local_commitment_ready(), CEEPEW_ERR_PARAM);
+    esp_err_t err = esp_ble_gattc_write_char(
+        g_ble_ctx.gattc_if,
+        g_ble_ctx.conn_id,
+        g_ble_ctx.gattc_char_handle,
+        (uint16_t)g_ble_ctx.local_commitment_len,
+        g_ble_ctx.commitment_digest,
+        ESP_GATT_WRITE_TYPE_RSP,
+        ESP_GATT_AUTH_REQ_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ble_gattc_write_char failed: %d (%s)", err, esp_err_to_name(err));
+        return CEEPEW_ERR_HW;
+    }
+    return CEEPEW_OK;
+#else
+    return CEEPEW_OK;
+#endif
 }
 
 static bool transport_ble_scan_peer_is_duplicate(const uint8_t mac[6U],
@@ -688,20 +743,18 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
 
 #ifdef CONFIG_BT_ENABLED
     if (g_ble_ctx.gattc_connected && g_ble_ctx.gattc_char_handle != 0U) {
-        esp_err_t err = esp_ble_gattc_write_char(
-            g_ble_ctx.gattc_if,
-            g_ble_ctx.conn_id,
-            g_ble_ctx.gattc_char_handle,
-            len,
-            g_ble_ctx.commitment_digest,
-            ESP_GATT_WRITE_TYPE_RSP,
-            ESP_GATT_AUTH_REQ_NONE);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "esp_ble_gattc_write_char failed: %d (%s)", err, esp_err_to_name(err));
-            return CEEPEW_ERR_HW;
+        CeePewErr_t write_err = transport_ble_send_commitment_write();
+        if (write_err != CEEPEW_OK) {
+            g_ble_ctx.commitment_write_pending = true;
+            s_commitment_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) + 400U;
+            return CEEPEW_OK;
         }
+        g_ble_ctx.commitment_write_pending = false;
+        s_commitment_retry_after_ms = 0U;
+        s_commitment_retry_count = 0U;
     } else {
         g_ble_ctx.commitment_write_pending = true;
+        s_commitment_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) + 400U;
     }
 #endif
 
@@ -742,6 +795,7 @@ CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t 
     g_ble_ctx.ready_for_chat = true;        /* Signal local readiness */
     g_ble_ctx.handoff_ready = true;
     g_ble_ctx.state = BLE_DONE;
+    s_preverify_disconnect_deadline_ms = 0U;
 
     return CEEPEW_OK;
 }
@@ -897,6 +951,8 @@ CeePewErr_t transport_ble_deinit(void)
     s_adv_starting = false;
     s_scan_start_failed = false;
     s_scan_retry_after_ms = 0U;
+    s_commitment_retry_after_ms = 0U;
+    s_commitment_retry_count = 0U;
     s_ble_initialised = false;
     return CEEPEW_OK;
 }
@@ -987,6 +1043,51 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     return err;
 }
 
+CeePewErr_t transport_ble_retry_commitment_if_needed(void)
+{
+    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+
+    if (!g_ble_ctx.commitment_write_pending) {
+        return CEEPEW_OK;
+    }
+
+    if (!transport_ble_local_commitment_ready()) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (s_commitment_retry_after_ms != 0U && now_ms < s_commitment_retry_after_ms) {
+        return CEEPEW_OK;
+    }
+
+    CeePewErr_t err = transport_ble_send_commitment_write();
+    if (err == CEEPEW_OK) {
+        g_ble_ctx.commitment_write_pending = false;
+        s_commitment_retry_after_ms = 0U;
+        s_commitment_retry_count = 0U;
+        return CEEPEW_OK;
+    }
+
+    if (err == CEEPEW_ERR_BUSY) {
+        s_commitment_retry_after_ms = now_ms + 400U;
+        return CEEPEW_OK;
+    }
+
+    s_commitment_retry_count++;
+    if (s_commitment_retry_count >= 3U) {
+        g_ble_ctx.commitment_write_pending = false;
+        s_commitment_retry_after_ms = 0U;
+        g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+        g_ui_ctx.transition_ready = true;
+        (void)transport_ble_disconnect();
+        return CEEPEW_ERR_MAX_RETRIES;
+    }
+
+    s_commitment_retry_after_ms = now_ms + 600U;
+    return CEEPEW_OK;
+}
+
 #ifdef CONFIG_BT_ENABLED
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param){
     ESP_LOGI(TAG, "gap_event_handler: event=%d", event);
@@ -1057,6 +1158,15 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT: {
         if (!param) { break; }
         if (param->scan_param_cmpl.status != ESP_BT_STATUS_SUCCESS) {
+            if ((param->scan_param_cmpl.status == 0x0CU) &&
+                (g_ble_ctx.is_scanning || g_ble_ctx.state == BLE_SCANNING ||
+                 g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING)) {
+                ESP_LOGW(TAG, "Scan param set returned Cmd Disallowed while scan already active; ignoring");
+                s_scan_requested = false;
+                s_scan_start_failed = false;
+                s_scan_retry_after_ms = 0U;
+                break;
+            }
             ESP_LOGE(TAG, "Scan param set FAILED: status=%d",
                      param->scan_param_cmpl.status);
             s_scan_requested    = false;
@@ -1086,14 +1196,26 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         if (param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
             g_ble_ctx.is_scanning   = true;
             s_scan_start_failed     = false;
+            s_scan_requested        = false;
+            s_scan_retry_after_ms   = 0U;
             ESP_LOGI(TAG, "Scan confirmed active");
         } else {
-            ESP_LOGE(TAG, "Scan start FAILED: status=%d",
-                     param->scan_start_cmpl.status);
-            s_scan_requested    = false;
-            s_scan_start_failed = true;
-            s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
-                                    CEEPEW_RESTART_DEBOUNCE_MS;
+            if ((param->scan_start_cmpl.status == 0x0CU) &&
+                (g_ble_ctx.is_scanning || g_ble_ctx.state == BLE_SCANNING ||
+                 g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING)) {
+                ESP_LOGW(TAG, "Scan start Cmd Disallowed while scan already active; ignoring");
+                s_scan_requested = false;
+                s_scan_start_failed = false;
+                s_scan_retry_after_ms = 0U;
+            }
+            else {
+                ESP_LOGE(TAG, "Scan start FAILED: status=%d",
+                         param->scan_start_cmpl.status);
+                s_scan_requested    = false;
+                s_scan_start_failed = true;
+                s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
+                                        CEEPEW_RESTART_DEBOUNCE_MS;
+            }
         }
         transport_ble_update_state_from_flags();
         ESP_LOGI(TAG, "State after scan start: %s",
@@ -1318,6 +1440,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             g_ble_ctx.state = BLE_CONNECTED;
             g_ble_ctx.service_start_handle = 0U;
             g_ble_ctx.service_end_handle = 0U;
+            g_ble_ctx.reconnect_attempts = 0U;
+            s_preverify_disconnect_deadline_ms = 0U;
             ESP_LOGI(TAG, "GATTC connected: conn_id=%u", (unsigned)g_ble_ctx.conn_id);
             (void)esp_ble_gattc_search_service(gattc_if, g_ble_ctx.conn_id,
                                                &s_service_uuid_filter);
@@ -1359,16 +1483,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 ESP_LOGI(TAG, "GATTC characteristic ready: handle=%u",
                          (unsigned)g_ble_ctx.gattc_char_handle);
                 if (g_ble_ctx.commitment_write_pending) {
-                    g_ble_ctx.commitment_write_pending = false;
-                    uint8_t write_len = (g_ble_ctx.local_commitment_len == 0U) ? CEEPEW_COMMITMENT_BYTES : g_ble_ctx.local_commitment_len;
-                    (void)esp_ble_gattc_write_char(
-                        g_ble_ctx.gattc_if,
-                        g_ble_ctx.conn_id,
-                        g_ble_ctx.gattc_char_handle,
-                        (uint16_t)write_len,
-                        g_ble_ctx.commitment_digest,
-                        ESP_GATT_WRITE_TYPE_RSP,
-                        ESP_GATT_AUTH_REQ_NONE);
+                    (void)transport_ble_retry_commitment_if_needed();
                 }
             } else {
                 ESP_LOGW(TAG, "GATTC characteristic not found");
@@ -1378,7 +1493,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         case ESP_GATTC_WRITE_CHAR_EVT:
             if (param->write.status != ESP_GATT_OK) {
                 ESP_LOGE(TAG, "GATTC write failed: %d", param->write.status);
-                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                g_ui_ctx.pairing_result_reason = transport_ble_reason_from_gatt_status(param->write.status);
                 (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
                 g_ui_ctx.transition_ready = true;
                 (void)transport_ble_disconnect();
@@ -1397,30 +1512,22 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 if (local_zero == 0U) {
                     ESP_LOGW(TAG, "GATTC write ack with empty local commitment — disconnecting");
                     g_ble_ctx.verify_fail_count++;
-                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
                     (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
                     g_ui_ctx.transition_ready = true;
                     (void)transport_ble_disconnect();
                 } else {
-                    /*
-                     * INITIATOR PATH:
-                     * The write ACK confirms the responder received our commitment.
-                     * Mark handoff_ready so render_countdown() can exit early.
-                     * Do NOT set commitment_verified yet — that is set by the
-                     * RESPONDER (GATTS) path when it calls transport_ble_verify_commitment().
-                     * For the INITIATOR, verification happens when the responder
-                     * writes BACK (or via session-level confirmation).
-                     *
-                     * For the current single-direction exchange we also set
-                     * commitment_verified here so both sides proceed together.
-                     */
-                    g_ble_ctx.commitment_verified = true;
-                    g_ble_ctx.handoff_ready       = true;
-                    g_ble_ctx.state               = BLE_DONE;
-                    ESP_LOGI(TAG, "INITIATOR: commitment verified, handoff ready");
-
-                    /* Signal local readiness and attempt to notify peer */
-                    transport_ble_set_ready_for_chat();
+                    /* ACK confirms delivery only. Verification is completed by responder path. */
+                    g_ble_ctx.commitment_write_pending = false;
+                    s_commitment_retry_after_ms = 0U;
+                    s_commitment_retry_count = 0U;
+                    if (!g_ble_ctx.ready_for_chat) {
+                        transport_ble_set_ready_for_chat();
+                    }
+                    if (g_ble_ctx.peer_commitment_pending) {
+                        (void)transport_ble_verify_pending_commitment();
+                    }
+                    ESP_LOGI(TAG, "INITIATOR: commitment delivered; waiting for peer verification");
                 }
             }
             break;
@@ -1448,7 +1555,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                     g_ble_ctx.reconnect_attempts++;
                     ESP_LOGW(TAG, "Disconnect before verification — attempting reconnect %u/%u",
                              (unsigned)g_ble_ctx.reconnect_attempts, (unsigned)CEEPEW_MAX_RECONNECT_ATTEMPTS);
-                    /* Try reconnecting */
+                    transport_ble_update_state_from_flags();
                     (void)transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
                 } else {
                     ESP_LOGW(TAG, "Reconnect attempts exhausted — reporting pairing failure");
@@ -1513,6 +1620,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             g_ble_ctx.conn_id = param->connect.conn_id;
             g_ble_ctx.state = BLE_CONNECTED;
             g_ble_ctx.is_advertising = false;
+            g_ble_ctx.reconnect_attempts = 0U;
+            s_preverify_disconnect_deadline_ms = 0U;
             ESP_LOGI(TAG, "GATTS connected: conn_id=%u state=BLE_CONNECTED",
                      (unsigned)g_ble_ctx.conn_id);
             break;
@@ -1529,24 +1638,48 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 break;
             }
 
-            /* If responder disconnected before verification, clear discovered peer */
-            if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
-                ESP_LOGI(TAG, "Responder disconnected before verification — reporting pairing failure");
-                transport_ble_clear_discovery_peer_state();
-                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
-                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-                g_ui_ctx.transition_ready = true;
-            }
-            break;
+           /* If responder disconnected before verification, allow a 3-second grace window
+            * for transient disconnect recovery before hard-failing the pairing session. */
+           if (!g_ble_ctx.commitment_verified && !g_ble_ctx.handoff_ready) {
+               uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                
+               /* If grace deadline not yet armed, arm it now */
+               if (s_preverify_disconnect_deadline_ms == 0U) {
+                   s_preverify_disconnect_deadline_ms = now_ms + CEEPEW_PREVERIFY_RETRY_WINDOW_MS;
+                   ESP_LOGW(TAG, "Responder disconnect during pairing — grace window armed (%u ms)",
+                            (unsigned)CEEPEW_PREVERIFY_RETRY_WINDOW_MS);
+                   return; /* Allow reconnect attempts within the grace window */
+               }
+
+               /* Grace window has elapsed; classify as final failure */
+               if (now_ms >= s_preverify_disconnect_deadline_ms) {
+                   ESP_LOGI(TAG, "Responder grace window expired — reporting pairing failure");
+                   transport_ble_clear_discovery_peer_state();
+                   g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                   (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                   g_ui_ctx.transition_ready = true;
+                   s_preverify_disconnect_deadline_ms = 0U;
+               } else {
+                   /* Still within grace window — allow reconnect */
+                   uint32_t remaining_ms = s_preverify_disconnect_deadline_ms - now_ms;
+                   ESP_LOGW(TAG, "Responder disconnect within grace window (%u ms remaining) — allowing reconnect",
+                            (unsigned)remaining_ms);
+               }
+           }
+           break;
 
         case ESP_GATTS_WRITE_EVT:
             if (param->write.need_rsp) {
+                /* Initialize response struct — passing NULL causes "Invalid parameters: p_msg should not be NULL" */
+                esp_gatt_rsp_t rsp = {0};
+                rsp.attr_value.handle = param->write.handle;
+                rsp.attr_value.len = 0U;
                 (void)esp_ble_gatts_send_response(
                     gatts_if,
                     param->write.conn_id,
                     param->write.trans_id,
                     ESP_GATT_OK,
-                    NULL);
+                    &rsp);
             }
             if (!param->write.is_prep && param->write.handle == g_ble_ctx.gatts_char_handle) {
                 if (param->write.len == CEEPEW_COMMITMENT_BYTES || param->write.len == CEEPEW_COMMITMENT_LEGACY_BYTES) {
@@ -1560,6 +1693,14 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     g_ble_ctx.peer_ready_for_chat = true;
                     g_ble_ctx.peer_ready_timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
                     ESP_LOGI(TAG, "GATTS: peer signalled READY (timestamp=%lu)", (unsigned long)g_ble_ctx.peer_ready_timestamp_ms);
+                    if (!g_ble_ctx.commitment_verified &&
+                        g_ble_ctx.ready_for_chat &&
+                        transport_ble_local_commitment_ready()) {
+                        g_ble_ctx.commitment_verified = true;
+                        g_ble_ctx.handoff_ready = true;
+                        g_ble_ctx.state = BLE_DONE;
+                        ESP_LOGI(TAG, "READY handshake complete: promoting initiator to verified handoff");
+                    }
                     /* If both ready, UI may proceed; UI thread polls transport_ble_both_ready_for_chat() */
                 }
             }

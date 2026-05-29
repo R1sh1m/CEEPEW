@@ -56,7 +56,7 @@ static CeePewErr_t render_pairing_failed(void);
 static CeePewErr_t ui_restart_discovery_from_pairing(void);
 
 #define CEEPEW_PAIRING_SUCCESS_HOLD_MS  1200U
-#define CEEPEW_PAIRING_FAILED_HOLD_MS   2500U
+#define CEEPEW_PAIRING_FAILED_HOLD_MS   15000U
 #define CEEPEW_PAIRING_PEER_LOSS_MS     2500U
 #define CEEPEW_SCAN_RETRY_DEBOUNCE_MS   2000U
 
@@ -1143,7 +1143,7 @@ static CeePewErr_t render_discovery(void)
            case BLE_IDLE:        ble_state = "BLE: IDLE"; break;
            case BLE_ADVERTISING: ble_state = "BLE: ADV";  break;
            case BLE_SCANNING:    ble_state = "BLE: SCAN"; break;
-           case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: AS";   break;  /* Shortened from ADV+SCN */
+           case BLE_ADVERTISING_AND_SCANNING: ble_state = "BLE: ADV & SCAN"; break;
            case BLE_CONNECTED:   ble_state = "BLE: CON";  break;  /* Shortened from CONN */
            case BLE_PAIRING:     ble_state = "BLE: PAIR"; break;
            case BLE_DONE:        ble_state = "BLE: DONE"; break;
@@ -1426,16 +1426,16 @@ static CeePewErr_t render_pairing_failed(void)
 
     ui_draw_centered_text(15U, reason);
 
-    HalUIRect_t detail_box = { .x = 8U, .y = 20U, .w = 112U, .h = 20U };
+    HalUIRect_t detail_box = { .x = 8U, .y = 22U, .w = 112U, .h = 20U };
     hal_ui_rect(&detail_box, HAL_UI_WHITE);
-    ui_draw_text_wrapped(12U, 24U, detail, 104U, 8U);
+    ui_draw_text_wrapped(12U, 25U, detail, 102U, 8U);
 
     if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
-        HalUIRect_t tick = { .x = 110U, .y = 44U, .w = 6U, .h = 6U };
+        HalUIRect_t tick = { .x = 112U, .y = 50U, .w = 6U, .h = 6U };
         hal_ui_rect_fill(&tick, HAL_UI_WHITE);
     }
-    ui_draw_text_wrapped(12U, 46U, "Discovery restarts shortly", 104U, 8U);
-    ui_draw_text_wrapped(22U, 54U, "Please wait", 84U, 8U);
+    draw_hline(8U, 46U, 112U);
+    ui_draw_text_wrapped(12U, 50U, "Retrying link. Please wait.", 102U, 8U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2411,19 +2411,6 @@ CeePewErr_t ui_manager_update(void)
             /* Mark countdown start time */
             g_ui_ctx.countdown_start_ms = now_ms;
             g_ui_ctx.pairing_start_ms = now_ms;
-
-            /* Connect to peer; session FSM will derive and publish the canonical commitment
-             * so do not set g_ble_ctx.commitment_digest or commit-write-pending here. */
-            const BlePeerRecord_t *peer = transport_ble_get_peer();
-            if (peer != NULL &&
-                !g_ble_ctx.gattc_connected && !g_ble_ctx.gatts_connected &&
-                !g_ble_ctx.connecting) {
-
-                CeePewErr_t conn_err = transport_ble_connect_to_peer(peer->peer_mac);
-                if (conn_err != CEEPEW_OK) {
-                    ESP_LOGW("ui", "connect_to_peer failed: %d — will retry", (int)conn_err);
-                }
-            }
         } else if (g_ui_ctx.current_state == UI_STATE_KEYDER) {
             g_ui_ctx.fingerprint_confirmed = false;
         } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT) {
@@ -2544,8 +2531,7 @@ CeePewErr_t ui_manager_update(void)
                 g_ui_ctx.code_entry_start_ms != 0U &&
                 now_ms >= g_ui_ctx.code_entry_start_ms &&
                 (now_ms - g_ui_ctx.code_entry_start_ms) >= ENTRY_ARM_MS) {
-                const BlePeerRecord_t *peer = transport_ble_get_peer();
-                if (peer != NULL) {
+                if (transport_ble_has_peer_cached()) {
                     /* Confirm code and start countdown */
                     (void)ui_manager_transition_to(UI_STATE_PAIRING);
                     g_ui_ctx.pairing_start_ms = now_ms;

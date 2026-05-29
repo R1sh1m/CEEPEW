@@ -126,7 +126,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
         uint8_t    phase     = session_get_phase();
         BleState_t ble_state = transport_ble_get_state();
-        const BlePeerRecord_t *peer = transport_ble_get_peer();
+        const BlePeerRecord_t *peer = transport_ble_get_peer_cached();
         if (g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS ||
             g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
             return CEEPEW_OK;
@@ -169,8 +169,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* ── STEP 3: Initiator connects during code-entry ─────────────────────
         * Only the initiator calls connect_to_peer. Responder stays passive.      */
         if (phase == 1U && is_initiator && peer != NULL && !g_ble_ctx.connecting &&
-            !g_ble_ctx.gattc_connected && g_ui_ctx.current_state == UI_STATE_CODE_ENTRY &&
-            (ble_state == BLE_ADVERTISING || ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING)) {
+            !g_ble_ctx.gattc_connected && g_ui_ctx.current_state == UI_STATE_CODE_ENTRY) {
             CeePewErr_t err = transport_ble_connect_to_peer(peer->peer_mac);
             if (err != CEEPEW_OK) { return err; }
             /* Connection completes asynchronously; yield now */
@@ -224,7 +223,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         ble_state = transport_ble_get_state();
 
         if (phase == 2U && is_initiator && !s_ble_commitment_exchanged &&
-            ble_state == BLE_CONNECTED) {
+            (ble_state == BLE_CONNECTED || g_ble_ctx.gattc_connected)) {
 
             /* commitment_digest was set in step 4 on the previous tick.
             * Pass a local copy to avoid aliasing UB in exchange_commitment().     */
@@ -769,10 +768,27 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                                 (int)verify_err);
                     }
                 }
+                if (session_get_phase() == 2U && g_ble_ctx.commitment_write_pending) {
+                    (void)transport_ble_retry_commitment_if_needed();
+                }
 
                 CeePewErr_t pair_err = task_session_drive_ble_pairing();
                 if (pair_err != CEEPEW_OK) {
                     CEEPEW_LOG(TAG, "BLE pairing driver returned %d", (int)pair_err);
+                    if (g_ui_ctx.current_state != UI_STATE_PAIRING_FAILED &&
+                        g_ui_ctx.current_state != UI_STATE_PAIRING_SUCCESS) {
+                        if (pair_err == CEEPEW_ERR_TIMEOUT) {
+                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
+                        } else if (pair_err == CEEPEW_ERR_AUTH_FAIL ||
+                                   pair_err == CEEPEW_ERR_SIG_FAIL ||
+                                   pair_err == CEEPEW_ERR_CRYPTO) {
+                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+                        } else {
+                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                        }
+                        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                        g_ui_ctx.transition_ready = true;
+                    }
                 }
 
                 /* ── BLE scan retry (Bug 6 fix) ──────────────────────────────

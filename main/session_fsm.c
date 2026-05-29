@@ -61,7 +61,7 @@ extern void ui_manager_reset_to_discovery(void);
 typedef struct {
     uint8_t  phase;                              /* 0=idle, 1=discovery, 2=pairing, 3=active */
     uint8_t  peer_mac[6];                        /* Locked after Phase 2 */
-    uint64_t session_id;                         /* Derived from timestamp + nonce base */
+    uint64_t session_id;                         /* Deterministic per-session nonce base */
     uint8_t  device_id_self[6];                  /* Own MAC */
     uint8_t  device_id_peer[6];                  /* Peer MAC */
     uint8_t  session_code[32];                   /* Human-verified pairing code */
@@ -70,7 +70,6 @@ typedef struct {
     uint8_t  nonce_upper_64[8];                  /* session_id */
     uint8_t  sign_pk[32];                        /* Ephemeral Ed25519 public key */
     uint8_t  sign_sk[64];                        /* VOLATILE ephemeral private key */
-    uint32_t phase2_timestamp;                   /* Phase 2 initiation time */
     bool     session_active;                     /* true = Phase 3 && authenticated */
     /* Phase 4: TTL and fingerprint tracking */
     uint32_t last_message_time_s;                /* Last message activity timestamp (seconds) */
@@ -95,6 +94,22 @@ static CeePewErr_t session_derive_sign_seed(const uint8_t mac[6], uint8_t seed_o
     CeePewErr_t err = crypto_sha256_compute(seed_material, (uint32_t)sizeof(seed_material), seed_out);
     ceepew_secure_zero(seed_material, (uint32_t)sizeof(seed_material));
     return err;
+}
+
+static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6])
+{
+    CEEPEW_ASSERT(id_a != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(id_b != NULL, CEEPEW_ERR_NULL_PTR);
+
+    if (memcmp(s_session.device_id_self, s_session.device_id_peer, 6U) <= 0) {
+        memcpy(id_a, s_session.device_id_self, 6U);
+        memcpy(id_b, s_session.device_id_peer, 6U);
+    } else {
+        memcpy(id_a, s_session.device_id_peer, 6U);
+        memcpy(id_b, s_session.device_id_self, 6U);
+    }
+
+    return CEEPEW_OK;
 }
 
 static void session_secure_zero_context(void)
@@ -134,16 +149,23 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
 
     s_session.phase = 2U;
     memcpy(s_session.session_code, session_code, 32U);
-    s_session.phase2_timestamp = (uint32_t)(esp_timer_get_time() / 1000000LL);
 
-    /* Derive session_id from timestamp + peer MAC */
-    uint8_t session_id_src[16U];
-    memcpy(session_id_src, s_session.device_id_peer, 6U);
-    memcpy(session_id_src + 6U, &s_session.phase2_timestamp, 4U);
-    memcpy(session_id_src + 10U, s_session.device_id_self, 6U);
+    /* Derive a deterministic session_id from canonical device-ID order and session code. */
+    uint8_t id_a[6U];
+    uint8_t id_b[6U];
+    CeePewErr_t err = session_ordered_device_ids(id_a, id_b);
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+
+    uint8_t session_id_src[44U];
+    memcpy(session_id_src, id_a, 6U);
+    memcpy(session_id_src + 6U, id_b, 6U);
+    memcpy(session_id_src + 12U, s_session.session_code, 32U);
 
     uint8_t session_id_hash[32];
-    CeePewErr_t err = crypto_sha256_compute(session_id_src, 14U, session_id_hash);
+    err = crypto_sha256_compute(session_id_src, (uint32_t)sizeof(session_id_src), session_id_hash);
+    ceepew_secure_zero(session_id_src, (uint32_t)sizeof(session_id_src));
+    ceepew_secure_zero(id_a, (uint32_t)sizeof(id_a));
+    ceepew_secure_zero(id_b, (uint32_t)sizeof(id_b));
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
     s_session.session_id = ((uint64_t)session_id_hash[0] << 56U) |
