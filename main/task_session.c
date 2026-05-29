@@ -777,17 +777,22 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                     CEEPEW_LOG(TAG, "BLE pairing driver returned %d", (int)pair_err);
                     if (g_ui_ctx.current_state != UI_STATE_PAIRING_FAILED &&
                         g_ui_ctx.current_state != UI_STATE_PAIRING_SUCCESS) {
-                        if (pair_err == CEEPEW_ERR_TIMEOUT) {
-                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
-                        } else if (pair_err == CEEPEW_ERR_AUTH_FAIL ||
-                                   pair_err == CEEPEW_ERR_SIG_FAIL ||
-                                   pair_err == CEEPEW_ERR_CRYPTO) {
-                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+                        if (pair_err == CEEPEW_ERR_BUSY) {
+                            /* [FIX-1] A write retry is pending — not a permanent failure */
+                            CEEPEW_LOG(TAG, "BLE pairing driver busy (write retry pending)");
                         } else {
-                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                            if (pair_err == CEEPEW_ERR_TIMEOUT) {
+                                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
+                            } else if (pair_err == CEEPEW_ERR_AUTH_FAIL ||
+                                       pair_err == CEEPEW_ERR_SIG_FAIL ||
+                                       pair_err == CEEPEW_ERR_CRYPTO) {
+                                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+                            } else {
+                                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                            }
+                            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                            g_ui_ctx.transition_ready = true;
                         }
-                        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-                        g_ui_ctx.transition_ready = true;
                     }
                 }
 
