@@ -3,9 +3,12 @@
 #include "ecc_hamming.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#include "esp_log.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+
+#define TAG "FEC"
 
 #define CEEPEW_HAMMING_CODE_BITS 15U
 #define CEEPEW_HAMMING_DATA_BITS 11U
@@ -18,6 +21,10 @@ typedef struct {
 } EccHammingCtx_t;
 
 static EccHammingCtx_t s_ctx = {.initialised = false};
+
+/* FEC statistics for empirical tuning */
+static uint32_t s_fec_corrections_total = 0U;
+static uint32_t s_fec_failures_total = 0U;
 
 /* Maps 4-bit syndrome -> bit position to flip (0-14), 15 = uncorrectable */
 static const uint8_t SYNDROME_TABLE[16] = {0U, 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 15U};
@@ -252,10 +259,18 @@ CeePewErr_t ecc_hamming_decode(const uint8_t *in, uint16_t in_len, uint8_t *out,
         uint8_t syndrome = hamming_compute_syndrome(code);
         if (syndrome != 0U){
             uint8_t flip_idx = SYNDROME_TABLE[syndrome];
-            if (flip_idx == 15U) { return CEEPEW_ERR_FEC; }
+            if (flip_idx == 15U) { 
+                s_fec_failures_total++;
+                ESP_LOGD(TAG, "FEC: Uncorrectable error detected (syndrome=%u, total_failures=%lu)", 
+                         syndrome, s_fec_failures_total);
+                return CEEPEW_ERR_FEC; 
+            }
             uint8_t pos1 = (uint8_t)(flip_idx + 1U);
             code ^= (uint16_t)(1U << (CEEPEW_HAMMING_CODE_BITS - pos1));
             *corrected = true;
+            s_fec_corrections_total++;
+            ESP_LOGD(TAG, "FEC: Corrected 1-bit error at position %u (total_corrections=%lu)", 
+                     flip_idx, s_fec_corrections_total);
         }
 
         uint16_t data11 = hamming_extract_data11(code);
