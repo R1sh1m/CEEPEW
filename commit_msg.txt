@@ -1,9 +1,0 @@
-security: RNG health-check + signed commitment exchange
-
-- Add crypto_rng_health_check() and use before Ed25519 keygen
-- Add session_get_commitment_with_sig() and session_verify_peer_commitment_with_sig()
-- Publish signed commitment via GATTS; transport now verifies signatures
-- Expand BLE commitment buffers
-- Update session and transport modules
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
