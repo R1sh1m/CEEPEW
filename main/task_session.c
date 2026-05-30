@@ -520,7 +520,18 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                     (int)ble_rssi,
                     g_ble_ctx.is_advertising ? 1U : 0U,
                     g_ble_ctx.is_scanning ? 1U : 0U);
+            /* Detect stuck scanning: if we have been scanning but have not
+             * seen a discovered peer for >30s, restart discovery. Use the
+             * previous heartbeat value for comparison. */
+            uint32_t prev_hb = (uint32_t)s_last_ble_scan_heartbeat_ms;
             s_last_ble_scan_heartbeat_ms = now_ms;
+            if (prev_hb != 0U && g_ble_ctx.is_scanning && !g_ble_ctx.discovered &&
+                (now_ms - prev_hb) > 30000U) {
+                ESP_LOGW(TAG, "Scan appears stuck (>30s without discovery) — restarting discovery");
+                (void)transport_ble_restart_discovery_session();
+                /* Refresh heartbeat after restart */
+                s_last_ble_scan_heartbeat_ms = now_ms;
+            }
         }
         if (!scan_active) {
             s_last_ble_scan_heartbeat_ms = 0ULL;
