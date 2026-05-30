@@ -449,6 +449,85 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
     return CEEPEW_OK;
 }
 
+CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, uint8_t len)
+{
+    CEEPEW_ASSERT(peer_data != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len == CEEPEW_COMMITMENT_BYTES || len == CEEPEW_COMMITMENT_LEGACY_BYTES || len == (CEEPEW_COMMITMENT_BYTES + 64U), CEEPEW_ERR_PARAM);
+
+    uint8_t cmp_len = (len == CEEPEW_COMMITMENT_LEGACY_BYTES) ? CEEPEW_COMMITMENT_LEGACY_BYTES : CEEPEW_COMMITMENT_BYTES;
+
+    /* Compare peer commitment against our locally computed commitment (constant-time style) */
+    uint8_t local_commit[CEEPEW_COMMITMENT_BYTES];
+    CeePewErr_t err = session_get_commitment(local_commit);
+    if (err != CEEPEW_OK) { return err; }
+
+    uint8_t match = 0U;
+    for (uint8_t i = 0U; i < cmp_len; i++) { match |= (local_commit[i] ^ peer_data[i]); }
+    if (match != 0U) {
+        ceepew_secure_zero(local_commit, sizeof(local_commit));
+        return CEEPEW_ERR_AUTH_FAIL;
+    }
+
+    /* If a signature is appended, verify it using the deterministically-derived peer public key */
+    if (len >= (uint8_t)(CEEPEW_COMMITMENT_BYTES + 64U)) {
+        const uint8_t *peer_sig = peer_data + CEEPEW_COMMITMENT_BYTES;
+
+        uint8_t peer_seed[32];
+        err = session_derive_sign_seed(s_session.device_id_peer, peer_seed);
+        if (err != CEEPEW_OK) { ceepew_secure_zero(local_commit, sizeof(local_commit)); return err; }
+
+        uint8_t peer_pk[32];
+        uint8_t peer_sk[64];
+        err = crypto_eddsa_seeded_keypair(peer_pk, peer_sk, peer_seed);
+        ceepew_secure_zero(peer_seed, sizeof(peer_seed));
+        if (err != CEEPEW_OK) { ceepew_secure_zero(local_commit, sizeof(local_commit)); return err; }
+
+        /* Verify signature over the commitment bytes */
+        err = crypto_eddsa_verify(peer_pk, local_commit, cmp_len, peer_sig);
+
+        /* Secure-zero temporary key material */
+        ceepew_secure_zero(peer_sk, sizeof(peer_sk));
+        ceepew_secure_zero(peer_pk, sizeof(peer_pk));
+
+        if (err != CEEPEW_OK) {
+            ceepew_secure_zero(local_commit, sizeof(local_commit));
+            return CEEPEW_ERR_SIG_FAIL;
+        }
+    }
+
+    ceepew_secure_zero(local_commit, sizeof(local_commit));
+    return CEEPEW_OK;
+}
+
+CeePewErr_t session_get_commitment_with_sig(uint8_t *out_buf, uint8_t *out_len)
+{
+    CEEPEW_ASSERT(out_buf != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(out_len != NULL, CEEPEW_ERR_NULL_PTR);
+
+    uint8_t local_commit[CEEPEW_COMMITMENT_BYTES];
+    CeePewErr_t err = session_get_commitment(local_commit);
+    if (err != CEEPEW_OK) { return err; }
+
+    /* Copy commitment */
+    memcpy(out_buf, local_commit, CEEPEW_COMMITMENT_BYTES);
+    uint8_t written = CEEPEW_COMMITMENT_BYTES;
+
+    /* Attempt to sign the commitment with our ephemeral sign_sk (available after phase2_initiate)
+     * If signing fails, fall back to commitment-only publish. */
+    uint8_t sig[64];
+    err = crypto_eddsa_sign(s_session.sign_sk, local_commit, CEEPEW_COMMITMENT_BYTES, sig);
+    if (err == CEEPEW_OK) {
+        memcpy(out_buf + written, sig, 64U);
+        written += 64U;
+    }
+
+    *out_len = written;
+
+    ceepew_secure_zero(local_commit, sizeof(local_commit));
+    ceepew_secure_zero(sig, sizeof(sig));
+    return CEEPEW_OK;
+}
+
 /* ────────────────────────────────────────────────────────────────────── */
 /* Phase 4: TTL, Fingerprint, and Secure Wipe                             */
 /* ────────────────────────────────────────────────────────────────────── */

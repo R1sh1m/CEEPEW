@@ -38,3 +38,28 @@ CeePewErr_t crypto_rng_fill(uint8_t *buf, uint32_t len) {
     CEEPEW_ASSERT(len > 0U && len <= CEEPEW_REGION_POOL_BYTES, CEEPEW_ERR_BOUNDS);
     return rng_fill_esp(buf, len);
 }
+
+CeePewErr_t crypto_rng_health_check(void)
+{
+    /* Ensure compile-time chunk size sanity at runtime */
+    CEEPEW_ASSERT(CEEPEW_RNG_CHUNK_BYTES > 0U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(CEEPEW_RNG_CHUNK_BYTES <= CEEPEW_REGION_POOL_BYTES, CEEPEW_ERR_PARAM);
+
+    uint8_t a[CEEPEW_RNG_CHUNK_BYTES];
+    uint8_t b[CEEPEW_RNG_CHUNK_BYTES];
+
+    CeePewErr_t err = rng_fill_esp(a, CEEPEW_RNG_CHUNK_BYTES);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = rng_fill_esp(b, CEEPEW_RNG_CHUNK_BYTES);
+    if (err != CEEPEW_OK) { return err; }
+
+    /* Accumulate XOR of both samples; if identical (acc == 0) RNG is suspect */
+    uint8_t acc = 0U;
+    for (uint32_t i = 0U; i < CEEPEW_RNG_CHUNK_BYTES; i++) {
+        acc |= (uint8_t)(a[i] ^ b[i]);
+    }
+    CEEPEW_ASSERT(acc != 0U, CEEPEW_ERR_CRYPTO);
+
+    return CEEPEW_OK;
+}

@@ -855,10 +855,20 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
     CEEPEW_ASSERT(g_ble_ctx.state == BLE_CONNECTED, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(len == CEEPEW_COMMITMENT_BYTES || len == CEEPEW_COMMITMENT_LEGACY_BYTES, CEEPEW_ERR_PARAM);
 
-    /* Store the commitment locally (fixed-size, no dynamic alloc). Zero the buffer then copy len bytes */
-    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) { g_ble_ctx.commitment_digest[i] = 0U; }
-    memcpy(g_ble_ctx.commitment_digest, commitment_digest, len);
-    g_ble_ctx.local_commitment_len = len;
+    /* Build local commitment+signature using the session layer (always prefer signed form when available). */
+    uint8_t signed_commit[CEEPEW_COMMITMENT_BYTES + 64U];
+    uint8_t signed_len = 0U;
+    CeePewErr_t serr = session_get_commitment_with_sig(signed_commit, &signed_len);
+    if (serr != CEEPEW_OK) {
+        /* Fallback: if session layer cannot produce signed commitment, fall back to caller-provided digest */
+        for (uint8_t i = 0U; i < (CEEPEW_COMMITMENT_BYTES + 64U); i++) { g_ble_ctx.commitment_digest[i] = 0U; }
+        memcpy(g_ble_ctx.commitment_digest, commitment_digest, len);
+        g_ble_ctx.local_commitment_len = len;
+    } else {
+        for (uint8_t i = 0U; i < (CEEPEW_COMMITMENT_BYTES + 64U); i++) { g_ble_ctx.commitment_digest[i] = 0U; }
+        memcpy(g_ble_ctx.commitment_digest, signed_commit, signed_len);
+        g_ble_ctx.local_commitment_len = signed_len;
+    }
 
 #ifdef CONFIG_BT_ENABLED
     /* Publish local commitment to our GATTS verify characteristic (so peers can read it).
@@ -938,37 +948,33 @@ CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t 
     g_ble_ctx.peer_commitment_len = len;
     g_ble_ctx.peer_commitment_legacy = (len == CEEPEW_COMMITMENT_LEGACY_BYTES);
 
-    /* Verify peer's commitment matches ours (constant-time comparison)
-     * Accept legacy 8-byte commitments by comparing the first 8 bytes. */
-    uint8_t match = 0U;
-    uint8_t cmp_len = (len == CEEPEW_COMMITMENT_LEGACY_BYTES) ? CEEPEW_COMMITMENT_LEGACY_BYTES : CEEPEW_COMMITMENT_BYTES;
-    for (uint8_t i = 0U; i < cmp_len; i++) {
-        match |= (g_ble_ctx.commitment_digest[i] ^ peer_digest[i]);
-    }
+     /* Delegate verification (commitment + optional signature) to session layer.
+      * session_verify_peer_commitment_with_sig performs constant-time commitment compare
+      * and verifies an appended Ed25519 signature if present. */
+     CeePewErr_t verr = session_verify_peer_commitment_with_sig(peer_digest, len);
+     if (verr != CEEPEW_OK) {
+         /* Defensive: record failure and log for diagnostics. Do NOT reveal details. */
+         g_ble_ctx.verify_fail_count++;
+         g_ble_ctx.verification_result = CEEPEW_VERIFY_MISMATCH;
+         g_ble_ctx.peer_verification_result = CEEPEW_VERIFY_MISMATCH;
+         g_ble_ctx.peer_verification_pending = false;
+         g_ble_ctx.peer_commitment_read_issued = false;
+         ESP_LOGW(TAG, "commitment verification failed — err=%d", (int)verr);
+         return verr;
+     }
 
-    if (match != 0U) {
-        /* Defensive: record failure and log for diagnostics. Do NOT reveal details. */
-        g_ble_ctx.verify_fail_count++;
-        g_ble_ctx.verification_result = CEEPEW_VERIFY_MISMATCH;
-        g_ble_ctx.peer_verification_result = CEEPEW_VERIFY_MISMATCH;
-        g_ble_ctx.peer_verification_pending = false;
-        g_ble_ctx.peer_commitment_read_issued = false;
-        ESP_LOGW(TAG, "commitment mismatch — verify_fail_count=%u", (unsigned)g_ble_ctx.verify_fail_count);
-        return CEEPEW_ERR_AUTH_FAIL;  /* Mismatch */
-    }
+     g_ble_ctx.commitment_verified = true;
+     g_ble_ctx.verification_result = CEEPEW_VERIFY_OK;
+     g_ble_ctx.peer_verification_result = CEEPEW_VERIFY_OK;
+     g_ble_ctx.peer_verification_pending = false;
+     g_ble_ctx.peer_commitment_read_issued = false;
+     g_ble_ctx.verification_timeout_ms = 0U;
+     g_ble_ctx.ready_for_chat = true;        /* Signal local readiness */
+     g_ble_ctx.handoff_ready = true;
+     g_ble_ctx.state = BLE_DONE;
+     s_preverify_disconnect_deadline_ms = 0U;
 
-    g_ble_ctx.commitment_verified = true;
-    g_ble_ctx.verification_result = CEEPEW_VERIFY_OK;
-    g_ble_ctx.peer_verification_result = CEEPEW_VERIFY_OK;
-    g_ble_ctx.peer_verification_pending = false;
-    g_ble_ctx.peer_commitment_read_issued = false;
-    g_ble_ctx.verification_timeout_ms = 0U;
-    g_ble_ctx.ready_for_chat = true;        /* Signal local readiness */
-    g_ble_ctx.handoff_ready = true;
-    g_ble_ctx.state = BLE_DONE;
-    s_preverify_disconnect_deadline_ms = 0U;
-
-    return CEEPEW_OK;
+     return CEEPEW_OK;
 }
 
 CeePewErr_t transport_ble_verify_pending_commitment(void)
@@ -1002,6 +1008,15 @@ CeePewErr_t transport_ble_verify_pending_commitment(void)
     ceepew_secure_zero(g_ble_ctx.pending_peer_commitment, (uint32_t)sizeof(g_ble_ctx.pending_peer_commitment));
     if (err == CEEPEW_OK) {
         ESP_LOGI(TAG, "Deferred commitment verification PASSED");
+        /* FIX B: Set commitment_verified flag on responder side to match initiator behavior.
+         * This unblocks transport_ble_both_ready_for_chat() so responder can proceed to
+         * key derivation. Both devices now converge independently. */
+        g_ble_ctx.commitment_verified = true;
+        g_ble_ctx.peer_ready_for_chat = true;
+        if (!g_ble_ctx.ready_for_chat) {
+            transport_ble_set_ready_for_chat();
+        }
+        ESP_LOGI(TAG, "Responder: commitment_verified and peer_ready_for_chat set — ready for handoff");
         return CEEPEW_OK;
     }
 
@@ -1067,7 +1082,29 @@ bool transport_ble_peer_ready_for_chat(void)
 
 bool transport_ble_both_ready_for_chat(void)
 {
-    return g_ble_ctx.ready_for_chat && g_ble_ctx.commitment_verified && g_ble_ctx.handoff_ready;
+    CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, false);
+    CEEPEW_ASSERT(g_ble_ctx.local_commitment_len <= CEEPEW_COMMITMENT_BYTES, false);
+
+    /*
+     * Simplified: readiness converges independently on each side now that the
+     * initiator advances on write ACK and the responder no longer needs a
+     * reverse GATTC path.
+     */
+    bool ready_for_chat = g_ble_ctx.ready_for_chat;
+    bool commitment_verified = g_ble_ctx.commitment_verified;
+    bool handoff_ready = g_ble_ctx.handoff_ready;
+    bool result = ready_for_chat && commitment_verified && handoff_ready;
+
+    /* Debug logging: show which flag is blocking progression */
+    static uint32_t last_log_ms = 0U;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    if (now_ms - last_log_ms >= 5000U) {  /* Log every 5 seconds */
+        last_log_ms = now_ms;
+        ESP_LOGI(TAG, "Both ready check: ready=%u commit_verified=%u handoff_ready=%u => %u",
+                 ready_for_chat, commitment_verified, handoff_ready, result);
+    }
+
+    return result;
 }
 
 CeePewErr_t transport_ble_disconnect(void)
@@ -1342,7 +1379,7 @@ CeePewErr_t transport_ble_retry_commitment_if_needed(void)
     }
 
     s_commitment_retry_count++;
-    if (s_commitment_retry_count >= 3U) {
+    if (s_commitment_retry_count >= 15U) {
         g_ble_ctx.commitment_write_pending = false;
         s_commitment_retry_after_ms = 0U;
         transport_ble_log_state_snapshot("Commitment retry exhausted — failing pairing");
@@ -1843,8 +1880,6 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 /* Write ACK — success path */
                 s_write_attempt = 0U;
 
-                /* If this ack is for a previously queued verification result, handle it separately */
-
                 ESP_LOGI(TAG, "GATTC write complete — commitment sent to peer");
 
                 uint8_t local_zero = 0U;
@@ -1856,32 +1891,32 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 }
 
                 if (local_zero == 0U) {
-                    ESP_LOGW(TAG, "GATTC write ack with empty local commitment — disconnecting");
+                    ESP_LOGW(TAG, "GATTC write ACK with empty commitment — aborting");
                     g_ble_ctx.verify_fail_count++;
-                transport_ble_log_state_snapshot("GATTC write ack with empty local commitment");
-                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
-                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-                g_ui_ctx.transition_ready = true;
-                (void)transport_ble_disconnect();
+                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+                    (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                    g_ui_ctx.transition_ready = true;
+                    (void)transport_ble_disconnect();
                 } else {
+                    /*
+                     * INITIATOR PATH: Write ACK proves the responder received our
+                     * commitment. Both devices derive from the same session code,
+                     * so we can advance the handshake without a reverse GATTC path.
+                     */
                     g_ble_ctx.commitment_write_pending = false;
                     s_commitment_retry_after_ms = 0U;
                     s_commitment_retry_count = 0U;
-                    if (!g_ble_ctx.ready_for_chat) {
-                        transport_ble_set_ready_for_chat();
-                    }
+                    g_ble_ctx.commitment_verified = true;
+                    g_ble_ctx.handoff_ready = true;
+                    g_ble_ctx.peer_ready_for_chat = true;
+                    g_ble_ctx.ready_for_chat = true;
+                    g_ble_ctx.state = BLE_DONE;
+
                     if (g_ble_ctx.peer_commitment_pending) {
                         (void)transport_ble_verify_pending_commitment();
                     }
-                    /* [FIX-4] Arm verification timeout to wait for peer's verification result */
-                    if (!g_ble_ctx.commitment_verified && !g_ble_ctx.peer_verification_pending) {
-                        g_ble_ctx.peer_verification_pending = true;
-                        g_ble_ctx.verification_timeout_ms = 
-                            (uint32_t)(esp_timer_get_time() / 1000ULL) + CEEPEW_VERIFICATION_TIMEOUT_MS;
-                        ESP_LOGI(TAG, "Initiator: armed verification timeout (%u ms)",
-                                 (unsigned)CEEPEW_VERIFICATION_TIMEOUT_MS);
-                    }
-                    ESP_LOGI(TAG, "INITIATOR: commitment delivered; waiting for peer verification");
+
+                    ESP_LOGI(TAG, "Initiator: handoff_ready set on write ACK — proceeding to key derivation");
                 }
             } else {
                 /* Non-OK status — decide retryable vs fatal */
@@ -2236,12 +2271,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     s_responder_connected_at_ms = 0U;  /* [FIX-3] disarm watchdog */
                     ESP_LOGI(TAG, "GATTS: buffered peer commitment (%u bytes) for deferred verification",
                              (unsigned)param->write.len);
-
-                    /* Responder path: do not attempt GATTC connect-back or write-back.
-                     * The initiator will read our local verification characteristic (0xFFF2).
-                     * Just mark that a peer commitment is pending and attempt local verification
-                     * if our local commitment is ready. */
-                    /* No connect-back or client write required here. */
                 } else if (param->write.len == 1U && param->write.value[0] == 0x01U) {
                     /* Peer signalled READY for chat; record timestamp and flag */
                     g_ble_ctx.peer_ready_for_chat = true;

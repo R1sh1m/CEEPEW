@@ -346,6 +346,11 @@ static int crypto_sign_verify_detached(const u8 *sig, const u8 *m, u64 n, const 
 CeePewErr_t crypto_eddsa_keypair(uint8_t pk[32], uint8_t sk[64]) {
     CEEPEW_ASSERT(pk != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(sk != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Health-check RNG before generating ephemeral key material */
+    CeePewErr_t herr = crypto_rng_health_check();
+    if (herr != CEEPEW_OK) { return herr; }
+
     CeePewErr_t err = crypto_rng_fill(sk, 32U);
     if (err != CEEPEW_OK) {
         return err;

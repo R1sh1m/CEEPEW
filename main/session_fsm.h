@@ -275,6 +275,19 @@ uint64_t session_get_id(void);
  */
 CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
 
+/* Return the local commitment concatenated with an Ed25519 signature over the commitment.
+ * out_buf must be at least (CEEPEW_COMMITMENT_BYTES + 64) bytes long. out_len is set to
+ * the actual length written (either CEEPEW_COMMITMENT_BYTES or CEEPEW_COMMITMENT_BYTES+64).
+ */
+CeePewErr_t session_get_commitment_with_sig(uint8_t *out_buf, uint8_t *out_len);
+
+/* Verify a peer's commitment which may include an appended Ed25519 signature.
+ * peer_data: pointer to received bytes (commitment[16] || optional signature[64])
+ * len: total length of peer_data
+ * Returns CEEPEW_OK on successful verification (commitment and signature ok)
+ */
+CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, uint8_t len);
+
 #ifdef __cplusplus
 }
 #endif

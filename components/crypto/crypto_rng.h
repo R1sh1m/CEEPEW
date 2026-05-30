@@ -8,5 +8,6 @@
 #include <stdint.h>
 
 CeePewErr_t crypto_rng_fill(uint8_t *buf, uint32_t len);
+CeePewErr_t crypto_rng_health_check(void);
 
 #endif /* CRYPTO_RNG_H */
