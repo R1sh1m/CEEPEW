@@ -1592,7 +1592,8 @@ static CeePewErr_t render_countdown(void)
         hal_ui_rect_fill(&bar, HAL_UI_WHITE);
     }
 
-    ui_draw_text_wrapped(10U, 54U, "Waiting for peer", 108U, 8U);
+    /* Bottom status line: keep waiting text anchored to Y_STATUS for consistency */
+    ui_draw_text_wrapped(10U, Y_STATUS, "Waiting for peer", 108U, 8U);
 
     if (rem_ms == 0U) {
         g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
@@ -1628,7 +1629,8 @@ static CeePewErr_t render_pairing_success(void)
     }
     hal_ui_text(30U, 26U, "Session ready", HAL_UI_WHITE);
     ui_draw_text_wrapped(10U, 34U, "Moving to key derivation", 108U, 8U);
-    ui_draw_text_wrapped(22U, 54U, "Please wait...", 84U, 8U);
+    /* Keep the simple waiting prompt in the bottom status area for visibility */
+    ui_draw_text_wrapped(22U, Y_STATUS, "Please wait...", 84U, 8U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -1880,21 +1882,22 @@ static CeePewErr_t render_keyder_anim(void)
     draw_hline(0U, scan_y, 128U);
 
     /* Progress bar */
-    HalUIRect_t pbar_bg = { .x = 0U, .y = 52U, .w = 128U, .h = 12U };
+    /* Progress band moved up to avoid overlapping bottom status/footer */
+    HalUIRect_t pbar_bg = { .x = 0U, .y = 44U, .w = 128U, .h = 10U };
     hal_ui_rect_fill(&pbar_bg, HAL_UI_WHITE); /* white background strip */
-    /* We need black fill inside — can't truly invert, so draw outline approach */
-    HalUIRect_t pbar_border = { .x = 2U, .y = 54U, .w = 124U, .h = 8U };
+    /* Draw an inner border to create a progress bar look */
+    HalUIRect_t pbar_border = { .x = 2U, .y = 46U, .w = 124U, .h = 6U };
     hal_ui_rect(&pbar_border, HAL_UI_WHITE);
 
     /* Derive animation progress from frame (assume ~150 frames for full derivation) */
     uint8_t prog_w = (uint8_t)((f < 150U) ? (f * 120U / 150U) : 120U);
     if (prog_w > 0U) {
-        HalUIRect_t prog = { .x = 4U, .y = 56U, .w = prog_w, .h = 4U };
+        HalUIRect_t prog = { .x = 4U, .y = 48U, .w = prog_w, .h = 4U };
         hal_ui_rect_fill(&prog, HAL_UI_WHITE);
     }
 
-    /* Label inside the progress bar white band */
-    hal_ui_text(24U, 44U, "DERIVING KEY...", HAL_UI_WHITE);
+    /* Label above the progress band to avoid conflict with bottom status line */
+    hal_ui_text(24U, 36U, "DERIVING KEY...", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
 
@@ -2206,7 +2209,8 @@ CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[CEEPEW_COMMITMENT
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
     hal_ui_clear();
     hal_ui_text(16U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
-    ui_draw_hex_rows(commitment, CEEPEW_COMMITMENT_BYTES, 10U, 14U);
+    /* Restore hex rows to original position for consistency with legacy UI */
+    ui_draw_hex_rows(commitment, CEEPEW_COMMITMENT_BYTES, 10U, 24U);
 
     return CEEPEW_OK;
 }
@@ -2221,7 +2225,7 @@ CeePewErr_t ui_crypto_show_status(uint8_t status)
 {
     CEEPEW_ASSERT(status <= 2U, CEEPEW_ERR_BOUNDS);
 
-    uint8_t y_pos = 54U;
+    uint8_t y_pos = Y_STATUS;
 
     if (status == 0U) {
         /* Waiting for peer */
@@ -2365,8 +2369,8 @@ static CeePewErr_t render_cryptogram(void)
         /* Waiting — animated spinner at left, moved to bottom row for visibility */
         const char *spin = "|/-\\";
         char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
-        hal_ui_text(4U, 54U, sp, HAL_UI_WHITE);
-        hal_ui_text(14U, 54U, "Waiting for peer", HAL_UI_WHITE);
+        hal_ui_text(4U, Y_STATUS, sp, HAL_UI_WHITE);
+        hal_ui_text(14U, Y_STATUS, "Waiting for peer", HAL_UI_WHITE);
 
         /* Check timeout: 30 seconds from pairing_start_ms */
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
