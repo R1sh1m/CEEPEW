@@ -5,7 +5,55 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_random.h"
+
 #define CEEPEW_ARQ_SEQ_BYTES 1U
+
+/* Exponential backoff base timing (in milliseconds) for ARQ retries:
+ * Attempt 0: 100ms base + ±10% jitter
+ * Attempt 1: 200ms base + ±10% jitter
+ * Attempt 2: 400ms base + ±10% jitter
+ */
+#define CEEPEW_ARQ_BACKOFF_BASE_MS 100U
+#define CEEPEW_ARQ_JITTER_PERCENT 10U
+
+/* Calculate exponential backoff time with ±jitter_percent deviation.
+ *
+ * For attempt N:
+ *   base_ms = (CEEPEW_ARQ_BACKOFF_BASE_MS << N)
+ *   jitter_offset = base_ms * (random_signed_percent / 100)
+ *   actual_wait = base_ms + jitter_offset
+ *
+ * This spreads retransmissions over exponentially increasing windows,
+ * reducing collision probability when multiple devices retry simultaneously.
+ */
+static uint16_t ecc_arq_compute_backoff_ms(uint8_t attempt) {
+    CEEPEW_ASSERT(attempt < CEEPEW_ARQ_MAX_RETRIES, 0U);
+
+    /* Calculate base backoff: 100ms << attempt => 100, 200, 400 ms */
+    uint16_t base_ms = (uint16_t)(CEEPEW_ARQ_BACKOFF_BASE_MS << attempt);
+
+    /* Generate random jitter in range [-10%, +10%]
+     * esp_random() returns 0..0xFFFFFFFF uniformly
+     * We map this to a signed percentage offset: -10 to +10
+     */
+    uint32_t random_val = esp_random();
+    int16_t jitter_percent = (int16_t)((random_val % (2U * CEEPEW_ARQ_JITTER_PERCENT + 1U))
+                                       - CEEPEW_ARQ_JITTER_PERCENT);
+
+    /* Apply jitter: base_ms + (base_ms * jitter_percent / 100)
+     * Use int32_t intermediate to avoid overflow before division.
+     */
+    int32_t offset_ms = (int32_t)base_ms * jitter_percent / 100;
+    uint16_t actual_wait_ms = (uint16_t)((int32_t)base_ms + offset_ms);
+
+    /* Ensure result is within bounds */
+    CEEPEW_ASSERT(actual_wait_ms > 0U && actual_wait_ms <= (base_ms + (base_ms / 10U)), 0U);
+
+    return actual_wait_ms;
+}
 
 static uint8_t s_tx_seq = 0U;
 static uint8_t s_expected_rx_seq = 0U;
@@ -50,7 +98,13 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
     return CEEPEW_OK;
 }
 
-/* Stop-and-Wait ARQ sender using transport_espnow_send() and transport_wait_ack() */
+/* Stop-and-Wait ARQ sender using transport_espnow_send() and transport_wait_ack()
+ *
+ * Implements exponential backoff with jitter on timeout:
+ * - Attempt 0: 100ms base ± 10% jitter
+ * - Attempt 1: 200ms base ± 10% jitter
+ * - Attempt 2: 400ms base ± 10% jitter
+ */
 CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint16_t payload_len){
     CEEPEW_ASSERT(peer_mac != NULL && payload != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(payload_len > 0U && payload_len <= CEEPEW_PACKET_MAX_BYTES, CEEPEW_ERR_PARAM);
@@ -74,7 +128,13 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
             return CEEPEW_OK; /* Success */
         }
         else if (ack_err == CEEPEW_ERR_TIMEOUT){
-            /* retry */
+            /* Timeout: apply exponential backoff with jitter before retry.
+             * Skip delay on final attempt (all retries exhausted after this loop).
+             */
+            if (attempt < CEEPEW_ARQ_MAX_RETRIES - 1U) {
+                uint16_t backoff_ms = ecc_arq_compute_backoff_ms(attempt);
+                vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+            }
             continue;
         }
         else {

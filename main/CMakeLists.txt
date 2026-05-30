@@ -11,6 +11,8 @@ idf_component_register(
         "integration_test_e2e.c"
         "test_pipeline_memory.c"
         "test_replay.c"
+        "test_replay_comprehensive.c"
+        "test_arq_backoff.c"
         "test_power.c"
         "test_hop.c"
     INCLUDE_DIRS
