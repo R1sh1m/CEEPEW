@@ -1654,8 +1654,9 @@ static CeePewErr_t render_pairing_failed(void)
         HalUIRect_t tick = { .x = 112U, .y = 50U, .w = 6U, .h = 6U };
         hal_ui_rect_fill(&tick, HAL_UI_WHITE);
     }
-    draw_hline(8U, 46U, 112U);
-    ui_draw_text_wrapped(12U, 50U, "Retrying link. Please wait.", 102U, 8U);
+    /* Slightly increase spacing between detail box and footer text to improve legibility */
+    draw_hline(8U, 48U, 112U);
+    ui_draw_text_wrapped(12U, 54U, "Retrying link. Please wait.", 102U, 8U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
