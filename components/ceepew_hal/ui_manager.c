@@ -1648,7 +1648,7 @@ static CeePewErr_t render_pairing_failed(void)
 
     ui_draw_centered_text(15U, reason);
 
-    HalUIRect_t detail_box = { .x = 8U, .y = 22U, .w = 112U, .h = 20U };
+    HalUIRect_t detail_box = { .x = 8U, .y = 22U, .w = 112U, .h = 22U };
     hal_ui_rect(&detail_box, HAL_UI_WHITE);
     ui_draw_text_wrapped(12U, 25U, detail, 102U, 8U);
 
@@ -1657,8 +1657,8 @@ static CeePewErr_t render_pairing_failed(void)
         hal_ui_rect_fill(&tick, HAL_UI_WHITE);
     }
     /* Slightly increase spacing between detail box and footer text to improve legibility */
-    draw_hline(8U, 48U, 112U);
-    ui_draw_text_wrapped(12U, 54U, "Retrying link. Please wait.", 102U, 8U);
+    draw_hline(8U, 50U, 112U);
+    ui_draw_text_wrapped(12U, Y_STATUS, "Retrying link. Please wait.", 102U, 8U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
