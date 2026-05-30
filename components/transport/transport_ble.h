@@ -201,6 +201,13 @@ bool transport_ble_both_ready_for_chat(void);
 /* Check if handoff to Phase 3 is ready (commitment verified + connection stable) */
 bool transport_ble_handoff_ready(void);
 
+/* Get peer age in ms computed from accumulated_conn_ms + current connection delta
+ * or last_seen when disconnected. Safe to call from UI (thread-safe). */
+uint32_t transport_ble_get_peer_age_ms(void);
+
+/* Reset accumulated connection time (safe API) */
+void transport_ble_reset_accumulated_conn_ms(void);
+
 /* Gracefully close BLE connection and move to Phase 3 (ESP-NOW handoff) */
 CeePewErr_t transport_ble_disconnect(void);
 

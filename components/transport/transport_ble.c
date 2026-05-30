@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <esp_timer.h>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "transport_ble";
 
@@ -131,6 +133,20 @@ static bool     s_adv_starting                 = false;
 static bool     s_scan_start_failed            = false;
 static uint32_t s_commitment_retry_after_ms    = 0U;
 static uint8_t  s_commitment_retry_count       = 0U;
+
+/* Mutex protecting access to g_ble_ctx transient fields that are read/written
+ * from BLE callback context and task contexts on different cores. */
+static SemaphoreHandle_t s_ble_ctx_mutex = NULL;
+
+static inline void ble_ctx_lock(void)
+{
+    if (s_ble_ctx_mutex != NULL) { xSemaphoreTake(s_ble_ctx_mutex, portMAX_DELAY); }
+}
+
+static inline void ble_ctx_unlock(void)
+{
+    if (s_ble_ctx_mutex != NULL) { xSemaphoreGive(s_ble_ctx_mutex); }
+}
 
 /* [FIX-1] Per-write retry state */
 static uint8_t  s_write_attempt                = 0U;
@@ -490,6 +506,12 @@ CeePewErr_t transport_ble_init(void)
              transport_ble_state_name(g_ble_ctx.state),
              g_ble_ctx.is_advertising ? 1U : 0U,
              g_ble_ctx.is_scanning ? 1U : 0U);
+
+    /* Create mutex for protecting g_ble_ctx access across tasks/cores */
+    s_ble_ctx_mutex = xSemaphoreCreateMutex();
+    if (s_ble_ctx_mutex == NULL) {
+        ESP_LOGW(TAG, "transport_ble_init: failed to create ble_ctx mutex");
+    }
 
 #ifdef CONFIG_BT_ENABLED
     ESP_LOGI(TAG, "transport_ble_init: Starting BLE initialization");
@@ -864,29 +886,55 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
 static CeePewErr_t transport_ble_write_verification_result(VerificationStatus_t status)
 {
 #ifdef CONFIG_BT_ENABLED
-    /* Write via GATTC if we have a client connection to send back */
-    if (g_ble_ctx.gattc_connected && g_ble_ctx.gattc_verify_char_handle != 0U) {
+    /* Read current GATTC state under lock and copy to locals to avoid holding
+     * the mutex while calling into Bluedroid stack. */
+    bool can_write = false;
+    uint16_t verify_handle = 0U;
+    uint8_t  gattc_if_local = CEEPEW_GATT_IF_NONE;
+    uint16_t conn_id_local = 0U;
+
+    ble_ctx_lock();
+    can_write = (g_ble_ctx.gattc_connected && g_ble_ctx.gattc_verify_char_handle != 0U);
+    if (can_write) {
+        verify_handle = g_ble_ctx.gattc_verify_char_handle;
+        gattc_if_local = g_ble_ctx.gattc_if;
+        conn_id_local = g_ble_ctx.conn_id;
+    }
+    ble_ctx_unlock();
+
+    if (can_write) {
         uint8_t val = (uint8_t)status;
         esp_err_t err = esp_ble_gattc_write_char(
-            g_ble_ctx.gattc_if,
-            g_ble_ctx.conn_id,
-            g_ble_ctx.gattc_verify_char_handle,
+            gattc_if_local,
+            conn_id_local,
+            verify_handle,
             1U,
             &val,
             ESP_GATT_WRITE_TYPE_RSP,
             ESP_GATT_AUTH_REQ_NONE);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to write verification result (gattc): %d", err);
+            /* Queue the result for retry later */
+            ble_ctx_lock();
+            g_ble_ctx.pending_verify_result = true;
+            g_ble_ctx.pending_verify_status = (uint8_t)status;
+            ble_ctx_unlock();
             return CEEPEW_ERR_HW;
         }
-        ESP_LOGI(TAG, "Sent verification result %u to peer", (unsigned)status);
+        /* Write successfully initiated — clear any previously queued result */
+        ble_ctx_lock();
+        g_ble_ctx.pending_verify_result = false;
+        ble_ctx_unlock();
+        ESP_LOGI(TAG, "Sent verification result %u to peer (write initiated)", (unsigned)status);
         return CEEPEW_OK;
     } else {
         /* GATTC path not available yet — queue the verification result so it can be
          * sent when the GATTC characteristic is discovered or the client connects. */
-        ESP_LOGW(TAG, "Cannot write verification result now: queuing for retry");
+        ble_ctx_lock();
         g_ble_ctx.pending_verify_result = true;
         g_ble_ctx.pending_verify_status = (uint8_t)status;
+        ble_ctx_unlock();
+        ESP_LOGW(TAG, "Cannot write verification result now: queuing for retry");
         return CEEPEW_OK;
     }
 #else
@@ -1781,10 +1829,9 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                     if (g_ble_ctx.pending_verify_result && g_ble_ctx.gattc_verify_char_handle != 0U) {
                         CeePewErr_t wr_err = transport_ble_write_verification_result((VerificationStatus_t)g_ble_ctx.pending_verify_status);
                         if (wr_err == CEEPEW_OK) {
-                            /* If write succeeded (or was queued), clear pending flag only if not re-queued */
-                            if (!g_ble_ctx.pending_verify_result) {
-                                g_ble_ctx.pending_verify_result = false;
-                            }
+                            ESP_LOGI(TAG, "Attempted flush of queued verify result");
+                        } else {
+                            ESP_LOGW(TAG, "Flush of queued verify result failed: %d", (int)wr_err);
                         }
                     }
                 } else {
@@ -1800,6 +1847,23 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             if (param->write.status == ESP_GATT_OK) {
                 /* Write ACK — success path */
                 s_write_attempt = 0U;
+
+                /* If this ack is for a previously queued verification result, handle it separately */
+                {
+                    uint16_t verify_handle_local = 0U;
+                    ble_ctx_lock();
+                    verify_handle_local = g_ble_ctx.gattc_verify_char_handle;
+                    ble_ctx_unlock();
+
+                    if (param->write.handle == verify_handle_local) {
+                        ESP_LOGI(TAG, "GATTC verify char write ACK");
+                        ble_ctx_lock();
+                        g_ble_ctx.pending_verify_result = false;
+                        ble_ctx_unlock();
+                        break; /* nothing else to do for verify ack */
+                    }
+                }
+
                 ESP_LOGI(TAG, "GATTC write complete — commitment sent to peer");
 
                 uint8_t local_zero = 0U;
@@ -1885,6 +1949,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             /* Accumulate connected duration for current peer */
             {
                 uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                ble_ctx_lock();
                 if (g_ble_ctx.gatt_connected_since_ms != 0U) {
                     uint32_t delta = (now_ms > g_ble_ctx.gatt_connected_since_ms)
                                       ? (now_ms - g_ble_ctx.gatt_connected_since_ms) : 0U;
@@ -1897,6 +1962,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                     }
                     g_ble_ctx.gatt_connected_since_ms = 0U;
                 }
+                ble_ctx_unlock();
             }
 
             bool pairing_failure_visible_gattc =
@@ -2020,6 +2086,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
            /* Accumulate connected duration for current peer */
            {
                uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+               ble_ctx_lock();
                if (g_ble_ctx.gatt_connected_since_ms != 0U) {
                    uint32_t delta = (now_ms > g_ble_ctx.gatt_connected_since_ms)
                                      ? (now_ms - g_ble_ctx.gatt_connected_since_ms) : 0U;
@@ -2032,6 +2099,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                    }
                    g_ble_ctx.gatt_connected_since_ms = 0U;
                }
+               ble_ctx_unlock();
            }
 
            bool pairing_failure_visible_gatts =
@@ -2272,6 +2340,47 @@ CeePewErr_t transport_ble_check_verification_result(void)
     
     /* Still within timeout — continue waiting */
     return CEEPEW_OK;
+}
+
+/* Thread-safe helper: compute peer age (accumulated + current delta or last_seen)
+ * Returns age in milliseconds. Safe to call from UI/task contexts. */
+uint32_t transport_ble_get_peer_age_ms(void)
+{
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    uint32_t age_ms = 0U;
+
+    /* Copy under lock */
+    ble_ctx_lock();
+    uint32_t acc_ms = g_ble_ctx.accumulated_conn_ms;
+    uint32_t gatt_since = g_ble_ctx.gatt_connected_since_ms;
+    uint32_t last_seen = g_ble_ctx.last_seen_ms;
+    bool gatt_connected = (g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected);
+    ble_ctx_unlock();
+
+    if (gatt_connected && gatt_since != 0U) {
+        uint32_t cur_ms = (now_ms > gatt_since) ? (now_ms - gatt_since) : 0U;
+        if (cur_ms > UINT32_MAX - acc_ms) {
+            age_ms = UINT32_MAX;
+        } else {
+            age_ms = acc_ms + cur_ms;
+        }
+    } else {
+        if (acc_ms != 0U) {
+            age_ms = acc_ms;
+        } else {
+            age_ms = (last_seen == 0U) ? 0U : (now_ms - last_seen);
+        }
+    }
+
+    return age_ms;
+}
+
+/* Reset accumulated connected time (called on successful handoff) */
+void transport_ble_reset_accumulated_conn_ms(void)
+{
+    ble_ctx_lock();
+    g_ble_ctx.accumulated_conn_ms = 0U;
+    ble_ctx_unlock();
 }
 
 #endif

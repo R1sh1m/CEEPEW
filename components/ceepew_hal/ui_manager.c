@@ -1147,29 +1147,9 @@ static CeePewErr_t render_discovery(void)
 
        /* Blip bounds check: stay within left panel (x < 52 for divider at 52) */
        if (bx >= 0 && bx < 52 && by >= 0 && by < 64) {
-           /* [FIX-1] Use gatt_connected_since_ms + accumulation during pairing to track connection age,
-            * not last_seen_ms which resets on every BLE scan hit */
-           uint32_t age_ms;
-           uint32_t acc_ms = g_ble_ctx.accumulated_conn_ms;
-           if ((g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected) && g_ble_ctx.gatt_connected_since_ms != 0U) {
-               /* During active GATT connection, accumulate previous durations + current */
-               uint32_t cur_ms = (now_ms > g_ble_ctx.gatt_connected_since_ms)
-                              ? (now_ms - g_ble_ctx.gatt_connected_since_ms)
-                              : 0U;
-               /* saturating add */
-               if (cur_ms > UINT32_MAX - acc_ms) {
-                   age_ms = UINT32_MAX;
-               } else {
-                   age_ms = acc_ms + cur_ms;
-               }
-           } else {
-               /* Not currently connected: prefer showing accumulated time if any, else last_seen age */
-               if (acc_ms != 0U) {
-                   age_ms = acc_ms;
-               } else {
-                   age_ms = (g_ble_ctx.last_seen_ms == 0U) ? 0U : (now_ms - g_ble_ctx.last_seen_ms);
-               }
-           }
+           /* [FIX-1] Use thread-safe helper to get accumulated connection age
+            * (mutex-protected, safe from concurrent transport updates) */
+           uint32_t age_ms = transport_ble_get_peer_age_ms();
            draw_peer_blip((uint8_t)bx, (uint8_t)by, sweep_pos, blip_idx, pulse_phase, age_ms);
        }
     } else {
@@ -1198,19 +1178,9 @@ static CeePewErr_t render_discovery(void)
 
     /* ── Bottom status line ── */
     if (peer_visible) {
-       /* [FIX-1] Use gatt_connected_since_ms during pairing to track connection age,
-        * not last_seen_ms which resets on every BLE scan hit */
-       uint32_t age_ms;
-       if ((g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected) && g_ble_ctx.gatt_connected_since_ms != 0U) {
-           /* During active GATT connection, track connection age */
-           age_ms = (now_ms > g_ble_ctx.gatt_connected_since_ms)
-                  ? (now_ms - g_ble_ctx.gatt_connected_since_ms)
-                  : 0U;
-       } else {
-           /* During discovery, track last scan hit age */
-           age_ms = (g_ble_ctx.last_seen_ms == 0U)
-                  ? 0U : (now_ms - g_ble_ctx.last_seen_ms);
-       }
+       /* [FIX-1] Use thread-safe helper to get accumulated connection age
+        * (mutex-protected, safe from concurrent transport updates) */
+       uint32_t age_ms = transport_ble_get_peer_age_ms();
        char status_str[28U];
        (void)snprintf(status_str, sizeof(status_str), "S:%lu H:%u A:%lu.%01lus",
                       (unsigned long)g_ble_ctx.scan_seen_count,
@@ -2445,6 +2415,14 @@ CeePewErr_t ui_manager_update(void)
             /* Trigger red LED pulse for 15 seconds on pairing failure.
              * Set LED after disconnect so disconnect() can't overwrite it. */
             (void)rgb_set_pattern(RGB_RED_BLINK);
+
+            /* Also ensure advertising and scanning are restarted so device is
+             * immediately re-discoverable for reparing attempts. */
+            if (transport_ble_get_state() != BLE_ADVERTISING &&
+                transport_ble_get_state() != BLE_ADVERTISING_AND_SCANNING) {
+                (void)transport_ble_start_advertising();
+            }
+            (void)transport_ble_start_scan();
         } else if (g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
             /* BLE is initialized once by app_main; discovery entry only
              * restarts advertising if the transport is idle. */

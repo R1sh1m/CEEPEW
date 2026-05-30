@@ -297,6 +297,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             g_ui_ctx.transition_ready = true;
 
             (void)transport_ble_disconnect();
+            /* Reset BLE-connected accumulation on successful handoff to Phase 3 */
+            g_ble_ctx.accumulated_conn_ms = 0U;
             s_ble_commitment_exchanged = false;
             ESP_LOGI(TAG, "Session key derived — pairing complete");
             /* Notify the UI task that the session is now active so it can
