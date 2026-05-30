@@ -53,8 +53,8 @@ typedef enum {
     BLE_DONE
 } BleState_t;
 
-#define CEEPEW_DISCOVERY_PEER_VISIBLE_MS 8000U
-#define CEEPEW_DISCOVERY_PEER_CLEAR_MS   8000U
+#define CEEPEW_DISCOVERY_PEER_VISIBLE_MS 15000U
+#define CEEPEW_DISCOVERY_PEER_CLEAR_MS   20000U
 
 /* Peer discovery record (found during scan) */
 typedef struct {
@@ -82,6 +82,7 @@ typedef struct {
     uint8_t        local_commitment_len; /* bytes stored for local commitment */
     uint8_t        peer_commitment_len;  /* bytes received from peer (8 or 16) */
     bool           peer_commitment_legacy; /* true if peer uses legacy 8-byte commit */
+    bool           is_initiator_role;     /* true = we opened the GATTC connection */
     uint8_t        pending_peer_commitment[CEEPEW_COMMITMENT_BYTES];
     uint8_t        pending_peer_commitment_len;
     bool           peer_commitment_pending;

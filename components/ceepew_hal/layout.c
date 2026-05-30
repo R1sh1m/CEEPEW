@@ -103,6 +103,13 @@ static const LayoutZone_t s_chat_compose_zones[] = {
     { "legend",        { .x = 0U,  .y = 47U, .w = 128U, .h = 17U } },
 };
 
+static const LayoutZone_t s_chat_send_confirm_zones[] = {
+    { "title",         { .x = 0U,  .y = 0U,  .w = 128U, .h = 12U } },
+    { "message",       { .x = 0U,  .y = 12U, .w = 128U, .h = 26U } },
+    { "choices",       { .x = 0U,  .y = 38U, .w = 128U, .h = 18U } },
+    { "footer",        { .x = 0U,  .y = 56U, .w = 128U, .h = 8U } },
+};
+
 static const LayoutZone_t s_cryptogram_zones[] = {
     { "title",         { .x = 0U,  .y = 0U,  .w = 128U, .h = 12U } },
     { "code",          { .x = 0U,  .y = 12U, .w = 128U, .h = 34U } },
@@ -138,6 +145,7 @@ static const LayoutState_t s_states[] = {
     { UI_STATE_CHAT,               "CHAT",               s_chat_zones,           (uint8_t)(sizeof(s_chat_zones) / sizeof(s_chat_zones[0])) },
     { UI_STATE_CHAT_MENU,          "CHAT_MENU",          s_chat_zones,           (uint8_t)(sizeof(s_chat_zones) / sizeof(s_chat_zones[0])) },
     { UI_STATE_CHAT_COMPOSE,       "CHAT_COMPOSE",       s_chat_compose_zones,   (uint8_t)(sizeof(s_chat_compose_zones) / sizeof(s_chat_compose_zones[0])) },
+    { UI_STATE_CHAT_SEND_CONFIRM,  "CHAT_SEND_CONFIRM",  s_chat_send_confirm_zones, (uint8_t)(sizeof(s_chat_send_confirm_zones) / sizeof(s_chat_send_confirm_zones[0])) },
     { UI_STATE_CRYPTOGRAM,         "CRYPTOGRAM",         s_cryptogram_zones,     (uint8_t)(sizeof(s_cryptogram_zones) / sizeof(s_cryptogram_zones[0])) },
     { UI_STATE_NONCE_EXHAUSTED,    "NONCE_EXHAUSTED",    s_nonce_zones,          (uint8_t)(sizeof(s_nonce_zones) / sizeof(s_nonce_zones[0])) },
     { UI_STATE_INFO,               "INFO",               s_info_zones,           (uint8_t)(sizeof(s_info_zones) / sizeof(s_info_zones[0])) },

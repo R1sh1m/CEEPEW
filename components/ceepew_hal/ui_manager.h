@@ -39,6 +39,7 @@ typedef enum {
     UI_STATE_PAIRING = 17U,       /* Sprint 9: Pairing countdown state (legacy name) */
     UI_STATE_PAIRING_SUCCESS = 18U, /* Pairing outcome: success banner */
     UI_STATE_PAIRING_FAILED = 19U,  /* Pairing outcome: failure banner */
+    UI_STATE_CHAT_SEND_CONFIRM = 20U, /* Phase 4: Confirm composed message before send */
 } UIState_t;
 
 typedef enum {
@@ -89,8 +90,9 @@ typedef struct {
     bool          fingerprint_confirmed; /* true if user confirmed (D button) */
     uint32_t      reject_sequence_start_ms; /* ms when red reject blink started */
     uint32_t      error_start_ms;       /* ms when error state was entered */
-    /* Phase 4: Chat menu and compose context */
+    /* Phase 4: Chat menu, compose, and send-confirm context */
     uint8_t       chat_menu_selected;   /* 0=Read, 1=Write, 2=Check */
+    uint8_t       chat_send_confirm_selected; /* 0=Send, 1=Go back */
     char          compose_buffer[256];  /* Message composition buffer */
     uint8_t       compose_length;       /* Current message length */
     uint8_t       compose_cursor;       /* Cursor position in message */

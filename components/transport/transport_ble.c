@@ -122,7 +122,7 @@ static const char *transport_ble_state_name(BleState_t state);
 
 #define CEEPEW_RESTART_DEBOUNCE_MS  2000U
 #define CEEPEW_PREVERIFY_RETRY_WINDOW_MS 10000U
-#define CEEPEW_VERIFICATION_TIMEOUT_MS 5000U   /* Timeout waiting for peer verification result */
+#define CEEPEW_VERIFICATION_TIMEOUT_MS 20000U   /* Timeout waiting for peer verification result */
 static uint32_t s_last_restart_ms              = 0U;
 static uint32_t s_scan_retry_after_ms          = 0U;
 static uint32_t s_preverify_disconnect_deadline_ms = 0U;
@@ -270,6 +270,7 @@ void transport_ble_clear_discovery_peer_state(void)
     g_ble_ctx.reconnect_attempts   = 0U;
     g_ble_ctx.verify_fail_count    = 0U;
     g_ble_ctx.connecting           = false;
+    g_ble_ctx.is_initiator_role    = false;
     g_ble_ctx.commitment_write_pending = false;
     s_commitment_retry_after_ms = 0U;
     s_commitment_retry_count = 0U;
@@ -794,6 +795,7 @@ CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6])
         return CEEPEW_ERR_BUSY;
     }
     g_ble_ctx.connecting = true;
+    g_ble_ctx.is_initiator_role = true;  /* We are opening the GATTC connection */
     esp_ble_gatt_creat_conn_params_t conn_params = {0};
     memcpy(conn_params.remote_bda, g_ble_ctx.peer_mac, ESP_BD_ADDR_LEN);
     conn_params.remote_addr_type = g_ble_ctx.peer_addr_type;
@@ -811,6 +813,7 @@ CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6])
 #else
     /* If BT disabled, simulate immediate connection for higher-level logic */
     g_ble_ctx.gattc_connected = true;
+    g_ble_ctx.is_initiator_role = true;
     g_ble_ctx.state = BLE_CONNECTED;
 #endif
 
@@ -853,20 +856,6 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
         s_commitment_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) + 400U;
     }
 #endif
-
-    /* If we are still only connected as the peripheral, kick the missing
-     * client-side connection now so the pending commitment can eventually be
-     * written back to the peer. Without this, the responder can remain stuck
-     * waiting forever with a queued write but no GATTC link. */
-    if (!g_ble_ctx.gattc_connected && !g_ble_ctx.connecting &&
-        (g_ble_ctx.peer_mac[0] != 0U || g_ble_ctx.peer_mac[1] != 0U ||
-         g_ble_ctx.peer_mac[2] != 0U || g_ble_ctx.peer_mac[3] != 0U ||
-         g_ble_ctx.peer_mac[4] != 0U || g_ble_ctx.peer_mac[5] != 0U)) {
-        CeePewErr_t connect_err = transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
-        if (connect_err != CEEPEW_OK && connect_err != CEEPEW_ERR_BUSY) {
-            ESP_LOGW(TAG, "Unable to start responder GATTC reconnect: %d", (int)connect_err);
-        }
-    }
 
     /* FIX A2: If a peer commitment arrived before our local commitment was
      * ready (deferred pending), verify it now that we have the local digest. */
@@ -1312,6 +1301,20 @@ CeePewErr_t transport_ble_retry_commitment_if_needed(void)
 {
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
 
+    /* Bug 3 Fix: Flush pending verification result if the verify char handle is now available */
+    if (g_ble_ctx.pending_verify_result &&
+        g_ble_ctx.gattc_verify_char_handle != 0U &&
+        g_ble_ctx.gattc_connected) {
+        CeePewErr_t vr_err = transport_ble_write_verification_result(
+            (VerificationStatus_t)g_ble_ctx.pending_verify_status);
+        if (vr_err == CEEPEW_OK) {
+            ESP_LOGI(TAG, "Flushed queued verify result on retry tick");
+            g_ble_ctx.pending_verify_result = false;
+        } else if (vr_err != CEEPEW_ERR_BUSY) {
+            ESP_LOGW(TAG, "Flush of queued verify result failed (will retry): %d", (int)vr_err);
+        }
+    }
+
     if (!g_ble_ctx.commitment_write_pending) {
         return CEEPEW_OK;
     }
@@ -1752,8 +1755,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 s_gattc_mtu_ready = true;
                 ESP_LOGI(TAG, "GATTC MTU configured: %u", (unsigned)param->cfg_mtu.mtu);
                 if (g_ble_ctx.commitment_write_pending && g_ble_ctx.gattc_char_handle != 0U) {
-                    s_commitment_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) + 50U;
-                    ESP_LOGI(TAG, "GATTC MTU ready — scheduled pending commitment write");
+                    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                    /* Bug 2 Fix: Overwrite any stale long-delay schedule set before MTU was confirmed */
+                    s_commitment_retry_after_ms = now_ms + 50U;
+                    ESP_LOGI(TAG, "MTU confirmed — scheduling pending write in 50ms");
                 }
             } else {
                 ESP_LOGW(TAG, "GATTC MTU config failed: %d", param->cfg_mtu.status);
@@ -1798,8 +1803,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 if (g_ble_ctx.commitment_write_pending) {
                     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
                     if (!s_gattc_mtu_ready) {
-                        s_commitment_retry_after_ms = now_ms + 1000U;
-                        ESP_LOGI(TAG, "GATTC char found — deferring first commitment write by 1000 ms (waiting for MTU)");
+                        uint32_t delay = 1500U;  /* Bug 2 Fix: Wait longer for MTU negotiation */
+                        s_commitment_retry_after_ms = now_ms + delay;
+                        ESP_LOGI(TAG, "GATTC char found — scheduling write in %u ms (mtu_ready=%u)",
+                                 (unsigned)delay, (unsigned)s_gattc_mtu_ready);
                     } else {
                         s_commitment_retry_after_ms = now_ms + 50U;
                         ESP_LOGI(TAG, "GATTC char found and MTU ready — scheduling pending commitment write");
@@ -2214,6 +2221,21 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     s_responder_connected_at_ms = 0U;  /* [FIX-3] disarm watchdog */
                     ESP_LOGI(TAG, "GATTS: buffered peer commitment (%u bytes) for deferred verification",
                              (unsigned)param->write.len);
+
+                    /* Bug 1 Fix: Responder connects back ONLY after receiving initiator's commitment,
+                     * and ONLY if we are not the initiator (is_initiator_role == false) */
+                    if (!g_ble_ctx.gattc_connected && !g_ble_ctx.connecting &&
+                        !g_ble_ctx.is_initiator_role &&
+                        (g_ble_ctx.peer_mac[0] != 0U || g_ble_ctx.peer_mac[1] != 0U ||
+                         g_ble_ctx.peer_mac[2] != 0U || g_ble_ctx.peer_mac[3] != 0U ||
+                         g_ble_ctx.peer_mac[4] != 0U || g_ble_ctx.peer_mac[5] != 0U)) {
+                        CeePewErr_t connect_err = transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
+                        if (connect_err == CEEPEW_OK) {
+                            ESP_LOGI(TAG, "GATTS: responder initiating GATTC connect-back for verification result");
+                        } else if (connect_err != CEEPEW_ERR_BUSY) {
+                            ESP_LOGW(TAG, "GATTS: responder GATTC connect-back failed: %d", (int)connect_err);
+                        }
+                    }
 
                     /* FIX 1: Responder must now send its own commitment back so the initiator
                      * can verify. If the local commitment is already populated (session_fsm

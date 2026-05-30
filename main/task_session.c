@@ -348,6 +348,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             case UI_STATE_CHAT: return "chat";
             case UI_STATE_CHAT_MENU: return "chat_menu";
             case UI_STATE_CHAT_COMPOSE: return "compose";
+            case UI_STATE_CHAT_SEND_CONFIRM: return "send_confirm";
             case UI_STATE_CRYPTOGRAM: return "cryptogram";
             case UI_STATE_NONCE_EXHAUSTED: return "nonce_exhausted";
             case UI_STATE_INFO: return "info";
@@ -402,11 +403,18 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                 return RGB_CYAN_PULSE;   /* Smooth cyan pulse for verification */
             case UI_STATE_CHAT:
                 return session_active ? RGB_GREEN : RGB_OFF;
+            case UI_STATE_CHAT_MENU:
+                return RGB_AMBER_PULSE;
+            case UI_STATE_CHAT_COMPOSE:
+                return RGB_GREEN_PULSE;
+            case UI_STATE_CHAT_SEND_CONFIRM:
+                return RGB_CYAN_PULSE;
             case UI_STATE_NONCE_EXHAUSTED:
             case UI_STATE_ERROR:
                 return RGB_RED_BLINK;    /* Red blink for errors */
             default:
-                return RGB_OFF;}
+                return RGB_OFF;
+        }
     }
 
     CeePewErr_t task_session_sync_visual_state(void)
@@ -858,7 +866,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
             /* Periodic session maintenance (placeholder for sprints) */
             /* - Check nonce exhaustion
-            * - Expire old messagesI 
+            * - Expire old messagesI
             * - Check session TTL
             * - Advance replay windows
             */
