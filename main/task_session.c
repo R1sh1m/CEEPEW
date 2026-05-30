@@ -169,7 +169,10 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* ── STEP 3: Initiator connects during code-entry ─────────────────────
         * Only the initiator calls connect_to_peer. Responder stays passive.      */
         if (phase == 1U && is_initiator && peer != NULL && !g_ble_ctx.connecting &&
-            !g_ble_ctx.gattc_connected && g_ui_ctx.current_state == UI_STATE_CODE_ENTRY) {
+            !g_ble_ctx.gattc_connected &&
+            (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY ||
+             g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+             g_ui_ctx.current_state == UI_STATE_PAIRING)) {
             CeePewErr_t err = transport_ble_connect_to_peer(peer->peer_mac);
             if (err != CEEPEW_OK) { return err; }
             /* Connection completes asynchronously; yield now */
@@ -280,7 +283,11 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             return CEEPEW_OK;
         }
 
-        if (phase == 2U && transport_ble_handoff_ready()) {
+        /* Allow deriving if local handoff is ready OR if peer signalled readiness.
+         * This is tolerant of small timing asymmetries where one side's handoff
+         * becomes ready slightly earlier than the other. transport_ble_peer_ready_for_chat()
+         * reflects remote readiness observed by the transport layer. */
+        if (phase == 2U && (transport_ble_handoff_ready() || transport_ble_peer_ready_for_chat())) {
 
             /* Stronger gating: initiator must have exchanged commitment locally before deriving */
             if (is_initiator && !s_ble_commitment_exchanged) {
