@@ -84,6 +84,9 @@
     static uint64_t s_last_ble_scan_heartbeat_ms = 0ULL;
 static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started */
     static bool s_ble_peer_latched = false;
+    /* Jitter state for phase 2 derive gating to tolerate asymmetric timing */
+    static uint32_t s_phase2_jitter_target_ms = 0U;
+    static uint32_t s_phase2_jitter_start_ms = 0U;
 
     static const char *task_session_ble_state_name(BleState_t state){
         switch (state) {
@@ -160,8 +163,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         if (peer != NULL) {
             uint8_t self_mac[CEEPEW_DEVICE_ID_BYTES] = {0U};
             if (session_get_device_id(self_mac) == CEEPEW_OK) {
-                is_initiator = (memcmp(self_mac, peer->peer_mac,
-                                    CEEPEW_DEVICE_ID_BYTES) < 0);
+                is_initiator = (ceepew_ct_less(self_mac, peer->peer_mac,
+                                    CEEPEW_DEVICE_ID_BYTES) != 0U);
             }
             ceepew_secure_zero(self_mac, sizeof(self_mac));
         }
@@ -294,6 +297,33 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                 /* wait another tick so write/ACK can propagate */
                 return CEEPEW_OK;
             }
+
+            /* Jittered backoff to tolerate asymmetric timing: pick a small randomized
+             * delay (50-500 ms) on the first eligible tick to reduce the chance both
+             * devices attempt derive at exactly the same instant. The seed uses the
+             * current time XORed with portions of local and peer MACs for variability.
+             */
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+            if (s_phase2_jitter_target_ms == 0U) {
+                uint8_t local_dev[CEEPEW_DEVICE_ID_BYTES];
+                (void)session_get_device_id(local_dev);
+                const BlePeerRecord_t *peer_rec = transport_ble_get_peer_cached();
+                uint32_t seed = now_ms ^ ((uint32_t)local_dev[5] << 8);
+                if (peer_rec != NULL) { seed ^= ((uint32_t)peer_rec->peer_mac[5] << 16) | (uint32_t)peer_rec->peer_mac[4]; }
+                /* jitter in [50, 500) ms */
+                s_phase2_jitter_target_ms = 50U + (uint32_t)(seed % 450U);
+                s_phase2_jitter_start_ms = now_ms;
+                ceepew_secure_zero(local_dev, sizeof(local_dev));
+                ESP_LOGI(TAG, "phase2: jitter target %u ms", (unsigned)s_phase2_jitter_target_ms);
+            }
+
+            if ((now_ms - s_phase2_jitter_start_ms) < s_phase2_jitter_target_ms) {
+                /* wait for jitter timer to expire */
+                return CEEPEW_OK;
+            }
+
+            /* reset jitter state before deriving */
+            s_phase2_jitter_target_ms = 0U;
 
             CeePewErr_t err = session_phase2_derive_key();
             if (err != CEEPEW_OK) { return err; }

@@ -1681,7 +1681,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             transport_ble_scan_peer_is_duplicate(param->scan_rst.bda, now_ms)) {
             duplicate_same_peer =
                 g_ble_ctx.discovered &&
-                (memcmp(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U) == 0);
+                ceepew_ct_equal(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U);
             if (!duplicate_same_peer) {
                 break;
             }
@@ -1730,7 +1730,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
             (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
 
-        } else if (memcmp(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U) == 0) {
+        } else if (ceepew_ct_equal(g_ble_ctx.peer_mac, param->scan_rst.bda, 6U)) {
             /* Same peer — update EMA */
             g_ble_ctx.peer_rssi = (int8_t)param->scan_rst.rssi;
             g_ble_ctx.peer_rssi_smooth_x8 =

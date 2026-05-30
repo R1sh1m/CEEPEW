@@ -18,6 +18,7 @@
 #include "hal_gpio.h"
 #include "hal_adc.h"
 #include "hal_rng.h"
+#include "crypto_rng.h"
 #include "hal_pins.h"
 #include "hal_oled.h"
 #include "hal_ui.h"
@@ -66,6 +67,13 @@ void app_main(void){
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_rng_init failed: %d", (int)err);
         return;
+    }
+
+    /* RNG health audit: detect trivial HW RNG failures early and reboot */
+    err = crypto_rng_health_check();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "RNG health check failed (%d) — rebooting", (int)err);
+        esp_restart();
     }
 
     /* ── BT CONTROLLER MEMORY RELEASE ──────────────────────────────────────── */
