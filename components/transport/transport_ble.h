@@ -53,7 +53,7 @@ typedef enum {
     BLE_DONE
 } BleState_t;
 
-#define CEEPEW_DISCOVERY_PEER_VISIBLE_MS 2000U
+#define CEEPEW_DISCOVERY_PEER_VISIBLE_MS 8000U
 #define CEEPEW_DISCOVERY_PEER_CLEAR_MS   8000U
 
 /* Peer discovery record (found during scan) */
@@ -64,6 +64,13 @@ typedef struct {
     uint8_t  name[16];
     uint8_t  name_len;
 } BlePeerRecord_t;
+
+/* Verification status codes for 0xFFF2 characteristic */
+typedef enum {
+    CEEPEW_VERIFY_PENDING = 0U,  /* Verification in progress */
+    CEEPEW_VERIFY_OK = 1U,       /* Verification passed */
+    CEEPEW_VERIFY_MISMATCH = 2U  /* Verification failed (code mismatch) */
+} VerificationStatus_t;
 
 /* BLE pairing session context */
 typedef struct {
@@ -89,6 +96,10 @@ typedef struct {
     int8_t         peer_rssi;                  /* raw, last received */
     int16_t        peer_rssi_smooth_x8;        /* EMA ×8 precision */
     uint32_t       last_seen_ms;               /* ms since boot of last scan hit */
+    uint32_t       gatt_connected_since_ms;    /* ms when GATT connection established (for age tracking) */
+    uint32_t       accumulated_conn_ms;        /* accumulated connected ms for current cached peer */
+    bool           pending_verify_result;      /* queued verification result pending GATTC availability */
+    uint8_t        pending_verify_status;      /* queued verification status value (VerificationStatus_t) */
     BlePeerRecord_t peer_record;
     uint32_t       scan_seen_count;            /* total advertisements observed */
     uint8_t        scan_hit_count;             /* total hits recorded for this peer */
@@ -102,12 +113,18 @@ typedef struct {
     uint16_t       service_end_handle;
     uint16_t       gattc_char_handle;          /* peer characteristic handle */
     uint16_t       gatts_char_handle;          /* local characteristic handle */
+    uint16_t       gattc_verify_char_handle;   /* peer verification status characteristic (0xFFF2) */
+    uint16_t       gatts_verify_char_handle;   /* local verification status characteristic (0xFFF2) */
     bool           gattc_registered;
     bool           gatts_registered;
     bool           gattc_connected;
     bool           gatts_connected;
     bool           connecting;
     bool           commitment_write_pending;
+    VerificationStatus_t verification_result;  /* Local verification result */
+    VerificationStatus_t peer_verification_result; /* Peer's verification result */
+    bool           peer_verification_pending;  /* Waiting for peer verification result */
+    uint32_t       verification_timeout_ms;    /* Deadline for receiving verification result */
     uint32_t       verify_fail_count;
     bool           ready_for_chat;              /* Local readiness flag after commitment verified */
     bool           peer_ready_for_chat;         /* Peer's readiness flag received via GATT */
@@ -161,6 +178,16 @@ CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t 
 
 /* Verify any commitment buffered by the responder before its local commitment was ready. */
 CeePewErr_t transport_ble_verify_pending_commitment(void);
+
+/* Check verification result with timeout (called from task_session tick).
+ * Returns CEEPEW_OK if verification passed or is still pending.
+ * Returns CEEPEW_ERR_AUTH_FAIL if verification failed (mismatch).
+ * Returns CEEPEW_ERR_BUSY if verification timeout not yet reached.
+ * Returns CEEPEW_ERR_HW for other failures. */
+CeePewErr_t transport_ble_check_verification_result(void);
+
+/* Get current verification status (for UI display if needed) */
+VerificationStatus_t transport_ble_get_verification_status(void);
 
 /* Set local readiness flag after commitment verified (for sync handshake) */
 void transport_ble_set_ready_for_chat(void);
