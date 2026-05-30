@@ -1,0 +1,7 @@
+security: centralize HKDF info builder; use canonical encoding
+
+- Add crypto_hkdf_build_info() and use it in session_phase2_derive_key
+- Use canonical big-endian t_round encoding and deterministic id ordering
+- Replace ad-hoc info assembly to reduce HKDF misuse risk
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

@@ -87,6 +87,36 @@ static CeePewErr_t hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t
  * holds — without it, ECDH shared secret alone is insufficient to derive the
  * session key.
  */
+CeePewErr_t crypto_hkdf_build_info(const uint8_t *label, uint8_t label_len,
+                                   const uint8_t id_a[6], const uint8_t id_b[6],
+                                   const uint8_t commitment[32], uint32_t t_round,
+                                   uint8_t *out_info, uint8_t *out_len)
+{
+    CEEPEW_ASSERT(label != NULL && label_len > 0U, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(id_a != NULL && id_b != NULL && commitment != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(out_info != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
+
+    uint8_t off = 0U;
+    memcpy(out_info + off, label, label_len); off += label_len;
+    memcpy(out_info + off, id_a, 6U); off += 6U;
+    memcpy(out_info + off, id_b, 6U); off += 6U;
+    memcpy(out_info + off, commitment, 32U); off += 32U;
+
+    /* Canonical t_round encoding: big-endian u32 */
+    out_info[off++] = (uint8_t)((t_round >> 24) & 0xFFU);
+    out_info[off++] = (uint8_t)((t_round >> 16) & 0xFFU);
+    out_info[off++] = (uint8_t)((t_round >> 8) & 0xFFU);
+    out_info[off++] = (uint8_t)(t_round & 0xFFU);
+
+    *out_len = off;
+    return CEEPEW_OK;
+}
+
+/* SECURITY: The HKDF salt must be SHA256(digital_sum_mix(code) || code) as
+ * per Final Spec §3.3. The session code is the only secret the HKDF caller
+ * holds — without it, ECDH shared secret alone is insufficient to derive the
+ * session key.
+ */
 CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_t *salt, uint8_t salt_len, const uint8_t *info, uint8_t info_len, uint8_t *out, uint8_t out_len) {
     CEEPEW_ASSERT(ikm != NULL && ikm_len > 0U && ikm_len <= 32U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(out != NULL && out_len > 0U && out_len <= 64U, CEEPEW_ERR_BOUNDS);

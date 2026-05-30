@@ -31,6 +31,8 @@
 #include "ceepew_pipeline.h"
 #include "ceepew_region.h"  /* Phase 4: For region_reset */
 #include "crypto_eddsa.h"
+#include "crypto_hkdf.h"
+#include "session_fsm.h"
 #include "esp_log.h"
 #include <stdint.h>
 #include <string.h>
@@ -209,15 +211,10 @@ CeePewErr_t session_phase2_derive_key(void){
     CeePewErr_t err = crypto_sha256_compute(salt_input, 64U, hkdf_salt);
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
-    /* Step 3: Build HKDF info (bind all session parameters) */
-    /* "CEEPEW_SESSION_v1" || id_A[6] || id_B[6] || commitment[32] || t_round[4] */
-    const char *label = "CEEPEW_SESSION_v1";
-    const size_t label_len = 17U;
-
-    uint8_t hkdf_info[65U];
-    size_t info_off = 0U;
-    memcpy(hkdf_info + info_off, label, label_len);
-    info_off += label_len;
+    /* Step 3: Build canonical HKDF info (label || id_A || id_B || commitment || t_round)
+     * Use crypto_hkdf_build_info() to ensure canonical ordering and fixed-length fields. */
+    const uint8_t label[] = "CEEPEW_SESSION_v1";
+    const uint8_t label_len = (uint8_t)(sizeof(label) - 1U);
 
     const uint8_t *id_a = s_session.device_id_self;
     const uint8_t *id_b = s_session.device_id_peer;
@@ -227,26 +224,19 @@ CeePewErr_t session_phase2_derive_key(void){
         id_b = tmp;
     }
 
-    memcpy(hkdf_info + info_off, id_a, 6U);
-    info_off += 6U;
+    uint8_t commitment[CEEPEW_COMMITMENT_BYTES];
+    err = session_get_commitment(commitment);
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
-    memcpy(hkdf_info + info_off, id_b, 6U);
-    info_off += 6U;
-
-    memcpy(hkdf_info + info_off, s_session.session_code, 32U);
-    info_off += 32U;
-
-    /* All devices must hash the exact same info bytes. A device-local boot
-     * timestamp would diverge here, so t_round is intentionally fixed. */
-    uint32_t t_round = 0U;
-    memcpy(hkdf_info + info_off, &t_round, 4U);
-    info_off += 4U;
-
-    CEEPEW_ASSERT(info_off == 65U, CEEPEW_ERR_BOUNDS);
+    uint8_t hkdf_info[128U]; /* ample space for label + ids + commitment + t_round */
+    uint8_t hkdf_info_len = 0U;
+    err = crypto_hkdf_build_info(label, label_len, id_a, id_b, commitment, 0U, hkdf_info, &hkdf_info_len);
+    ceepew_secure_zero(commitment, sizeof(commitment));
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
     /* Step 4-5: HKDF Derive (combined extract + expand, 64 bytes output) */
     uint8_t hkdf_output[64];
-    err = crypto_hkdf_derive(s_session.session_code, 32U, hkdf_salt, 32U, hkdf_info, (uint8_t)info_off, hkdf_output, 64U);
+    err = crypto_hkdf_derive(s_session.session_code, 32U, hkdf_salt, 32U, hkdf_info, hkdf_info_len, hkdf_output, 64U);
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
     /* Extract layout: [0:15]=Ascon key, [16:47]=crypto_box seed, [48:55]=session_id */
