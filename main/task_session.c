@@ -203,6 +203,23 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             ceepew_secure_zero(commitment, sizeof(commitment));
             if (err != CEEPEW_OK) { return err; }
 
+            /* FIX E: Responder symmetry — Both initiator and responder should call
+             * transport_ble_exchange_commitment() to ensure the commitment is ready
+             * and will be sent/retried if needed. Previously only initiator called
+             * this explicitly; responder relied on receiving initiator's write.
+             * Now both sides prepare their commitment for transmission. */
+            if (!is_initiator) {
+                /* Responder: prepare to send own commitment back to initiator */
+                uint8_t resp_commitment[CEEPEW_COMMITMENT_BYTES];
+                memcpy(resp_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
+                err = transport_ble_exchange_commitment(resp_commitment, CEEPEW_COMMITMENT_BYTES);
+                ceepew_secure_zero(resp_commitment, sizeof(resp_commitment));
+                if (err != CEEPEW_OK) {
+                    ESP_LOGW(TAG, "Responder exchange_commitment setup failed: %d", (int)err);
+                    return err;
+                }
+            }
+
             /* F-2 fix: if the responder already buffered the initiator's
              * commitment, verify it only after the local commitment is ready. */
             err = transport_ble_verify_pending_commitment();
@@ -243,6 +260,25 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         * Responder: BLE_DONE set by transport_ble_verify_commitment() in GATTS.  */
         phase     = session_get_phase();
         ble_state = transport_ble_get_state();
+
+        /* [FIX-4] Check peer verification result with timeout watchdog.
+         * If mismatch detected or timeout exceeded, both devices fail over. */
+        CeePewErr_t verify_check = transport_ble_check_verification_result();
+        if (verify_check == CEEPEW_ERR_AUTH_FAIL) {
+            /* Peer verification failed (mismatch) — both devices show error */
+            ESP_LOGW(TAG, "Peer verification mismatch detected");
+            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+            g_ui_ctx.transition_ready = true;
+            return CEEPEW_OK;
+        } else if (verify_check == CEEPEW_ERR_HW) {
+            /* Verification timeout exceeded — fail over and recover */
+            ESP_LOGW(TAG, "Verification timeout — peer did not respond");
+            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+            g_ui_ctx.transition_ready = true;
+            return CEEPEW_OK;
+        }
 
         if (phase == 2U && transport_ble_handoff_ready()) {
 
@@ -760,8 +796,19 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
                 /* Re-check deferred peer commitment on the normal session tick so
                  * late GATTS writes are consumed even if they arrive after Step 4.
-                 * This must run during Phase 2 before session_is_active() becomes true. */
-                if (session_get_phase() == 2U && g_ble_ctx.peer_commitment_pending) {
+                 * This must run during Phase 2 before session_is_active() becomes true.
+                 *
+                 * FIX D: Add stricter guards to prevent verification from running
+                 * while responder's session_fsm is still initializing Phase 2.
+                 * Only verify if:
+                 * - Phase 2 active
+                 * - Peer commitment buffered
+                 * - Commitment write not pending (local already loaded and ready)
+                 * - State is BLE_PAIRING (not transitioning) */
+                if (session_get_phase() == 2U &&
+                    g_ble_ctx.peer_commitment_pending &&
+                    g_ble_ctx.state == BLE_PAIRING &&
+                    !g_ble_ctx.commitment_write_pending) {
                     CeePewErr_t verify_err = transport_ble_verify_pending_commitment();
                     if (verify_err != CEEPEW_OK) {
                         CEEPEW_LOG(TAG, "Periodic commitment re-check failed: %d",
@@ -809,7 +856,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
             /* Periodic session maintenance (placeholder for sprints) */
             /* - Check nonce exhaustion
-            * - Expire old messages
+            * - Expire old messagesI 
             * - Check session TTL
             * - Advance replay windows
             */

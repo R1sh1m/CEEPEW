@@ -15,9 +15,10 @@ CeePewErr_t input_get_normalized(const InputCtx_t *ctx, uint8_t *out_pot, bool *
     CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out_pot != NULL, CEEPEW_ERR_NULL_PTR);
 
-    /* Map 16-bit cursor_pos (0..65535) to 8-bit range (0..255) */
+    /* Map 16-bit cursor_pos (0..65535) to 8-bit range (0..255).
+       Use shift to avoid division rounding bias and retain linearity. */
     uint32_t pos = (uint32_t)ctx->cursor_pos;
-    uint8_t pot8 = (uint8_t)((pos * 255U) / 65535U);
+    uint8_t pot8 = (uint8_t)(pos >> 8U); /* 65536 >> 8 == 256 discrete values */
     *out_pot = pot8;
 
     if (out_button != NULL){

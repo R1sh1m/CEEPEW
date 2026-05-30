@@ -24,29 +24,9 @@ static const char *TAG = "hal_ui";
 static uint8_t s_framebuffer[FRAMEBUFFER_SIZE_BYTES] = {0};
 static bool s_ui_initialised = false;
 
-/* Monospace 5×8 font bitmap (ASCII 32-126) — each character is 6 pixels wide
-   and 8 pixels tall, stored as 5 bytes per character (5 columns × 8 rows / 8 bits). */
-static const uint8_t FONT_5x8[95][5] = {
-    /* ASCII 32 (space) */
-    {0x00, 0x00, 0x00, 0x00, 0x00},
-    /* ASCII 33 (!) */
-    {0x00, 0x00, 0x5F, 0x00, 0x00},
-    /* ASCII 34 (") */
-    {0x00, 0x07, 0x00, 0x07, 0x00},
-    /* ASCII 35 (#) */
-    {0x14, 0x7F, 0x14, 0x7F, 0x14},
-    /* ASCII 36 ($) */
-    {0x24, 0x2A, 0x7F, 0x2A, 0x12},
-    /* ASCII 37 (%) */
-    {0x23, 0x13, 0x08, 0x64, 0x62},
-    /* ASCII 38 (&) */
-    {0x36, 0x49, 0x55, 0x22, 0x50},
-    /* ASCII 39 (') */
-    {0x00, 0x05, 0x03, 0x00, 0x00},
-    /* ... Additional characters (truncated for brevity) ...
-       In production, this table would contain all 95 printable ASCII chars. */
-    /* For now, provide a simple pattern-fill placeholder for unmapped chars */
-};
+/* Reuse the full printable ASCII font from ui_manager.c so all UI text paths
+ * render the same glyphs. The table is stored as 5 columns per character. */
+extern const uint8_t s_font5x7[95][5];
 
 CeePewErr_t hal_ui_init(void){
     CEEPEW_ASSERT(!s_ui_initialised, CEEPEW_ERR_BUSY);
@@ -332,23 +312,21 @@ CeePewErr_t hal_ui_char(uint8_t x, uint8_t y, char c, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_PARAM);
 
-    /* Map ASCII character to font table index */
-    if (c < 32 || c > 126) { c = '?'; }
-    uint8_t font_idx = (uint8_t)(c - 32U);
+    /* Map ASCII character to font table index. The shared font stores each
+     * glyph as 5 column bytes with 7 meaningful rows. */
+    uint8_t idx;
+    if ((uint8_t)c < 32U || (uint8_t)c > 126U) {
+        idx = (uint8_t)('?' - 32U);
+    } else {
+        idx = (uint8_t)((uint8_t)c - 32U);
+    }
 
-    const uint8_t *font_data = FONT_5x8[font_idx % 95U];
-
-    /* Render 5×8 character with graceful clipping for off-screen pixels */
-    /* loop bound: 8U (character height) */
-    for (uint8_t row = 0U; row < 8U; row++) {
-        uint8_t byte_val = font_data[row];
-        /* loop bound: 5U (character width) */
-        for (uint8_t col = 0U; col < 5U; col++) {
-            uint8_t bit = (uint8_t)((byte_val >> col) & 1U);
-            if (bit) {
-                uint8_t px = x + col;
-                uint8_t py = y + row;
-                /* Skip pixels that exceed bounds instead of asserting */
+    for (uint8_t col = 0U; col < 5U; col++) {
+        uint8_t col_data = s_font5x7[idx][col];
+        for (uint8_t row = 0U; row < 7U; row++) {
+            if (((col_data >> row) & 1U) != 0U) {
+                uint8_t px = (uint8_t)(x + col);
+                uint8_t py = (uint8_t)(y + row);
                 if (px < HAL_UI_WIDTH_PX && py < HAL_UI_HEIGHT_PX) {
                     CeePewErr_t err = hal_ui_pixel(px, py, color);
                     CEEPEW_ASSERT(err == CEEPEW_OK, err);
