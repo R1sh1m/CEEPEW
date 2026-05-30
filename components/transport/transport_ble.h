@@ -99,8 +99,6 @@ typedef struct {
     uint32_t       last_seen_ms;               /* ms since boot of last scan hit */
     uint32_t       gatt_connected_since_ms;    /* ms when GATT connection established (for age tracking) */
     uint32_t       accumulated_conn_ms;        /* accumulated connected ms for current cached peer */
-    bool           pending_verify_result;      /* queued verification result pending GATTC availability */
-    uint8_t        pending_verify_status;      /* queued verification status value (VerificationStatus_t) */
     BlePeerRecord_t peer_record;
     uint32_t       scan_seen_count;            /* total advertisements observed */
     uint8_t        scan_hit_count;             /* total hits recorded for this peer */
@@ -114,8 +112,8 @@ typedef struct {
     uint16_t       service_end_handle;
     uint16_t       gattc_char_handle;          /* peer characteristic handle */
     uint16_t       gatts_char_handle;          /* local characteristic handle */
-    uint16_t       gattc_verify_char_handle;   /* peer verification status characteristic (0xFFF2) */
-    uint16_t       gatts_verify_char_handle;   /* local verification status characteristic (0xFFF2) */
+    uint16_t       gattc_verify_char_handle;   /* peer readable commitment characteristic (0xFFF2) */
+    uint16_t       gatts_verify_char_handle;   /* local readable commitment characteristic (0xFFF2) */
     bool           gattc_registered;
     bool           gatts_registered;
     bool           gattc_connected;
@@ -126,6 +124,7 @@ typedef struct {
     VerificationStatus_t peer_verification_result; /* Peer's verification result */
     bool           peer_verification_pending;  /* Waiting for peer verification result */
     uint32_t       verification_timeout_ms;    /* Deadline for receiving verification result */
+    bool           peer_commitment_read_issued; /* Initiator read request in flight */
     uint32_t       verify_fail_count;
     bool           ready_for_chat;              /* Local readiness flag after commitment verified */
     bool           peer_ready_for_chat;         /* Peer's readiness flag received via GATT */
