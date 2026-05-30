@@ -1535,7 +1535,7 @@ static CeePewErr_t render_countdown(void)
 {
     hal_ui_clear();
 
-    /* Dedicated pairing stage with a 15-second window. */
+    /* Dedicated pairing stage with an extended window for GATT setup. */
     if (session_is_active() || transport_ble_handoff_ready()) {
         g_ui_ctx.anim.frame_count = 0U;
         g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_SUCCESS;
@@ -1562,7 +1562,7 @@ static CeePewErr_t render_countdown(void)
 
     uint32_t elapsed = (now >= g_ui_ctx.pairing_start_ms)
                      ? (now - g_ui_ctx.pairing_start_ms) : 0U;
-    uint32_t total_ms = 15000U;
+    uint32_t total_ms = 45000U;
     uint32_t rem_ms   = (elapsed < total_ms) ? (total_ms - elapsed) : 0U;
 
     /* Title */
@@ -1592,7 +1592,7 @@ static CeePewErr_t render_countdown(void)
         hal_ui_rect_fill(&bar, HAL_UI_WHITE);
     }
 
-    ui_draw_text_wrapped(10U, 48U, "Waiting for peer", 108U, 8U);
+    ui_draw_text_wrapped(10U, 54U, "Waiting for peer", 108U, 8U);
 
     if (rem_ms == 0U) {
         g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
@@ -1627,7 +1627,7 @@ static CeePewErr_t render_pairing_success(void)
         hal_ui_rect_fill(&tick, HAL_UI_WHITE);
     }
     hal_ui_text(30U, 26U, "Session ready", HAL_UI_WHITE);
-    ui_draw_text_wrapped(10U, 46U, "Moving to key derivation", 108U, 8U);
+    ui_draw_text_wrapped(10U, 34U, "Moving to key derivation", 108U, 8U);
     ui_draw_text_wrapped(22U, 54U, "Please wait...", 84U, 8U);
 
     g_ui_ctx.anim.frame_count++;
@@ -2220,7 +2220,7 @@ CeePewErr_t ui_crypto_show_status(uint8_t status)
 {
     CEEPEW_ASSERT(status <= 2U, CEEPEW_ERR_BOUNDS);
 
-    uint8_t y_pos = 46U;
+    uint8_t y_pos = 54U;
 
     if (status == 0U) {
         /* Waiting for peer */
@@ -2323,9 +2323,10 @@ static CeePewErr_t render_cryptogram(void)
     /* Title */
     hal_ui_text(20U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
-    hal_ui_text(4U, 12U, "SHA-256 / 32B", HAL_UI_WHITE);
+    hal_ui_text(4U, 13U, "SHA-256 / 32B", HAL_UI_WHITE);
 
-    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 14U);
+    /* Hex rows at original position y=24 */
+    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 24U);
 
     /* Determine match status */
     uint8_t status = 0U;
@@ -2338,22 +2339,55 @@ static CeePewErr_t render_cryptogram(void)
         }
         status = match ? 1U : 2U;
         g_ui_ctx.commitment_verified = (match == 1U);
+    } else {
+        /* FIX C: Early mismatch detection — before waiting, check if peer
+         * commitment has arrived. If so, compare immediately. This prevents
+         * infinite "Waiting for peer" if codes don't match.
+         * Only compare if peer_commitment_len > 0, meaning the write succeeded. */
+        uint8_t peer_has_commitment = 0U;
+        for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
+            peer_has_commitment |= g_ble_ctx.commitment_digest[i];
+        }
+        if (peer_has_commitment != 0U) {
+            uint8_t match = 1U;
+            for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
+                if (g_ui_ctx.commitment[i] != g_ble_ctx.commitment_digest[i]) {
+                    match = 0U; break;
+                }
+            }
+            /* Set status to mismatch (2) if codes differ */
+            status = match ? 1U : 2U;
+        }
     }
 
     if (status == 0U) {
-        /* Waiting — animated spinner at left */
+        /* Waiting — animated spinner at left, moved to bottom row for visibility */
         const char *spin = "|/-\\";
         char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
-        hal_ui_text(4U, 48U, sp, HAL_UI_WHITE);
-        hal_ui_text(14U, 48U, "Waiting for peer", HAL_UI_WHITE);
+        hal_ui_text(4U, 54U, sp, HAL_UI_WHITE);
+        hal_ui_text(14U, 54U, "Waiting for peer", HAL_UI_WHITE);
 
-        /* Sweeping underline */
+        /* Check timeout: 30 seconds from pairing_start_ms */
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        uint32_t elapsed = (g_ui_ctx.pairing_start_ms != 0U &&
+                           now_ms >= g_ui_ctx.pairing_start_ms)
+                         ? (now_ms - g_ui_ctx.pairing_start_ms) : 0U;
+        if (elapsed >= 30000U) {
+            /* Timeout: transition to failed state */
+            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
+            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+            g_ui_ctx.transition_ready = true;
+            (void)hal_ui_flush();
+            return CEEPEW_OK;
+        }
+
+        /* Sweeping underline (moved down with text) */
         uint8_t ul_x = (uint8_t)((f * 3U) % 128U);
-        draw_hline(ul_x, 46U, 10U);
+        draw_hline(ul_x, 52U, 10U);
 
     } else if (status == 1U) {
         /* MATCH — expanding rings from centre of display */
-        hal_ui_text(4U, 48U, "\x7e MATCH \x7e", HAL_UI_WHITE);
+        hal_ui_text(4U, 40U, "\x7e MATCH \x7e", HAL_UI_WHITE);
 
         uint8_t ring_r = (uint8_t)((f % 16U) * 2U);
         if (ring_r > 0U && ring_r < 30U) {
@@ -2375,7 +2409,7 @@ static CeePewErr_t render_cryptogram(void)
         if (transport_ble_both_ready_for_chat()) {
             char cd_str[20U];
             (void)snprintf(cd_str, sizeof(cd_str), "Ready! Press btn");
-            hal_ui_text(12U, 48U, cd_str, HAL_UI_WHITE);
+            hal_ui_text(12U, 54U, cd_str, HAL_UI_WHITE);
 
             if (g_ui_ctx.button_pressed) {
                 (void)ui_manager_transition_to(UI_STATE_CHAT);
@@ -2383,7 +2417,7 @@ static CeePewErr_t render_cryptogram(void)
             }
         } else {
             /* Waiting for peer to signal ready — show simple text and visual cue */
-            hal_ui_text(20U, 48U, "Syncing...", HAL_UI_WHITE);
+            hal_ui_text(20U, 54U, "Syncing...", HAL_UI_WHITE);
 
             if (rem_ms == 0U) {
                 /* Timeout: transition anyway */
