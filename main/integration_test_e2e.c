@@ -300,6 +300,9 @@ void test_pipeline_memory(void);
 /* replay test (defined in test_replay.c) */
 void test_replay_window(void);
 
+/* comprehensive replay test (defined in test_replay_comprehensive.c) */
+void test_replay_window_comprehensive(void);
+
 /* power test (defined in test_power.c) */
 void test_power(void);
 
@@ -393,6 +396,9 @@ void integration_tests_run_all(void){
 
     /* Replay window tests */
     test_replay_window();
+    
+    /* Comprehensive replay window tests (edge cases) */
+    test_replay_window_comprehensive();
 
     /* Session message store tests */
     test_session_message_store();

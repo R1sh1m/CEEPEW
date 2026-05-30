@@ -1,0 +1,166 @@
+Executing action: all (aliases: build)
+Running cmake in directory 'C:\Users\Rishi Misra\Desktop\Code\ESP32\ceepew\build'
+Executing "cmake -G Ninja -B 'C:\Users\Rishi Misra\Desktop\Code\ESP32\ceepew\build' -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Espressif\tools\python\v6.0.1\venv\Scripts\python.exe -DESP_PLATFORM=1 -DCCACHE_ENABLE=False 'C:\Users\Rishi Misra\Desktop\Code\ESP32\ceepew'"...
+-- ESP-TEE is currently supported only on the esp32c6;esp32h2;esp32c5;esp32c61 SoCs
+info: C:\Users\RISHIM~1\AppData\Local\Temp\kconfgen_tmpw3wlujtu:13 CONFIG_ESP_TASK_WDT was replaced with CONFIG_ESP_TASK_WDT_INIT
+
+info: C:\Users\RISHIM~1\AppData\Local\Temp\kconfgen_tmpw3wlujtu:41 CONFIG_SW_COEXIST_ENABLE was replaced with CONFIG_ESP_COEX_SW_COEXIST_ENABLE
+
+Configuration Report                                                           
+
++-----------------------------------------------------------------------------+
+
+|  Parser Version: 1                                                          |
+
+|  Verbosity: default                                                         |
+
+|  Defaults policy: sdkconfig                                                 |
+
+|  Status: Finished with notifications                                        |
+
+|                                                                             |
+
+| Default Value Mismatch                                                      |
+
+| +-------------------------------------------------------------------------+ |
+
+| | Using sdkconfig default values                                       |  | |
+
+| | Choice symbols with different default selection between sdkconfig    |  | |
+
+| | and Kconfig                                                          |  | |
+
+| | ESPTOOLPY_FLASHSIZE: Kconfig default selection:                      |  | |
+
+| | ESPTOOLPY_FLASHSIZE_2MB, sdkconfig default selection:                |  | |
+
+| | ESPTOOLPY_FLASHSIZE_4MB                                              |  | |
+
+| +-------------------------------------------------------------------------+ |
+
+| Multiple Assignments                                                        |
+
+| +-------------------------------------------------+                         |
+
+| | Symbol ESP_COEX_SW_COEXIST_ENABLE:              |                         |
+
+| |     n (user-set value)                          |                         |
+
+| |     y (user-set value)                          |                         |
+
+| |     -> using y                                  |                         |
+
+| | Choice ESPTOOLPY_FLASHSIZE:                     |                         |
+
+| |     ESPTOOLPY_FLASHSIZE_2MB (default selection) |                         |
+
+| |     ESPTOOLPY_FLASHSIZE_4MB (default selection) |                         |
+
+| |     -> using ESPTOOLPY_FLASHSIZE_4MB            |                         |
+
+| +-------------------------------------------------+                         |
+
+| Disabled Symbols/Choices With User-Set Value                                |
+
+| +-------------------------------------------------------------------------+ |
+
+| | * BT_BLE_50_FEATURES_SUPPORTED (defined at                              | |
+
+| | C:/esp/v6.0.1/esp-idf/components/bt/host/bluedroid/Kconfig.in:1363)     | |
+
+| | with user-set value n from                                              | |
+
+| | C:\Users\RISHIM~1\AppData\Local\Temp\kconfgen_tmpw3wlujtu               | |
+
+| | * <choice SECURE_BOOT_VERSION> (defined at                              | |
+
+| | C:/esp/v6.0.1/esp-idf/components/bootloader/Kconfig.projbuild:630) with | |
+
+| | all choice symbols disabled in sdkconfig; the choice is not visible.    | |
+
+| | Source: (unknown)                                                       | |
+
+| +-------------------------------------------------------------------------+ |
+
++-----------------------------------------------------------------------------+
+
+Loading defaults file C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/sdkconfig.defaults...
+
+warning: unknown kconfig symbol 'BT_LE_ENABLED' assigned to 'y' in C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/sdkconfig.defaults
+
+warning: unknown kconfig symbol 'BT_LE_50_FEATURE_SUPPORT' assigned to 'n' in C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/sdkconfig.defaults
+
+warning: unknown kconfig symbol 'BTDM_COEX_BT_OCCUPANCY_RATE' assigned to '20  # 20 % of air time to BLE' in C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/sdkconfig.defaults
+
+-- Configuring done (63.7s)
+-- Generating done (8.9s)
+-- Build files have been written to: C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/build
+Running ninja in directory 'C:\Users\Rishi Misra\Desktop\Code\ESP32\ceepew\build'
+Executing "ninja all"...
+[1/1153] Generating project_elf_src_esp32.c
+
+[2/1153] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/esp_system/ld/esp32/sections.ld.in -> C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/build/esp-idf/esp_system/ld/sections.ld.in
+
+[3/1153] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/esp_system/ld/esp32/memory.ld.in -> C:/Users/Rishi Misra/Desktop/Code/ESP32/ceepew/build/esp-idf/esp_system/ld/memory.ld
+
+[4/1153] Building ASM object esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/src/port/xtensa/xt_debugexception.S.obj
+
+[5/1153] Building ASM object esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/src/port/xtensa/gdbstub-entry.S.obj
+
+[6/1153] Building C object esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/src/gdbstub_transport.c.obj
+
+[7/1153] Building C object esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/src/packet.c.obj
+
+[8/1153] Building C object esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/src/gdbstub.c.obj
+
+[9/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/lib_printf.c.obj
+
+[10/1153] Building C object esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/src/port/xtensa/gdbstub_xtensa.c.obj
+
+[11/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/mesh_event.c.obj
+
+[12/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/smartconfig.c.obj
+
+[13/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/wifi_default_ap.c.obj
+
+[14/1153] Generating ../../partition_table/partition-table.bin
+
+Partition table binary generated. Contents:
+
+*******************************************************************************
+
+# ESP-IDF Partition Table
+
+
+# Name, Type, SubType, Offset, Size, Flags
+
+
+nvs,data,nvs,0x9000,24K,
+
+
+factory,app,factory,0x10000,1984K,
+
+
+*******************************************************************************
+
+[15/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/wifi_init.c.obj
+
+[16/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/wifi_netif.c.obj
+
+[17/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/src/wifi_default.c.obj
+
+[18/1153] Building C object esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/src/coexist.c.obj
+
+[19/1153] Building C object esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/src/lib_printf.c.obj
+
+[20/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/regulatory/esp_wifi_regulatory.c.obj
+
+[21/1153] Building C object esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/src/coexist_debug_diagram.c.obj
+
+[22/1153] Linking C static library esp-idf\esp_gdbstub\libesp_gdbstub.a
+
+[23/1153] Building C object esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/src/coexist_debug.c.obj
+
+[24/1153] Building C object esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/esp32/esp_coex_adapter.c.obj
+
+[25/1153] Building C object esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/esp32/esp_adapter.c.obj
