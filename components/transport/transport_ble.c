@@ -123,6 +123,7 @@ static const char *transport_ble_state_name(BleState_t state);
 #define CEEPEW_RESTART_DEBOUNCE_MS  2000U
 #define CEEPEW_PREVERIFY_RETRY_WINDOW_MS 10000U
 #define CEEPEW_VERIFICATION_TIMEOUT_MS 20000U   /* Timeout waiting for peer verification result */
+#define CEEPEW_SCAN_STUCK_TIMEOUT_MS        15000U /* If scan_seen_count doesn't change, consider scan stuck */
 static uint32_t s_last_restart_ms              = 0U;
 static uint32_t s_scan_retry_after_ms          = 0U;
 static uint32_t s_preverify_disconnect_deadline_ms = 0U;
@@ -133,6 +134,9 @@ static bool     s_adv_starting                 = false;
 static bool     s_scan_start_failed            = false;
 static uint32_t s_commitment_retry_after_ms    = 0U;
 static uint8_t  s_commitment_retry_count       = 0U;
+/* Scan activity watchdog state */
+static uint32_t s_last_scan_seen_value         = 0U;
+static uint32_t s_last_scan_seen_change_ms     = 0U;
 
 /* Mutex protecting access to g_ble_ctx transient fields that are read/written
  * from BLE callback context and task contexts on different cores. */
@@ -1287,6 +1291,39 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
             s_scan_start_failed = false;
             (void)transport_ble_start_scan();
 #endif
+        }
+    }
+
+    /* ── Scan activity watchdog: detect a stalled scan where the BLE stack
+     * reports scanning but no new peers have been observed for an extended
+     * period. In that case, restart the discovery session to recover.        */
+    if (g_ble_ctx.is_scanning ||
+        g_ble_ctx.state == BLE_SCANNING ||
+        g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING) {
+
+        /* Safely sample scan_seen_count under mutex */
+        ble_ctx_lock();
+        uint32_t seen = g_ble_ctx.scan_seen_count;
+        bool discovered = g_ble_ctx.discovered;
+        ble_ctx_unlock();
+
+        if (seen != s_last_scan_seen_value) {
+            s_last_scan_seen_value = seen;
+            s_last_scan_seen_change_ms = now_ms;
+        } else {
+            uint32_t idle = (now_ms > s_last_scan_seen_change_ms) ? (now_ms - s_last_scan_seen_change_ms) : 0U;
+            if (idle > CEEPEW_SCAN_STUCK_TIMEOUT_MS && !discovered) {
+                ESP_LOGW(TAG, "BLE scan appears stalled (%lu ms no new peers) — restarting discovery", (unsigned long)idle);
+                CeePewErr_t restart_err = transport_ble_restart_discovery_session();
+                if (restart_err != CEEPEW_OK) {
+                    ESP_LOGE(TAG, "Discovery restart failed during scan-watchdog: %d", (int)restart_err);
+                    return restart_err;
+                }
+                /* reset watchdog anchors */
+                s_last_scan_seen_change_ms = now_ms;
+                s_last_scan_seen_value = seen;
+                return CEEPEW_OK;
+            }
         }
     }
 
