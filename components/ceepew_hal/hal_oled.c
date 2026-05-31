@@ -309,7 +309,7 @@ CeePewErr_t hal_oled_init(void){
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7U,
         .intr_priority = 0,
-        .trans_queue_depth = 0U,
+        .trans_queue_depth = 8U,
         .flags = {
             .enable_internal_pullup = 1U,
             .allow_pd = 0U,
