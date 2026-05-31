@@ -209,18 +209,6 @@ static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on) {
     }
 }
 
-/* Helper: reverse bits in a byte (8-bit width). Loop bound: 8 iterations. */
-static inline uint8_t reverse_bits8(uint8_t b)
-{
-    uint8_t r = 0U;
-    /* loop bound: 8U */
-    for (uint8_t i = 0U; i < 8U; i++) {
-        r = (uint8_t)((r << 1U) | (uint8_t)(b & 1U));
-        b = (uint8_t)(b >> 1U);
-    }
-    return r;
-}
-
 static void oled_release_resources(void)
 {
     if (s_state.panel_handle != NULL) {
@@ -291,6 +279,9 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
 
     s_state.active_addr = addr;
     
+    /* Send initial diagnostic test pattern to verify display is working */
+    ESP_LOGI(TAG, "SSD1306 init complete at addr 0x%02X, sending test pattern", addr);
+    
     return CEEPEW_OK;
 }
 
@@ -355,6 +346,7 @@ CeePewErr_t hal_oled_init(void){
     }
 
     s_state.initialised = true;
+    ESP_LOGI(TAG, "OLED initialised at 0x%02X", (unsigned)s_state.active_addr);
     err = hal_oled_clear();
     if (err != CEEPEW_OK) {
         oled_release_resources();
@@ -392,27 +384,19 @@ CeePewErr_t hal_oled_flush(void){
     
     uint8_t transposed[CEEPEW_OLED_FB_BYTES];
     
-    /* Build transposed buffer. Additionally apply a 180-degree rotation so that
-       displays wired upside-down render correctly (segment remap + COM scan remap).
-       Mapping: pixel (x, y) -> (127 - x, 63 - y). Framebuffer is arranged as
-       bytes per column per page: src_idx = x + page*WIDTH, src_byte holds bits for y=page*8..page*8+7.
-       We map each src_byte into dst at dst_page = (PAGE_COUNT-1 - page), dst_x = (WIDTH-1 - x)
-       with bits reversed inside the byte. Loop bounds are fixed and small. */
+    /* For each 8x8 block, transpose rows and columns */
     for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++) {
         for (uint8_t x = 0U; x < CEEPEW_OLED_WIDTH_PX; x++) {
+            /* Original: byte at [x + page * 128] contains bits for (x, page*8 + 0..7) */
             const uint8_t src_byte = s_state.framebuffer[x + (uint16_t)page * CEEPEW_OLED_WIDTH_PX];
-
-            /* Reverse bit order within the byte to map y -> 7 - y */
-            const uint8_t rev = reverse_bits8(src_byte);
-
-            const uint8_t dst_page = (uint8_t)(CEEPEW_OLED_PAGE_COUNT - 1U - page);
-            const uint8_t dst_x = (uint8_t)(CEEPEW_OLED_WIDTH_PX - 1U - x);
-            const uint16_t dst_idx = (uint16_t)dst_page * CEEPEW_OLED_WIDTH_PX + dst_x;
-
-            transposed[dst_idx] = rev;
+            
+            /* Destination: we need to write this byte to the page addressing location */
+            const uint16_t dst_idx = (uint16_t)page * CEEPEW_OLED_WIDTH_PX + x;
+            transposed[dst_idx] = src_byte;
         }
     }
     
+    ESP_LOGI(TAG, "hal_oled_flush: sending bitmap to panel at 0x%02X", (unsigned)s_state.active_addr);
     esp_err_t rc = esp_lcd_panel_draw_bitmap(s_state.panel_handle,
                                              0,
                                              0,
@@ -423,6 +407,7 @@ CeePewErr_t hal_oled_flush(void){
         ESP_LOGE(TAG, "hal_oled_flush: esp_lcd_panel_draw_bitmap failed: 0x%x", rc);
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "hal_oled_flush: bitmap sent successfully");
     return CEEPEW_OK;
 }
 
