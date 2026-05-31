@@ -351,7 +351,7 @@ static CeePewErr_t oled_create_bus(uint32_t speed_hz)
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 2U,              /* Reduce aggression for faster I2C transitions */
         .intr_priority = 0,
-        .trans_queue_depth     = 64U,             /* Prevent queue overflow during panel init + mode setup */
+        .trans_queue_depth     = 0U,             /* 0 = synchronous mode; disables async queue to prevent ops-list overflow */
         .flags = {
             .enable_internal_pullup = 0U,     /* Assume external pull-ups on board */
             .allow_pd = 0U,
