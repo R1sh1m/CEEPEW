@@ -1,20 +1,7 @@
-## Root Cause
-
-`esp_lcd_panel_init()` hangs in ESP-IDF v6.0 because the `esp_lcd_io_i2c` layer changed its internal transaction handling. The SSD1306 driver is triggering a read or blocking callback that never resolves, since the SSD1306 is a write-only display over I2C.
-
-The professional solution is to **discard `esp_lcd` entirely** and talk to the SSD1306 directly via `i2c_master_transmit()`. Every serious ESP32 embedded project that ships an SSD1306 display does this. The `esp_lcd` abstraction exists for parallel RGB and SPI displays; for a simple I2C OLED it adds nothing and breaks things.
-
----
-
-## Complete replacement `hal_oled.c`
-
-`hal_oled.h` is **unchanged**. Drop this file in:
-
-```c
 /* components/ceepew_hal/hal_oled.c
  *
  * Direct I2C SSD1306 driver.
- * Bypasses esp_lcd entirely — uses i2c_master_transmit() (ESP-IDF v5.1+).
+ * Bypasses esp_lcd entirely ? uses i2c_master_transmit() (ESP-IDF v5.1+).
  * Synchronous, blocking, no async queue, no panel framework.
  * Works on SSD1306 and SH1106 (auto-detected on first flush failure).
  */
@@ -36,13 +23,13 @@ The professional solution is to **discard `esp_lcd` entirely** and talk to the S
 
 static const char *TAG = "hal_oled";
 
-/* ── Dimensions ──────────────────────────────────────────────────────── */
+/* ?? Dimensions ???????????????????????????????????????????????????????? */
 #define OLED_W        CEEPEW_OLED_WIDTH_PX          /* 128 */
 #define OLED_H        CEEPEW_OLED_HEIGHT_PX          /* 64  */
 #define OLED_PAGES    (OLED_H / 8U)                  /* 8   */
 #define FB_BYTES      (OLED_W * OLED_PAGES)          /* 1024 */
 
-/* SSD1306 I2C control bytes (Co=0 in both cases — stream follows) */
+/* SSD1306 I2C control bytes (Co=0 in both cases ? stream follows) */
 #define CTRL_CMD      0x00U   /* D/C = 0 : command stream */
 #define CTRL_DATA     0x40U   /* D/C = 1 : data stream    */
 
@@ -54,7 +41,7 @@ static const char *TAG = "hal_oled";
 #define GLYPH_ADV 6U                       /* 5 px glyph + 1 px gap  */
 #define MAX_CHARS (OLED_W / GLYPH_ADV)    /* 21 characters per row  */
 
-/* ── Module state ────────────────────────────────────────────────────── */
+/* ?? Module state ?????????????????????????????????????????????????????? */
 static struct {
     bool                    initialised;
     bool                    sh1106_mode;
@@ -64,7 +51,7 @@ static struct {
     uint8_t                 fb[FB_BYTES];
 } s;
 
-/* ── Low-level I2C primitives ────────────────────────────────────────── */
+/* ?? Low-level I2C primitives ?????????????????????????????????????????? */
 
 /*
  * Send up to 16 command bytes in a single I2C transaction.
@@ -109,10 +96,10 @@ static CeePewErr_t send_page(uint8_t page)
            ? CEEPEW_OK : CEEPEW_ERR_HW;
 }
 
-/* ── SSD1306 hardware init sequence ─────────────────────────────────── */
+/* ?? SSD1306 hardware init sequence ??????????????????????????????????? */
 static CeePewErr_t hw_init(void)
 {
-    /* Standard SSD1306 128×64 init — identical on genuine SSD1306 and SH1106 */
+    /* Standard SSD1306 128?64 init ? identical on genuine SSD1306 and SH1106 */
     CeePewErr_t e;
     e = cmd1(0xAEU);           if (e) return e;   /* Display OFF             */
     e = cmd2(0xD5U, 0x80U);    if (e) return e;   /* Clock / osc freq        */
@@ -133,7 +120,7 @@ static CeePewErr_t hw_init(void)
     return CEEPEW_OK;
 }
 
-/* ── Page flush ──────────────────────────────────────────────────────── */
+/* ?? Page flush ???????????????????????????????????????????????????????? */
 static CeePewErr_t flush_at_offset(uint8_t col_offset)
 {
     for (uint8_t page = 0U; page < OLED_PAGES; page++) {
@@ -150,7 +137,7 @@ static CeePewErr_t flush_at_offset(uint8_t col_offset)
     return CEEPEW_OK;
 }
 
-/* ── Public API ──────────────────────────────────────────────────────── */
+/* ?? Public API ???????????????????????????????????????????????????????? */
 
 CeePewErr_t hal_oled_init(void)
 {
@@ -177,7 +164,7 @@ CeePewErr_t hal_oled_init(void)
             .glitch_ignore_cnt     = 7U,
             .intr_priority         = 0,
             /*
-             * trans_queue_depth = 0 → synchronous mode.
+             * trans_queue_depth = 0 ? synchronous mode.
              * Every i2c_master_transmit() blocks until the physical transfer
              * completes before returning.  The queue can never fill because
              * there is no queue.  FreeRTOS yields to other tasks (BLE, etc.)
@@ -308,7 +295,7 @@ CeePewErr_t hal_oled_set_charge_pump(bool enabled)
     return cmd2(0x8DU, enabled ? 0x14U : 0x10U);
 }
 
-/* ── Framebuffer pixel ops ───────────────────────────────────────────── */
+/* ?? Framebuffer pixel ops ????????????????????????????????????????????? */
 
 static void fb_pixel(uint8_t x, uint8_t y, bool on)
 {
@@ -364,7 +351,7 @@ CeePewErr_t hal_oled_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, b
     return CEEPEW_OK;
 }
 
-/* ── Font (identical bitmaps to original hal_oled.c) ────────────────── */
+/* ?? Font (identical bitmaps to original hal_oled.c) ?????????????????? */
 
 static const uint8_t g_question[5]   = {0x02U,0x01U,0x59U,0x09U,0x06U};
 static const uint8_t g_space[5]      = {0x00U,0x00U,0x00U,0x00U,0x00U};
@@ -450,7 +437,7 @@ CeePewErr_t hal_oled_draw_char(uint8_t x, uint8_t y, char ch)
     CEEPEW_ASSERT(s.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(x <= (uint8_t)(OLED_W - GLYPH_W), CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(y <= (uint8_t)(OLED_H - GLYPH_H), CEEPEW_ERR_BOUNDS);
-    /* Clear 6×8 cell (5 glyph + 1 gap) before drawing */
+    /* Clear 6?8 cell (5 glyph + 1 gap) before drawing */
     for (uint8_t r = 0U; r < GLYPH_H; r++) {
         for (uint8_t c = 0U; c < GLYPH_ADV; c++) {
             fb_pixel((uint8_t)(x + c), (uint8_t)(y + r), false);
@@ -481,30 +468,3 @@ CeePewErr_t hal_oled_draw_text(uint8_t x, uint8_t y, const char *text)
     }
     return CEEPEW_OK;
 }
-```
-
----
-
-## CMakeLists.txt — one line change
-
-Replace `esp_lcd` with `esp_driver_i2c`:
-
-```cmake
-    REQUIRES
-        main
-        crypto
-        esp_driver_gpio
-        esp_driver_ledc
-        esp_driver_i2c          # replaces esp_lcd — raw I2C master API
-        esp_adc
-        esp_timer
-        esp_wifi
-        esp_netif
-        esp_event
-        nvs_flash
-        log
-        freertos
-        esp_common
-        esp_system
-        efuse
-```
