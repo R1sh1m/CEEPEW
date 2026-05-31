@@ -2,8 +2,8 @@
 
 #include "hal_oled.h"
 #include "hal_pins.h"
-#include "../../main/ceepew_config.h"
-#include "../../main/ceepew_assert.h"
+#include "ceepew_config.h"
+#include "ceepew_assert.h"
 
 #include "driver/i2c.h"
 #include "esp_err.h"
