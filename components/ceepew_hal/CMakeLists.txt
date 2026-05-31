@@ -40,5 +40,4 @@ idf_component_register(
         esp_common
         esp_system
         efuse
-    driver
 )
