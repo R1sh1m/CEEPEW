@@ -149,8 +149,8 @@ CeePewErr_t ui_chat_show_pool(uint8_t char_budget);
  */
 CeePewErr_t ui_chat_show_compose(uint8_t pot_value, uint8_t selected_idx);
 
-/* Sprint 12: Cryptogram display with four 8-character hex rows (32 hex chars total).
- * Displays 16-byte session commitment as hex (session_code SHA256 digest).
+/* Sprint 12: Cryptogram display with grouped hex rows.
+ * Displays 16-byte session commitment as hex with 2-byte groups for readability.
  * Centered on display in monospace font.
  * No dynamic allocation; static hex conversion buffer.
  * Two CEEPEW_ASSERTs for bounds checking.
@@ -174,7 +174,7 @@ CeePewErr_t ui_crypto_show_status(uint8_t status);
 CeePewErr_t ui_crypto_show_confirm(uint8_t countdown_sec);
 
 /* Phase 4: Fingerprint confirmation panel display.
- * Shows 16-byte fingerprint in hex, peer MAC, and D=Accept/S=Reject prompts.
+ * Shows 16-byte fingerprint in grouped hex, peer MAC, and D=Accept/S=Reject prompts.
  * fingerprint: 16 bytes to display (not NULL)
  * peer_mac: 6-byte MAC for identification (not NULL)
  * No dynamic allocation; static hex conversion buffer.
@@ -184,7 +184,7 @@ CeePewErr_t ui_fingerprint_show_confirm(const uint8_t fingerprint[16],
                                         const uint8_t peer_mac[6]);
 
 /* Phase 4: Fingerprint display panel.
- * Shows 16-byte fingerprint in hex with peer MAC before confirmation.
+ * Shows 16-byte fingerprint in grouped hex with peer MAC before confirmation.
  */
 CeePewErr_t ui_fingerprint_show_display(const uint8_t fingerprint[16],
                                         const uint8_t peer_mac[6]);

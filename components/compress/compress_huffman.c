@@ -246,6 +246,30 @@ CeePewErr_t compress_huffman_compress(
         }
     }
 
+    /* OPTIONAL PADDING FOR SIDE-CHANNEL RESISTANCE:
+     * 
+     * If side-channel attack resistance is required, the caller can apply
+     * optional fixed-size padding to the output to hide the compressed size:
+     * 
+     *   // Hide compressed size via constant-size padding
+     *   uint16_t padded_len = CEEPEW_HUFFMAN_PAD_BLOCK_SIZE;
+     *   if (*out_len < CEEPEW_HUFFMAN_PAD_BLOCK_SIZE) {
+     *       memset(out + *out_len, CEEPEW_HUFFMAN_PAD_BYTE, 
+     *              CEEPEW_HUFFMAN_PAD_BLOCK_SIZE - *out_len);
+     *       *out_len = CEEPEW_HUFFMAN_PAD_BLOCK_SIZE;
+     *   }
+     * 
+     * This prevents an eavesdropper from inferring message content by observing
+     * the ciphertext length. Without padding, each message leaks its original
+     * length class (short, medium, long messages compress differently).
+     * 
+     * Trade-off: Padding reduces bandwidth efficiency to improve secrecy.
+     * Recommended padding block size: 64 bytes (aligns with crypto block size).
+     * 
+     * Note: Padding is NOT applied by default to keep this function focused
+     * on compression. Padding should be applied by the session layer if needed.
+     */
+
     return CEEPEW_OK;
 }
 

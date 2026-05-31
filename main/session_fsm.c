@@ -33,6 +33,7 @@
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
 #include "session_fsm.h"
+#include "hal_efuse.h"
 #include "esp_log.h"
 #include <stdint.h>
 #include <string.h>
@@ -85,17 +86,71 @@ static SessionCtx_t s_session;
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
 static void session_secure_zero_context(void);
+static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6]);
 
 static CeePewErr_t session_derive_sign_seed(const uint8_t mac[6], uint8_t seed_out[32])
 {
     CEEPEW_ASSERT(mac != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(seed_out != NULL, CEEPEW_ERR_NULL_PTR);
-    uint8_t seed_material[32U + 6U];
-    memcpy(seed_material, s_session.session_code, 32U);
-    memcpy(seed_material + 32U, mac, 6U);
-    CeePewErr_t err = crypto_sha256_compute(seed_material, (uint32_t)sizeof(seed_material), seed_out);
+
+    /* Step 1: Read device-unique eFuse secret (non-recoverable, per-unit) */
+    uint8_t efuse_secret[32];
+    CeePewErr_t err = hal_efuse_get_device_secret(efuse_secret);
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+
+    /* Step 2: Build seed material: eFuse || session_code || peer_mac
+     * This ensures the signing seed is unique per device, per session, per peer
+     */
+    uint8_t seed_material[32U + 32U + 6U];
+    memcpy(seed_material, efuse_secret, 32U);
+    memcpy(seed_material + 32U, s_session.session_code, 32U);
+    memcpy(seed_material + 64U, mac, 6U);
+
+    /* Step 3: Derive seed via SHA256 */
+    err = crypto_sha256_compute(seed_material, (uint32_t)sizeof(seed_material), seed_out);
+
+    /* Step 4: Securely zero all sensitive intermediates */
     ceepew_secure_zero(seed_material, (uint32_t)sizeof(seed_material));
+    ceepew_secure_zero(efuse_secret, (uint32_t)sizeof(efuse_secret));
+
     return err;
+}
+
+static CeePewErr_t session_compute_id(uint8_t session_id_out[8])
+{
+    CEEPEW_ASSERT(session_id_out != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Compute session_id from canonical device IDs and session code.
+     * session_id = SHA256(min(id_self, id_peer) || max(id_self, id_peer) || session_code)[0:8]
+     * 
+     * CRITICAL: The device IDs are ordered lexicographically (via memcmp) to ensure
+     * that both initiator and responder derive the SAME session_id from the same
+     * session_code. This prevents Phase 2 commitment disagreement.
+     * 
+     * Example: If A=aa:bb:cc:00:00:01 and B=aa:bb:cc:00:00:02, then:
+     *   Both devices compute: SHA256(A || B || session_code)
+     * Even if A is the initiator and B is the responder.
+     */
+    uint8_t id_a[6U];
+    uint8_t id_b[6U];
+    CeePewErr_t err = session_ordered_device_ids(id_a, id_b);
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+
+    uint8_t session_id_src[44U];
+    memcpy(session_id_src, id_a, 6U);
+    memcpy(session_id_src + 6U, id_b, 6U);
+    memcpy(session_id_src + 12U, s_session.session_code, 32U);
+
+    uint8_t session_id_hash[32];
+    err = crypto_sha256_compute(session_id_src, (uint32_t)sizeof(session_id_src), session_id_hash);
+    ceepew_secure_zero(session_id_src, (uint32_t)sizeof(session_id_src));
+    ceepew_secure_zero(id_a, (uint32_t)sizeof(id_a));
+    ceepew_secure_zero(id_b, (uint32_t)sizeof(id_b));
+    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+
+    memcpy(session_id_out, session_id_hash, 8U);
+    ceepew_secure_zero(session_id_hash, sizeof(session_id_hash));
+    return CEEPEW_OK;
 }
 
 static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6])
@@ -103,6 +158,29 @@ static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6])
     CEEPEW_ASSERT(id_a != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(id_b != NULL, CEEPEW_ERR_NULL_PTR);
 
+    /* Return device IDs in lexicographic order to prevent Phase 2 disagreement.
+     * 
+     * SECURITY: This function enforces a consistent device ID ordering algorithm
+     * across both peers (initiator and responder) so that they derive identical
+     * commitment values and session keys.
+     * 
+     * Algorithm: Compare MAC addresses lexicographically (byte-by-byte, left-to-right).
+     * If device_self is <= device_peer (memcmp returns <= 0), then:
+     *   id_a = device_self (smaller)
+     *   id_b = device_peer (larger)
+     * Otherwise:
+     *   id_a = device_peer (smaller)
+     *   id_b = device_self (larger)
+     * 
+     * Both devices execute this same comparison algorithm, so both will:
+     * 1. Derive the same session_id = SHA256(id_a || id_b || session_code)
+     * 2. Produce the same HKDF-SHA256 commitment value
+     * 3. Accept each other's commitment fingerprints on display
+     * 
+     * This prevents an attack where one device could claim a different session_id,
+     * causing the fingerprint comparison to fail even though both devices agree
+     * on the session code.
+     */
     if (memcmp(s_session.device_id_self, s_session.device_id_peer, 6U) <= 0) {
         memcpy(id_a, s_session.device_id_self, 6U);
         memcpy(id_b, s_session.device_id_peer, 6U);
@@ -149,40 +227,36 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     CEEPEW_ASSERT(s_session.phase == 1U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
 
+    /* Entropy validation: reject all-zeros session code */
+    uint8_t all_zeros = 1U;
+    for (uint16_t i = 0U; i < 32U; i++) {
+        if (session_code[i] != 0U) {
+            all_zeros = 0U;
+            break;
+        }
+    }
+    CEEPEW_ASSERT(!all_zeros, CEEPEW_ERR_CRYPTO);  /* All zeros indicates no entropy */
+
     s_session.phase = 2U;
     memcpy(s_session.session_code, session_code, 32U);
 
-    /* Derive a deterministic session_id from canonical device-ID order and session code. */
-    uint8_t id_a[6U];
-    uint8_t id_b[6U];
-    CeePewErr_t err = session_ordered_device_ids(id_a, id_b);
+    /* Derive a deterministic session_id using helper function */
+    uint8_t session_id_bytes[8];
+    CeePewErr_t err = session_compute_id(session_id_bytes);
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
 
-    uint8_t session_id_src[44U];
-    memcpy(session_id_src, id_a, 6U);
-    memcpy(session_id_src + 6U, id_b, 6U);
-    memcpy(session_id_src + 12U, s_session.session_code, 32U);
-
-    uint8_t session_id_hash[32];
-    err = crypto_sha256_compute(session_id_src, (uint32_t)sizeof(session_id_src), session_id_hash);
-    ceepew_secure_zero(session_id_src, (uint32_t)sizeof(session_id_src));
-    ceepew_secure_zero(id_a, (uint32_t)sizeof(id_a));
-    ceepew_secure_zero(id_b, (uint32_t)sizeof(id_b));
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
-
-    s_session.session_id = ((uint64_t)session_id_hash[0] << 56U) |
-                           ((uint64_t)session_id_hash[1] << 48U) |
-                           ((uint64_t)session_id_hash[2] << 40U) |
-                           ((uint64_t)session_id_hash[3] << 32U) |
-                           ((uint64_t)session_id_hash[4] << 24U) |
-                           ((uint64_t)session_id_hash[5] << 16U) |
-                           ((uint64_t)session_id_hash[6] << 8U) |
-                           ((uint64_t)session_id_hash[7]);
+    /* Store session_id as 64-bit value */
+    s_session.session_id = ((uint64_t)session_id_bytes[0] << 56U) |
+                           ((uint64_t)session_id_bytes[1] << 48U) |
+                           ((uint64_t)session_id_bytes[2] << 40U) |
+                           ((uint64_t)session_id_bytes[3] << 32U) |
+                           ((uint64_t)session_id_bytes[4] << 24U) |
+                           ((uint64_t)session_id_bytes[5] << 16U) |
+                           ((uint64_t)session_id_bytes[6] << 8U) |
+                           ((uint64_t)session_id_bytes[7]);
 
     /* Store session_id in nonce upper 64 bits */
-    for (uint8_t i = 0U; i < 8U; i++) {
-        s_session.nonce_upper_64[i] = session_id_hash[i];
-    }
+    memcpy(s_session.nonce_upper_64, session_id_bytes, 8U);
 
     /* Generate deterministic per-session Ed25519 keypair */
     uint8_t sign_seed[32];
@@ -198,18 +272,27 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
 CeePewErr_t session_phase2_derive_key(void){
     CEEPEW_ASSERT(s_session.phase == 2U, CEEPEW_ERR_PARAM);
 
+    /* Save region state for rollback on error */
+    uint32_t saved_bump = g_region.bump;
+    CeePewErr_t err = CEEPEW_OK;
+
+    /* Declare all intermediate values needed for error cleanup */
+    uint8_t ds_mix[32] = {0};
+    uint8_t salt_input[64U] = {0};
+    uint8_t hkdf_salt[32] = {0};
+    uint8_t commitment[CEEPEW_COMMITMENT_BYTES] = {0};
+    uint8_t hkdf_info[128U] = {0};
+    uint8_t hkdf_output[64] = {0};
+
     /* Step 1: Digital sum preprocessing of session code */
-    uint8_t ds_mix[32];
     digital_sum_mix(s_session.session_code, 32U, ds_mix);
 
     /* Step 2: SHA256(digital_sum_mix || session_code) as HKDF salt */
-    uint8_t salt_input[64U];
     memcpy(salt_input, ds_mix, 32U);
     memcpy(salt_input + 32U, s_session.session_code, 32U);
 
-    uint8_t hkdf_salt[32];
-    CeePewErr_t err = crypto_sha256_compute(salt_input, 64U, hkdf_salt);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    err = crypto_sha256_compute(salt_input, 64U, hkdf_salt);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
 
     /* Step 3: Build canonical HKDF info (label || id_A || id_B || commitment || t_round)
      * Use crypto_hkdf_build_info() to ensure canonical ordering and fixed-length fields. */
@@ -224,20 +307,16 @@ CeePewErr_t session_phase2_derive_key(void){
         id_b = tmp;
     }
 
-    uint8_t commitment[CEEPEW_COMMITMENT_BYTES];
     err = session_get_commitment(commitment);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
 
-    uint8_t hkdf_info[128U]; /* ample space for label + ids + commitment + t_round */
     uint8_t hkdf_info_len = 0U;
     err = crypto_hkdf_build_info(label, label_len, id_a, id_b, commitment, 0U, hkdf_info, &hkdf_info_len);
-    ceepew_secure_zero(commitment, sizeof(commitment));
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
 
     /* Step 4-5: HKDF Derive (combined extract + expand, 64 bytes output) */
-    uint8_t hkdf_output[64];
     err = crypto_hkdf_derive(s_session.session_code, 32U, hkdf_salt, 32U, hkdf_info, hkdf_info_len, hkdf_output, 64U);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
 
     /* Extract layout: [0:15]=Ascon key, [16:47]=crypto_box seed, [48:55]=session_id */
     memcpy(g_crypto_ctx.ascon_key, hkdf_output, 16U);
@@ -245,7 +324,6 @@ CeePewErr_t session_phase2_derive_key(void){
     memcpy(g_crypto_ctx.session_id, hkdf_output + 48U, 8U);
     memcpy(g_crypto_ctx.reserved, hkdf_output + 56U, 8U);
     g_crypto_ctx.session_active = true;
-    g_crypto_ctx.nonce_counter = 0ULL;
 
     memcpy(s_session.session_key, g_crypto_ctx.ascon_key, 16U);
     memcpy(s_session.nonce_upper_64, g_crypto_ctx.session_id, 8U);
@@ -259,20 +337,40 @@ CeePewErr_t session_phase2_derive_key(void){
                            ((uint64_t)g_crypto_ctx.session_id[7]);
     s_session.nonce_counter = 0ULL;
 
-    /* Secure zero the intermediate values */
-    ceepew_secure_zero(hkdf_output, sizeof(hkdf_output));
-    ceepew_secure_zero(hkdf_salt, sizeof(hkdf_salt));
-    ceepew_secure_zero(salt_input, sizeof(salt_input));
-    ceepew_secure_zero(ds_mix, sizeof(ds_mix));
-
     s_session.phase = 3U;
     s_session.session_active = true;
     session_init_ttl();  /* Phase 4: Initialize TTL tracking */
 
-    err = esl_register_callbacks(session_mac_lock_check, session_enforce_nonce_limit);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    /* Initialize Core 0/1 mutex for g_crypto_ctx access */
+    CeePewErr_t mutex_err = crypto_mutex_init();
+    if (mutex_err != CEEPEW_OK) { goto error_cleanup; }
 
+    err = esl_register_callbacks(session_mac_lock_check, session_enforce_nonce_limit);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
+
+    /* Success: secure zero all sensitive intermediates */
+    ceepew_secure_zero(hkdf_output, sizeof(hkdf_output));
+    ceepew_secure_zero(hkdf_salt, sizeof(hkdf_salt));
+    ceepew_secure_zero(salt_input, sizeof(salt_input));
+    ceepew_secure_zero(ds_mix, sizeof(ds_mix));
+    ceepew_secure_zero(commitment, sizeof(commitment));
+    ceepew_secure_zero(hkdf_info, sizeof(hkdf_info));
+    
     return CEEPEW_OK;
+
+error_cleanup:
+    /* Restore region bump on error */
+    g_region.bump = saved_bump;
+    
+    /* Secure zero all sensitive intermediates */
+    ceepew_secure_zero(hkdf_output, sizeof(hkdf_output));
+    ceepew_secure_zero(hkdf_salt, sizeof(hkdf_salt));
+    ceepew_secure_zero(salt_input, sizeof(salt_input));
+    ceepew_secure_zero(ds_mix, sizeof(ds_mix));
+    ceepew_secure_zero(commitment, sizeof(commitment));
+    ceepew_secure_zero(hkdf_info, sizeof(hkdf_info));
+    
+    return err;
 }
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -283,11 +381,18 @@ CeePewErr_t session_enforce_nonce_limit(void){
     CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
 
-    /* Before every encrypt operation, check nonce hasn't exhausted */
-    if (s_session.nonce_counter >= CEEPEW_NONCE_HARD_LIMIT) { return CEEPEW_ERR_NONCE_EXHAUSTED; }
+    /* Check for hard limit — session cannot continue */
+    if (s_session.nonce_counter >= CEEPEW_NONCE_HARD_LIMIT) {
+        return CEEPEW_ERR_NONCE_EXHAUSTED;
+    }
+
+    /* Check for 90% warning level — session should warn but can continue briefly */
+    if (s_session.nonce_counter >= CEEPEW_NONCE_WARNING_LIMIT) {
+        s_session.nonce_counter++;
+        return CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED;
+    }
 
     s_session.nonce_counter++;
-    g_crypto_ctx.nonce_counter = s_session.nonce_counter;
     return CEEPEW_OK;
 }
 
@@ -296,10 +401,19 @@ CeePewErr_t session_get_nonce(uint8_t nonce[24]){
     CEEPEW_ASSERT(nonce != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
 
-    /* nonce[0:8] = session_id, nonce[8:16] = nonce_counter (LE), nonce[16:24] = padding */
+    /* Nonce format (24 bytes for XSalsa20; Ascon truncates to 16B):
+     * - nonce[0:8]   = session_id (derived from device IDs and session code)
+     * - nonce[8:16]  = nonce_counter (little-endian 64-bit counter)
+     * - nonce[16:24] = padding (zeros for XSalsa20)
+     *
+     * IMPORTANT: XSalsa20 (crypto_box) uses 24-byte nonce. Ascon-128 uses 16-byte nonce.
+     * When used with Ascon, only the first 16 bytes are read. Both layers derive
+     * their nonce from the same session_id base and counter for consistency.
+     * The counter is incremented in session_enforce_nonce_limit() before every encrypt.
+     */
     memcpy(nonce, g_crypto_ctx.session_id, 8U);
     for (uint8_t i = 0U; i < 8U; i++) {
-        nonce[8U + i] = (uint8_t)((g_crypto_ctx.nonce_counter >> (i * 8U)) & 0xFFU);
+        nonce[8U + i] = (uint8_t)((s_session.nonce_counter >> (i * 8U)) & 0xFFU);
     }
     memset(nonce + 16U, 0U, 8U);
     return CEEPEW_OK;
@@ -372,7 +486,7 @@ uint8_t session_get_phase(void) { return s_session.phase; }
 
 bool session_is_active(void) { return s_session.session_active; }
 
-uint64_t session_get_nonce_counter(void) { return g_crypto_ctx.nonce_counter; }
+uint64_t session_get_nonce_counter(void) { return s_session.nonce_counter; }
 
 uint64_t session_get_id(void) {
     return ((uint64_t)g_crypto_ctx.session_id[0] << 56U) |

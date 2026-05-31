@@ -14,17 +14,20 @@ extern "C" {
 
 /* Derive the current ESP-NOW channel for the active session using a
  * PRG-derived permutation of BASE_CHANNELS. The implementation is
- * intentionally deterministic: given the same crypto context and nonce
+ * intentionally deterministic: given the same crypto context, session key, and nonce
  * state it will always return the same channel.
  *
  * PARAMETERS:
- *   ctx         - Pointer to active crypto context (must not be NULL)
- *   channel_out - Pointer to a byte where selected channel is written (must not be NULL)
+ *   ctx              - Pointer to active crypto context (must not be NULL)
+ *   nonce_counter    - Current nonce counter value for hop sequence
+ *   channel_out      - Pointer to a byte where selected channel is written (must not be NULL)
  *
  * RETURNS:
  *   CEEPEW_OK on success, error code otherwise.
  */
-CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx, uint8_t *channel_out);
+CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx,
+                                         uint64_t nonce_counter,
+                                         uint8_t *channel_out);
 
 #ifdef __cplusplus
 }

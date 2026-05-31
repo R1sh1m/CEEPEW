@@ -4,9 +4,9 @@
  * All GPIO assignments reflect actual PCB wiring.
  * NO other file in the project may contain raw GPIO numbers.
  *
- * Wiring is corrected to the spec:
- *   OLED SDA → GPIO26 (was 21, changed to fix I2C conflicts)
- *   OLED SCL → GPIO27 (was 22, changed to fix I2C conflicts)
+ * Wiring is corrected to the active board mapping:
+ *   OLED SDA → GPIO26
+ *   OLED SCL → GPIO27
  *   POT      → GPIO33
  *   BUTTON   → GPIO19
  *   DIAG SW  → GPIO5
@@ -29,6 +29,10 @@
 #define CEEPEW_PIN_I2C_SCL          GPIO_NUM_27
 #define CEEPEW_I2C_PORT             ((i2c_port_t)0)
 #define CEEPEW_I2C_FREQ_HZ          400000U
+#define CEEPEW_I2C_FREQ_FALLBACK_HZ 100000U
+#define CEEPEW_OLED_I2C_PROBE_TIMEOUT_MS 20U
+#define CEEPEW_OLED_I2C_SCAN_ADDR_MIN 0x03U
+#define CEEPEW_OLED_I2C_SCAN_ADDR_MAX 0x77U
 #define CEEPEW_OLED_I2C_ADDR        0x3CU
 #define CEEPEW_OLED_I2C_ADDR_FB     0x3DU   /* fallback address */
 

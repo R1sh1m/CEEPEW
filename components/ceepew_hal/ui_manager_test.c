@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "layout.h"
 #include "ui_manager.h"
 #include "hal_ui.h"
 #include "../transport/transport_ble.h"
@@ -103,6 +104,11 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
         printf("ui_manager selftest: failed to enter KEYDER (state=%d)\n", (int)g_ui_ctx.current_state);
         return;
     }
+    if (layout_validate_state_entry(UI_STATE_PAIRING_SUCCESS) != CEEPEW_OK ||
+        layout_validate_state_entry(UI_STATE_KEYDER) != CEEPEW_OK) {
+        printf("ui_manager selftest: pairing/keyder layout validation failed\n");
+        return;
+    }
     printf("CEEPEW: ui_manager selftest - KEYDER transition PASS\n");
 
     /* Test 3: Test ui_keygen_show_progress() rendering */
@@ -148,6 +154,48 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     printf("CEEPEW: ui_manager selftest - ui_keygen_show_fingerprint(true) PASS\n");
 
+    /* Test 6: Cryptogram and fingerprint display helpers with grouped hex */
+    uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {
+        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+    };
+    if (ui_crypto_show_cryptogram(test_commitment) != CEEPEW_OK) {
+        printf("ui_manager selftest: ui_crypto_show_cryptogram() failed\n");
+        return;
+    }
+    printf("CEEPEW: ui_manager selftest - ui_crypto_show_cryptogram PASS\n");
+
+    for (uint8_t status = 0U; status <= 2U; status++) {
+        if (ui_crypto_show_status(status) != CEEPEW_OK) {
+            printf("ui_manager selftest: ui_crypto_show_status(%u) failed\n", status);
+            return;
+        }
+    }
+    printf("CEEPEW: ui_manager selftest - ui_crypto_show_status PASS\n");
+
+    for (uint8_t countdown = 0U; countdown <= 30U; countdown += 5U) {
+        if (ui_crypto_show_confirm(countdown) != CEEPEW_OK) {
+            printf("ui_manager selftest: ui_crypto_show_confirm(%u) failed\n", countdown);
+            return;
+        }
+    }
+    printf("CEEPEW: ui_manager selftest - ui_crypto_show_confirm PASS\n");
+
+    uint8_t test_fingerprint[16] = {
+        0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18,
+        0x29, 0x3A, 0x4B, 0x5C, 0x6D, 0x7E, 0x8F, 0x90
+    };
+    uint8_t test_peer_mac[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34};
+    if (ui_fingerprint_show_display(test_fingerprint, test_peer_mac) != CEEPEW_OK) {
+        printf("ui_manager selftest: ui_fingerprint_show_display() failed\n");
+        return;
+    }
+    if (ui_fingerprint_show_confirm(test_fingerprint, test_peer_mac) != CEEPEW_OK) {
+        printf("ui_manager selftest: ui_fingerprint_show_confirm() failed\n");
+        return;
+    }
+    printf("CEEPEW: ui_manager selftest - fingerprint display helpers PASS\n");
+
     /* Simulate rendering fingerprint screen */
     for (uint8_t frame = 0; frame < 10; frame++) {
         if (ui_manager_draw() != CEEPEW_OK) {
@@ -158,7 +206,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     printf("CEEPEW: ui_manager selftest - FINGERPRINT rendering PASS\n");
 
-    /* Test 6: Fingerprint screen with button press should transition to CHAT */
+    /* Test 7: Fingerprint screen with button press should transition to CHAT */
     g_ui_ctx.button_pressed = true;
     (void)ui_manager_draw();
     (void)ui_manager_update();
@@ -170,7 +218,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     printf("CEEPEW: ui_manager selftest - FINGERPRINT button transition PASS\n");
 
-    /* Test 7: Sprint 11 - Transition to CHAT state */
+    /* Test 8: Sprint 11 - Transition to CHAT state */
     (void)ui_manager_transition_to(UI_STATE_CHAT);
     g_ui_ctx.transition_ready = true;
     (void)ui_manager_update();
@@ -180,8 +228,61 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
         return;
     }
     printf("CEEPEW: ui_manager selftest - CHAT transition PASS\n");
-    
-    /* Test 8: Test ui_chat_show_bubble() with mock messages */
+
+    /* Test 9: Compose long press should open SEND_CONFIRM, and cancel should return */
+    (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
+    g_ui_ctx.transition_ready = true;
+    (void)ui_manager_update();
+    if (g_ui_ctx.current_state != UI_STATE_CHAT_COMPOSE) {
+        printf("ui_manager selftest: failed to enter CHAT_COMPOSE (state=%d)\n", (int)g_ui_ctx.current_state);
+        return;
+    }
+
+    g_ui_ctx.compose_length = 1U;
+    g_ui_ctx.compose_cursor = 1U;
+    g_ui_ctx.compose_buffer[0] = 'A';
+    g_ui_ctx.compose_buffer[1] = '\0';
+
+    ui_manager_handle_input(128U, true, false);
+    (void)ui_manager_update();
+    g_ui_ctx.button_press_start_ms = (uint32_t)(esp_timer_get_time() / 1000LL) - 2000U;
+    ui_manager_handle_input(128U, false, false);
+    (void)ui_manager_update();
+
+    if (g_ui_ctx.next_state != UI_STATE_CHAT_SEND_CONFIRM) {
+        printf("ui_manager selftest: compose long press should transition to CHAT_SEND_CONFIRM (next_state=%d)\n",
+               (int)g_ui_ctx.next_state);
+        return;
+    }
+
+    g_ui_ctx.transition_ready = true;
+    (void)ui_manager_update();
+    if (g_ui_ctx.current_state != UI_STATE_CHAT_SEND_CONFIRM) {
+        printf("ui_manager selftest: failed to enter CHAT_SEND_CONFIRM (state=%d)\n", (int)g_ui_ctx.current_state);
+        return;
+    }
+
+    ui_manager_handle_input(128U, true, false);
+    (void)ui_manager_update();
+    g_ui_ctx.chat_send_confirm_selected = 1U;
+    ui_manager_handle_input(128U, false, false);
+    (void)ui_manager_update();
+
+    if (g_ui_ctx.next_state != UI_STATE_CHAT_COMPOSE) {
+        printf("ui_manager selftest: send-confirm cancel should return to CHAT_COMPOSE (next_state=%d)\n",
+               (int)g_ui_ctx.next_state);
+        return;
+    }
+
+    g_ui_ctx.transition_ready = true;
+    (void)ui_manager_update();
+    if (g_ui_ctx.current_state != UI_STATE_CHAT_COMPOSE) {
+        printf("ui_manager selftest: failed to return to CHAT_COMPOSE (state=%d)\n", (int)g_ui_ctx.current_state);
+        return;
+    }
+    printf("CEEPEW: ui_manager selftest - CHAT send-confirm path PASS\n");
+
+    /* Test 10: Test ui_chat_show_bubble() with mock messages */
     if (msg_store_count() == 0U) {
         /* Add a test message for display */
         uint8_t test_payload[20] = "Hello from peer!    ";
@@ -194,14 +295,14 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     printf("CEEPEW: ui_manager selftest - ui_chat_show_bubble PASS\n");
     
-    /* Test 9: Test ui_chat_show_pool() */
+    /* Test 11: Test ui_chat_show_pool() */
     if (ui_chat_show_pool(150U) != CEEPEW_OK) {
         printf("ui_manager selftest: ui_chat_show_pool() failed\n");
         return;
     }
     printf("CEEPEW: ui_manager selftest - ui_chat_show_pool PASS\n");
     
-    /* Test 10: Test ui_chat_show_compose() with various pot values */
+    /* Test 12: Test ui_chat_show_compose() with various pot values */
     for (uint8_t pot = 0U; pot < 255U; pot += 32U) {
         if (ui_chat_show_compose(pot, 0U) != CEEPEW_OK) {
             printf("ui_manager selftest: ui_chat_show_compose(pot=%u) failed\n", pot);
@@ -210,7 +311,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     printf("CEEPEW: ui_manager selftest - ui_chat_show_compose PASS\n");
     
-    /* Test 11: Simulate rendering CHAT screen multiple times */
+    /* Test 13: Simulate rendering CHAT screen multiple times */
     for (uint8_t frame = 0; frame < 15; frame++) {
         if (ui_manager_draw() != CEEPEW_OK) {
             printf("ui_manager selftest: ui_manager_draw() failed on CHAT frame %u\n", frame);
@@ -220,7 +321,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     printf("CEEPEW: ui_manager selftest - CHAT rendering PASS\n");
     
-    /* Test 12: Test compose mode with button press */
+    /* Test 14: Test compose mode with button press */
     g_ui_ctx.button_pressed = true;
     g_ui_ctx.user_input = 128U;  /* Mid-range pot value */
     if (ui_manager_draw() != CEEPEW_OK) {
@@ -234,4 +335,3 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
 }
 
 #endif /* CEEPEW_ENABLE_SELFTEST */
-

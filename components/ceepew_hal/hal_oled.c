@@ -33,6 +33,7 @@ typedef struct {
     esp_lcd_panel_io_handle_t io_handle;
     esp_lcd_panel_handle_t panel_handle;
     uint8_t active_addr;
+    uint32_t active_freq_hz;
     uint8_t framebuffer[CEEPEW_OLED_FB_BYTES];
 } OledState_t;
 
@@ -42,6 +43,7 @@ static OledState_t s_state = {
     .io_handle = NULL,
     .panel_handle = NULL,
     .active_addr = 0U,
+    .active_freq_hz = 0U,
     .framebuffer = {0U},
 };
 
@@ -209,19 +211,7 @@ static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on) {
     }
 }
 
-/* Helper: reverse bits in a byte (8-bit width). Loop bound: 8 iterations. */
-static inline uint8_t reverse_bits8(uint8_t b)
-{
-    uint8_t r = 0U;
-    /* loop bound: 8U */
-    for (uint8_t i = 0U; i < 8U; i++) {
-        r = (uint8_t)((r << 1U) | (uint8_t)(b & 1U));
-        b = (uint8_t)(b >> 1U);
-    }
-    return r;
-}
-
-static void oled_release_resources(void)
+static void oled_release_panel_io(void)
 {
     if (s_state.panel_handle != NULL) {
         (void)esp_lcd_panel_del(s_state.panel_handle);
@@ -231,18 +221,142 @@ static void oled_release_resources(void)
         (void)esp_lcd_panel_io_del(s_state.io_handle);
         s_state.io_handle = NULL;
     }
+}
+
+static void oled_release_resources(void)
+{
+    oled_release_panel_io();
     if (s_state.bus_handle != NULL) {
         (void)i2c_del_master_bus(s_state.bus_handle);
         s_state.bus_handle = NULL;
     }
     s_state.active_addr = 0U;
+    s_state.active_freq_hz = 0U;
+}
+
+static CeePewErr_t oled_tx_cmd(uint8_t cmd)
+{
+    CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
+    esp_err_t rc = esp_lcd_panel_io_tx_param(s_state.io_handle, cmd, NULL, 0U);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t oled_tx_cmd1(uint8_t cmd, uint8_t param)
+{
+    CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
+    esp_err_t rc = esp_lcd_panel_io_tx_param(s_state.io_handle, cmd, &param, 1U);
+    if (rc != ESP_OK) {
+        return CEEPEW_ERR_HW;
+    }
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t oled_force_known_display_mode(void)
+{
+    CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
+    CeePewErr_t err = oled_tx_cmd(0xAEU);          /* Display OFF during re-config */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0xD5U, 0x80U);             /* Clock divide ratio / osc freq */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0xA8U, 0x3FU);             /* Multiplex ratio 1/64 */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0xD3U, 0x00U);             /* Display offset */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd(0x40U);                     /* Start line = 0 */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0x8DU, 0x14U);             /* Charge pump ON */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0x20U, 0x02U);             /* Page addressing mode */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd(0xA1U);                     /* Segment remap */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd(0xC8U);                     /* COM scan dec */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0xDAU, 0x12U);             /* COM pins hw config */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0x81U, 0xFFU);             /* Max contrast for visibility */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0xD9U, 0xF1U);             /* Pre-charge period */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd1(0xDBU, 0x40U);             /* VCOMH deselect */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd(0xA4U);                     /* Resume RAM display */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd(0xA6U);                     /* Normal (not inverted) */
+    if (err != CEEPEW_OK) { return err; }
+    err = oled_tx_cmd(0xAFU);                     /* Display ON */
+    if (err != CEEPEW_OK) { return err; }
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t oled_flush_raw_pages(uint8_t col_offset)
+{
+    CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
+    CEEPEW_ASSERT(col_offset <= 3U, CEEPEW_ERR_BOUNDS);
+
+    CeePewErr_t err = oled_tx_cmd1(0x20U, 0x02U); /* Page addressing mode */
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    /* loop bound: CEEPEW_OLED_PAGE_COUNT = 8U */
+    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++) {
+        const uint8_t page_cmd = (uint8_t)(0xB0U | page);
+        const uint8_t col_low = (uint8_t)(0x00U | (col_offset & 0x0FU));
+        const uint8_t col_high = (uint8_t)(0x10U | ((col_offset >> 4U) & 0x0FU));
+        const uint8_t *page_ptr = &s_state.framebuffer[(uint16_t)page * CEEPEW_OLED_WIDTH_PX];
+
+        err = oled_tx_cmd(page_cmd);
+        if (err != CEEPEW_OK) { return err; }
+        err = oled_tx_cmd(col_low);
+        if (err != CEEPEW_OK) { return err; }
+        err = oled_tx_cmd(col_high);
+        if (err != CEEPEW_OK) { return err; }
+
+        esp_err_t rc = esp_lcd_panel_io_tx_color(s_state.io_handle, -1, page_ptr, CEEPEW_OLED_WIDTH_PX);
+        if (rc != ESP_OK) {
+            return CEEPEW_ERR_HW;
+        }
+    }
+
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t oled_create_bus(uint32_t speed_hz)
+{
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = CEEPEW_I2C_PORT,
+        .sda_io_num = CEEPEW_PIN_I2C_SDA,
+        .scl_io_num = CEEPEW_PIN_I2C_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7U,
+        .intr_priority = 0,
+        .trans_queue_depth = 0U,
+        .flags = {
+            .enable_internal_pullup = 1U,
+            .allow_pd = 0U,
+        },
+    };
+
+    s_state.active_freq_hz = speed_hz;
+    esp_err_t rc = i2c_new_master_bus(&bus_config, &s_state.bus_handle);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "i2c_new_master_bus failed (%lu Hz): 0x%x",
+                 (unsigned long)speed_hz, rc);
+        s_state.bus_handle = NULL;
+        return CEEPEW_ERR_HW;
+    }
+    return CEEPEW_OK;
 }
 
 static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
 {
     esp_lcd_panel_io_i2c_config_t io_config = {
         .dev_addr = addr,
-        .scl_speed_hz = CEEPEW_I2C_FREQ_HZ,
+        .scl_speed_hz = s_state.active_freq_hz,
         .control_phase_bytes = 1U,
         .dc_bit_offset = 6U,
         .lcd_cmd_bits = 8,
@@ -254,6 +368,8 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
     };
     esp_err_t rc = esp_lcd_new_panel_io_i2c(s_state.bus_handle, &io_config, &s_state.io_handle);
     if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_new_panel_io_i2c failed at 0x%02X: 0x%x",
+                 (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
 
@@ -273,24 +389,37 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
 
     rc = esp_lcd_new_panel_ssd1306(s_state.io_handle, &panel_config, &s_state.panel_handle);
     if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_new_panel_ssd1306 failed at 0x%02X: 0x%x",
+                 (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
 
     rc = esp_lcd_panel_reset(s_state.panel_handle);
     if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_panel_reset failed at 0x%02X: 0x%x",
+                 (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
     rc = esp_lcd_panel_init(s_state.panel_handle);
     if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_panel_init failed at 0x%02X: 0x%x",
+                 (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
     rc = esp_lcd_panel_disp_on_off(s_state.panel_handle, true);
     if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_panel_disp_on_off failed at 0x%02X: 0x%x",
+                 (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
 
+    CeePewErr_t mode_err = oled_force_known_display_mode();
+    if (mode_err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "oled_force_known_display_mode failed at 0x%02X", (unsigned int)addr);
+        return mode_err;
+    }
+
     s_state.active_addr = addr;
-    
     return CEEPEW_OK;
 }
 
@@ -311,48 +440,47 @@ CeePewErr_t hal_oled_init(void){
     CEEPEW_ASSERT(CEEPEW_OLED_WIDTH_PX == 128U && CEEPEW_OLED_HEIGHT_PX == 64U, CEEPEW_ERR_PARAM);
     memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
 
-    i2c_master_bus_config_t bus_config = {
-        .i2c_port = CEEPEW_I2C_PORT,
-        .sda_io_num = CEEPEW_PIN_I2C_SDA,
-        .scl_io_num = CEEPEW_PIN_I2C_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7U,
-        .intr_priority = 0,
-        .trans_queue_depth = 0U,
-        .flags = {
-            .enable_internal_pullup = 1U,
-            .allow_pd = 0U,
-        },
-    };
-    esp_err_t rc = i2c_new_master_bus(&bus_config, &s_state.bus_handle);
-    if (rc != ESP_OK) {
-        oled_release_resources();
-        return CEEPEW_ERR_HW;
-    }
-
     const uint8_t addr_candidates[2] = {
         CEEPEW_OLED_I2C_ADDR,
         CEEPEW_OLED_I2C_ADDR_FB,
     };
+    const uint32_t speed_candidates[2] = {
+        CEEPEW_I2C_FREQ_HZ,
+        CEEPEW_I2C_FREQ_FALLBACK_HZ,
+    };
     CeePewErr_t err = CEEPEW_ERR_HW;
-    for (uint8_t i = 0U; i < 2U; i++) {
-        err = oled_init_panel_at_addr(addr_candidates[i]);
+    for (uint8_t speed_idx = 0U; speed_idx < 2U; speed_idx++) {
+        if ((speed_idx == 1U) && (speed_candidates[1] == speed_candidates[0])) {
+            continue;
+        }
+
+        oled_release_resources();
+        err = oled_create_bus(speed_candidates[speed_idx]);
+        if (err != CEEPEW_OK) {
+            continue;
+        }
+
+        for (uint8_t addr_idx = 0U; addr_idx < 2U; addr_idx++) {
+            err = oled_init_panel_at_addr(addr_candidates[addr_idx]);
+            if (err == CEEPEW_OK) {
+                break;
+            }
+            oled_release_panel_io();
+        }
         if (err == CEEPEW_OK) {
             break;
         }
+
         oled_release_resources();
-        if (i == 0U) {
-            rc = i2c_new_master_bus(&bus_config, &s_state.bus_handle);
-            if (rc != ESP_OK) {
-                break;
-            }
-        }
     }
 
     if (err != CEEPEW_OK) {
         oled_release_resources();
         return err;
     }
+    ESP_LOGI(TAG, "SSD1306 init OK at 0x%02X (%lu Hz)",
+             (unsigned int)s_state.active_addr,
+             (unsigned long)s_state.active_freq_hz);
 
     s_state.initialised = true;
     err = hal_oled_clear();
@@ -378,52 +506,51 @@ CeePewErr_t hal_oled_clear(void){
 
 CeePewErr_t hal_oled_flush(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
-    CEEPEW_ASSERT(s_state.panel_handle != NULL, CEEPEW_ERR_HW);
-    
-    /* The SSD1306 displays memory in PAGE addressing mode (8 pages, 128 columns).
-       Our framebuffer is in VERTICAL column format (8-pixel-tall columns).
-       We must transpose the data before sending to match SSD1306 native layout:
-       
-       Our layout:     SSD1306 layout:
-       byte[0]    = bits for (x=0, y=0-7)       byte[0] = bits for (x=0-7, page 0 at x=0)
-       byte[1]    = bits for (x=1, y=0-7)  -->  byte[1] = bits for (x=0-7, page 0 at x=1)
-       byte[128]  = bits for (x=0, y=8-15)      byte[128] = bits for (x=0-7, page 1 at x=0)
-    */
-    
-    uint8_t transposed[CEEPEW_OLED_FB_BYTES];
-    
-    /* Build transposed buffer. Additionally apply a 180-degree rotation so that
-       displays wired upside-down render correctly (segment remap + COM scan remap).
-       Mapping: pixel (x, y) -> (127 - x, 63 - y). Framebuffer is arranged as
-       bytes per column per page: src_idx = x + page*WIDTH, src_byte holds bits for y=page*8..page*8+7.
-       We map each src_byte into dst at dst_page = (PAGE_COUNT-1 - page), dst_x = (WIDTH-1 - x)
-       with bits reversed inside the byte. Loop bounds are fixed and small. */
-    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGE_COUNT; page++) {
-        for (uint8_t x = 0U; x < CEEPEW_OLED_WIDTH_PX; x++) {
-            const uint8_t src_byte = s_state.framebuffer[x + (uint16_t)page * CEEPEW_OLED_WIDTH_PX];
+    CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
 
-            /* Reverse bit order within the byte to map y -> 7 - y */
-            const uint8_t rev = reverse_bits8(src_byte);
-
-            const uint8_t dst_page = (uint8_t)(CEEPEW_OLED_PAGE_COUNT - 1U - page);
-            const uint8_t dst_x = (uint8_t)(CEEPEW_OLED_WIDTH_PX - 1U - x);
-            const uint16_t dst_idx = (uint16_t)dst_page * CEEPEW_OLED_WIDTH_PX + dst_x;
-
-            transposed[dst_idx] = rev;
-        }
+    /* Write as raw pages; also repeat with +2 column offset to support
+     * SSD1306-compatible modules that expose SH1106-style RAM origin. */
+    CeePewErr_t err = oled_flush_raw_pages(0U);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "hal_oled_flush: raw page flush failed (offset 0)");
+        return err;
     }
-    
-    esp_err_t rc = esp_lcd_panel_draw_bitmap(s_state.panel_handle,
-                                             0,
-                                             0,
-                                             (int)CEEPEW_OLED_WIDTH_PX,
-                                             (int)CEEPEW_OLED_HEIGHT_PX,
-                                             transposed);
-    if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "hal_oled_flush: esp_lcd_panel_draw_bitmap failed: 0x%x", rc);
-        return CEEPEW_ERR_HW;
+    (void)oled_flush_raw_pages(2U);
+    return CEEPEW_OK;
+}
+
+CeePewErr_t hal_oled_blit(const uint8_t *framebuffer, uint32_t len)
+{
+    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
+    CEEPEW_ASSERT(framebuffer != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len == CEEPEW_OLED_FB_BYTES, CEEPEW_ERR_BOUNDS);
+
+    memcpy(s_state.framebuffer, framebuffer, CEEPEW_OLED_FB_BYTES);
+    return hal_oled_flush();
+}
+
+CeePewErr_t hal_oled_selftest_flash(uint32_t duration_ms)
+{
+    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
+    CEEPEW_ASSERT(duration_ms > 0U && duration_ms <= 3000U, CEEPEW_ERR_BOUNDS);
+
+    CeePewErr_t err = oled_tx_cmd(0xA5U); /* Entire display ON */
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    err = oled_tx_cmd(0xA4U); /* Resume RAM display */
+    if (err != CEEPEW_OK) {
+        return err;
     }
     return CEEPEW_OK;
+}
+
+CeePewErr_t hal_oled_set_charge_pump(bool enabled)
+{
+    CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
+    const uint8_t mode = enabled ? 0x14U : 0x10U;
+    return oled_tx_cmd1(0x8DU, mode);
 }
 
 CeePewErr_t hal_oled_draw_pixel(uint8_t x, uint8_t y, bool on){

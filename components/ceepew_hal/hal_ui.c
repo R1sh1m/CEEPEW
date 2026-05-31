@@ -8,6 +8,7 @@
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -16,13 +17,14 @@
    hal_ui_flush() transfers it to the SSD1306 via I2C. This allows efficient
    off-screen rendering and blitting without per-pixel I2C transactions. */
 
-static const char *TAG = "hal_ui";
-
 /* Framebuffer: 128 pixels wide × 64 pixels tall = 1024 bytes */
 #define FRAMEBUFFER_SIZE_BYTES  ((HAL_UI_WIDTH_PX * HAL_UI_HEIGHT_PX) / 8U)
 
 static uint8_t s_framebuffer[FRAMEBUFFER_SIZE_BYTES] = {0};
 static bool s_ui_initialised = false;
+static uint32_t s_last_flush_diag_ms = 0U;
+static bool s_nonzero_flush_seen = false;
+static const char *TAG = "hal_ui";
 
 /* Reuse the full printable ASCII font from ui_manager.c so all UI text paths
  * render the same glyphs. The table is stored as 5 columns per character. */
@@ -44,40 +46,32 @@ CeePewErr_t hal_ui_clear(void){
 CeePewErr_t hal_ui_flush(void){
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_PARAM);
 
-    /* Keep the OLED in sync with the UI framebuffer. */
-    CeePewErr_t err = hal_oled_clear();
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "hal_ui_flush: hal_oled_clear failed");
-        return err;
-    }
-
-    /* loop bound: HAL_UI_HEIGHT_PX / 8U = 8U pages (compile-time constant) */
-    for (uint8_t page = 0U; page < (HAL_UI_HEIGHT_PX / 8U); page++) {
-        const uint16_t base = (uint16_t)page * (uint16_t)HAL_UI_WIDTH_PX;
-        /* loop bound: HAL_UI_WIDTH_PX = 128U (compile-time constant) */
-        for (uint8_t x = 0U; x < HAL_UI_WIDTH_PX; x++) {
-            const uint8_t column = s_framebuffer[base + x];
-            if (column == 0U) {
-                continue;
-            }
-
-            /* loop bound: 8U bits per page (compile-time constant) */
-            for (uint8_t bit = 0U; bit < 8U; bit++) {
-                if (((column >> bit) & 0x01U) == 0U) {
-                    continue;
-                }
-
-                err = hal_oled_draw_pixel(x, (uint8_t)((page * 8U) + bit), true);
-                if (err != CEEPEW_OK) {
-                    ESP_LOGE(TAG, "hal_ui_flush: hal_oled_draw_pixel failed at (%d,%d)",
-                             x, (page * 8U) + bit);
-                    return err;
-                }
+    uint32_t nonzero_bytes = 0U;
+    uint8_t first_nonzero_idx = 0U;
+    bool first_set = false;
+    /* loop bound: FRAMEBUFFER_SIZE_BYTES = 1024U (compile-time constant) */
+    for (uint16_t i = 0U; i < FRAMEBUFFER_SIZE_BYTES; i++) {
+        if (s_framebuffer[i] != 0U) {
+            nonzero_bytes++;
+            if (!first_set) {
+                first_nonzero_idx = (uint8_t)(i & 0xFFU);
+                first_set = true;
             }
         }
     }
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    if ((!s_nonzero_flush_seen && (nonzero_bytes > 0U)) ||
+        ((now_ms - s_last_flush_diag_ms) > 5000U)) {
+        ESP_LOGI(TAG, "flush diag: nonzero=%lu first_idx=0x%02X",
+                 (unsigned long)nonzero_bytes,
+                 (unsigned int)first_nonzero_idx);
+        s_last_flush_diag_ms = now_ms;
+        if (nonzero_bytes > 0U) {
+            s_nonzero_flush_seen = true;
+        }
+    }
 
-    return hal_oled_flush();
+    return hal_oled_blit(s_framebuffer, FRAMEBUFFER_SIZE_BYTES);
 }
 
 CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color){

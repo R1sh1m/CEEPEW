@@ -4,6 +4,7 @@
 #include "crypto_stream.h"
 #include "crypto_sha256.h"
 #include "ceepew_security_utils.h"
+#include "session_fsm.h"
 
 #include "curve25519.h"
 
@@ -113,10 +114,8 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     CEEPEW_ASSERT(msg_len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(*out_len >= (uint16_t)(msg_len + CRYPTO_BOX_BOXZEROBYTES),
                   CEEPEW_ERR_BOUNDS);
-    CEEPEW_ASSERT(ctx->nonce_counter < CEEPEW_NONCE_HARD_LIMIT,
-                  CEEPEW_ERR_NONCE_EXHAUSTED);
 
-    uint64_t nonce_counter = ctx->nonce_counter;
+    uint64_t nonce_counter = session_get_nonce_counter();
 
     uint8_t nonce[CRYPTO_BOX_NONCEBYTES];
     box_make_nonce_from_counter(ctx, nonce_counter, nonce);
@@ -183,8 +182,6 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     ceepew_secure_zero(s_nacl_pt_buf, (uint32_t)sizeof(s_nacl_pt_buf));
     ceepew_secure_zero(s_nacl_ct_buf, (uint32_t)sizeof(s_nacl_ct_buf));
 
-    /* Phase 4: Increment nonce counter AFTER successful encryption */
-    ctx->nonce_counter++;
     return CEEPEW_OK;
 }
 

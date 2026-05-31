@@ -14,19 +14,20 @@ void test_hop_determinism(void){
     CryptoCtx_t ctx = {0};
     /* Fixed key */
     for (uint8_t i = 0; i < CEEPEW_SESSION_KEY_BYTES; i++) { ctx.ascon_key[i] = (uint8_t)i; }
-    ctx.nonce_counter = (uint64_t) (12345ULL << CEEPEW_HOP_SHIFT); /* pick a nonce that yields non-zero hop_idx */
+    
+    uint64_t nonce_counter = (uint64_t)(12345ULL << CEEPEW_HOP_SHIFT); /* pick a nonce that yields non-zero hop_idx */
 
     uint8_t ch1 = 0U;
     uint8_t ch2 = 0U;
 
-    CeePewErr_t err = transport_get_current_channel(&ctx, &ch1);
+    CeePewErr_t err = transport_get_current_channel(&ctx, nonce_counter, &ch1);
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "transport_get_current_channel failed: %d", (int)err);
         return;
     }
 
-    /* Repeat with same ctx to ensure deterministic output */
-    err = transport_get_current_channel(&ctx, &ch2);
+    /* Repeat with same nonce to ensure deterministic output */
+    err = transport_get_current_channel(&ctx, nonce_counter, &ch2);
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "transport_get_current_channel failed (2): %d", (int)err);
         return;

@@ -42,15 +42,18 @@
 /* If nonce_counter reaches UINT64_MAX it wraps to 0 on next increment,       */
 /* causing nonce reuse — the most catastrophic crypto failure.                 */
 /*                                                                             */
-/* The guard at HARD_LIMIT gives a 1000-message warning window before the     */
-/* counter approaches the danger zone. Session must terminate at HARD_LIMIT.  */
+/* The guard at HARD_LIMIT gives a warning window before the counter          */
+/* approaches the danger zone. Session must terminate at HARD_LIMIT.          */
 /*                                                                             */
 /* Phase 4: NONCE_HARD_LIMIT = 2^56 = 72,057,594,037,927,936 IVs             */
 /* At 1 msg/sec, device lifetime = 2,282,404 years (far > device lifespan)   */
+/* At 90% of limit, return CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED (warning)        */
+/* At 100% of limit, return CEEPEW_ERR_NONCE_EXHAUSTED (hard stop)            */
 /* Exhaustion triggers immediate session_wipe() and UI reset to "nonce_expired"*/
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_NONCE_WARN_THRESHOLD      1000ULL
 #define CEEPEW_NONCE_HARD_LIMIT          (1ULL << 56)
+#define CEEPEW_NONCE_WARNING_LIMIT       (CEEPEW_NONCE_HARD_LIMIT * 90U / 100U)
 #define CEEPEW_NONCE_MAX_GAP             64U
 
 /* -------------------------------------------------------------------------- */

@@ -27,7 +27,8 @@ typedef enum{
     CEEPEW_ERR_SIG_FAIL = 18,
     CEEPEW_ERR_MAX_RETRIES = 19,
     CEEPEW_ERR_AUTH_FAIL = 20,
-    CEEPEW_ERR_FEC_UNCORRECT = 21
+    CEEPEW_ERR_FEC_UNCORRECT = 21,
+    CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED = 22
 } CeePewErr_t;
 
 /* Forward declaration for assertion logger. Implemented elsewhere. */

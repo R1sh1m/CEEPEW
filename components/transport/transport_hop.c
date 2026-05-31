@@ -14,7 +14,9 @@ static const uint8_t BASE_CHANNELS[CEEPEW_HOP_CHANNELS] = {
     1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U
 };
 
-CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx, uint8_t *channel_out){
+CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx,
+                                         uint64_t nonce_counter,
+                                         uint8_t *channel_out){
     CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(channel_out != NULL, CEEPEW_ERR_NULL_PTR);
 
@@ -24,7 +26,7 @@ CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx, uint8_t *chann
                     ((uint32_t)ctx->ascon_key[2]);
 
     /* hop index derived from nonce counter shifted by CEEPEW_HOP_SHIFT */
-    uint8_t hop_idx = (uint8_t)((ctx->nonce_counter >> CEEPEW_HOP_SHIFT) & 0xFFULL);
+    uint8_t hop_idx = (uint8_t)((nonce_counter >> CEEPEW_HOP_SHIFT) & 0xFFULL);
 
     seed ^= (uint32_t)hop_idx;
 
@@ -47,7 +49,7 @@ CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx, uint8_t *chann
     }
 
     /* Select index within permutation for this hop round. Use low bits of hop_idx */
-    uint8_t sel = (uint8_t)((ctx->nonce_counter >> CEEPEW_HOP_SHIFT) % (uint64_t)CEEPEW_HOP_CHANNELS);
+    uint8_t sel = (uint8_t)((nonce_counter >> CEEPEW_HOP_SHIFT) % (uint64_t)CEEPEW_HOP_CHANNELS);
     *channel_out = perm[sel];
     return CEEPEW_OK;
 }

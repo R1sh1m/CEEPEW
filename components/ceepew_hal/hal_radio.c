@@ -55,6 +55,9 @@ static StaticTimer_t  s_channel_hop_timer_buf;
 /* Crypto context pointer for channel hopping callback — set by caller */
 static const CryptoCtx_t *s_hop_crypto_ctx = NULL;
 
+/* Nonce counter getter callback — set by caller */
+static hal_radio_get_nonce_counter_cb_t s_nonce_getter = NULL;
+
 /* ── Internal helpers ───────────────────────────────────────────── */
 
 /* Constant-time MAC comparison — avoids early-exit timing leak */
@@ -166,10 +169,12 @@ static void radio_hop_timer_callback(TimerHandle_t xTimer)
 {
     CEEPEW_ASSERT_VOID(xTimer != NULL);
     CEEPEW_ASSERT_VOID(s_hop_crypto_ctx != NULL);
+    CEEPEW_ASSERT_VOID(s_nonce_getter != NULL);
 
     /* Get next channel from session state */
     uint8_t next_ch = 0U;
-    CeePewErr_t err = transport_get_current_channel(s_hop_crypto_ctx, &next_ch);
+    uint64_t nonce_counter = s_nonce_getter();
+    CeePewErr_t err = transport_get_current_channel(s_hop_crypto_ctx, nonce_counter, &next_ch);
     if (err != CEEPEW_OK) {
         ESP_LOGD(TAG, "Hop failed: transport_get_current_channel returned %d", (int)err);
         return;
@@ -361,4 +366,13 @@ CeePewErr_t hal_radio_set_channel(uint8_t channel){
 
 QueueHandle_t hal_radio_get_rx_queue(void){
     return s_rx_queue;
+}
+
+CeePewErr_t hal_radio_set_hop_context(const void *crypto_ctx, hal_radio_get_nonce_counter_cb_t nonce_getter){
+    CEEPEW_ASSERT(crypto_ctx != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(nonce_getter != NULL, CEEPEW_ERR_NULL_PTR);
+    
+    s_hop_crypto_ctx = (const CryptoCtx_t *)crypto_ctx;
+    s_nonce_getter = nonce_getter;
+    return CEEPEW_OK;
 }

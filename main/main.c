@@ -76,6 +76,50 @@ void app_main(void){
         esp_restart();
     }
 
+    err = hal_oled_init();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "hal_oled_init failed: %d", (int)err);
+        ESP_LOGE(TAG, "Display bring-up failed; restarting to avoid headless run");
+        vTaskDelay(pdMS_TO_TICKS(2000U));
+        esp_restart();
+    }
+
+    err = hal_ui_init();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
+        ESP_LOGE(TAG, "UI bring-up failed; restarting to avoid undefined display state");
+        vTaskDelay(pdMS_TO_TICKS(2000U));
+        esp_restart();
+    }
+
+    /* Render a deterministic startup pattern before task scheduler flow.
+     * This isolates OLED HW/driver visibility from UI-state-machine timing. */
+    err = hal_oled_set_charge_pump(true);
+    if (err == CEEPEW_OK) { err = hal_oled_selftest_flash(350U); }
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "startup OLED selftest (pump on) failed: %d", (int)err);
+    }
+    err = hal_oled_set_charge_pump(false);
+    if (err == CEEPEW_OK) { err = hal_oled_selftest_flash(350U); }
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "startup OLED selftest (pump off) failed: %d", (int)err);
+    }
+    err = hal_oled_set_charge_pump(true);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "restoring OLED charge-pump mode failed: %d", (int)err);
+    }
+
+    err = hal_oled_clear();
+    if (err == CEEPEW_OK) { err = hal_oled_draw_text(20U, 12U, "CEE-PEW"); }
+    if (err == CEEPEW_OK) { err = hal_oled_draw_text(8U, 28U, "OLED LINK OK"); }
+    if (err == CEEPEW_OK) { err = hal_oled_draw_line(8U, 44U, 119U, 44U, true); }
+    if (err == CEEPEW_OK) { err = hal_oled_flush(); }
+    if (err == CEEPEW_OK) {
+        vTaskDelay(pdMS_TO_TICKS(1200U));
+    } else {
+        ESP_LOGW(TAG, "startup OLED pattern failed: %d", (int)err);
+    }
+
     /* ── BT CONTROLLER MEMORY RELEASE ──────────────────────────────────────── */
     /* Must be called before esp_bt_controller_init() AND before WiFi starts.
      * This call carves out the correct memory layout for the BT controller,
@@ -111,18 +155,6 @@ void app_main(void){
     err = session_phase1_init(local_mac);
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "session_phase1_init failed: %d", (int)err);
-        return;
-    }
-
-    err = hal_oled_init();
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "hal_oled_init failed: %d", (int)err);
-        return;
-    }
-
-    err = hal_ui_init();
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
         return;
     }
 

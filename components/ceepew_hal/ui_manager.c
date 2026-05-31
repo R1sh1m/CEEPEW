@@ -656,43 +656,64 @@ static uint8_t ui_map_pot_to_index(uint8_t pot, uint8_t option_count)
     return idx;
 }
 
+static void ui_format_hex_grouped(char *out,
+                                  size_t out_size,
+                                  const uint8_t *bytes,
+                                  uint8_t byte_count,
+                                  uint8_t group_bytes)
+{
+    CEEPEW_ASSERT_VOID(out != NULL);
+    CEEPEW_ASSERT_VOID(bytes != NULL);
+    CEEPEW_ASSERT_VOID(out_size > 0U);
+    CEEPEW_ASSERT_VOID(group_bytes > 0U);
+
+    size_t needed = 1U;
+    if (byte_count > 0U) {
+        needed = (size_t)(byte_count * 2U) + (size_t)((byte_count - 1U) / group_bytes) + 1U;
+    }
+    CEEPEW_ASSERT_VOID(needed <= out_size);
+
+    size_t pos = 0U;
+    for (uint8_t i = 0U; i < byte_count; i++) {
+        if ((i > 0U) && ((i % group_bytes) == 0U)) {
+            out[pos++] = ' ';
+        }
+
+        uint8_t byte_val = bytes[i];
+        uint8_t hi = (uint8_t)((byte_val >> 4U) & 0x0FU);
+        uint8_t lo = (uint8_t)(byte_val & 0x0FU);
+        out[pos++] = (hi < 10U) ? (char)('0' + hi) : (char)('A' + hi - 10U);
+        out[pos++] = (lo < 10U) ? (char)('0' + lo) : (char)('A' + lo - 10U);
+    }
+
+    out[pos] = '\0';
+}
+
 static void ui_draw_hex_rows(const uint8_t *bytes, uint8_t byte_count, uint8_t x, uint8_t y)
 {
     if (bytes == NULL || byte_count == 0U) {
         return;
     }
 
-    /* Dynamically choose bytes per row so the hex output never overruns the OLED.
-     * Each character consumes 6px (5px glyph + 1px gap). Two hex chars per byte.
-     * Line format: '[' + (N*2 chars) + ']' => total_chars = 2 + N*2 */
-    uint8_t available_px = (x >= 128U) ? 0U : (uint8_t)(128U - x);
-    if (available_px < 6U) { return; } /* not enough room for any char */
-    uint8_t max_chars = (uint8_t)(available_px / 6U);
-    if (max_chars < 3U) { return; } /* need at least [] + 1 byte */
-
-    uint8_t bytes_per_row = (uint8_t)((max_chars - 2U) / 2U);
-    if (bytes_per_row == 0U) { bytes_per_row = 1U; }
-
+    /* Grouped hex rows keep the 32-byte commitment readable while staying
+     * within the 128px OLED width. Four 2-byte groups per row => 19 chars.
+     * At 6px per char, 19 chars occupy 114px and fit with a small left margin. */
+    const uint8_t bytes_per_row = 8U;
+    const uint8_t group_bytes = 2U;
     uint8_t row_count = (uint8_t)((byte_count + bytes_per_row - 1U) / bytes_per_row);
     for (uint8_t row = 0U; row < row_count; row++) {
-        char line[2U + (bytes_per_row * 2U) + 1U];
-        uint8_t off = 0U;
-        line[off++] = '[';
+        char line[24U];
         uint8_t start = (uint8_t)(row * bytes_per_row);
         uint8_t end = start + bytes_per_row;
         if (end > byte_count) {
             end = byte_count;
         }
-        for (uint8_t i = start; i < end; i++) {
-            uint8_t byte_val = bytes[i];
-            uint8_t hi = (uint8_t)((byte_val >> 4U) & 0x0FU);
-            uint8_t lo = (uint8_t)(byte_val & 0x0FU);
-            line[off++] = (hi < 10U) ? (char)('0' + hi) : (char)('A' + hi - 10U);
-            line[off++] = (lo < 10U) ? (char)('0' + lo) : (char)('A' + lo - 10U);
+        ui_format_hex_grouped(line, sizeof(line), &bytes[start], (uint8_t)(end - start), group_bytes);
+        uint8_t line_y = (uint8_t)(y + row * 8U);
+        if ((uint16_t)line_y + 7U > 64U) {
+            break;
         }
-        line[off++] = ']';
-        line[off] = '\0';
-        ui_draw_text(x, (uint8_t)(y + row * 8U), line);
+        ui_draw_text(x, line_y, line);
     }
 }
 
@@ -1992,31 +2013,14 @@ static CeePewErr_t render_fingerprint_confirm(void)
     hal_ui_clear();
 
     uint32_t f = g_ui_ctx.anim.frame_count;
-    char fp_hex[33U];
-    char row1[17U];
-    char row2[17U];
     char mac_str[16U];
     uint8_t blink;
 
     hal_ui_text(22U, 2U, "VERIFY IDENTITY", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
 
-    /* Full fingerprint hex */
-    for (uint8_t i = 0U; i < 16U; i++) {
-        uint8_t  b = g_ui_ctx.fingerprint[i];
-        uint8_t  h = (b >> 4U) & 0x0FU;
-        uint8_t  l = b & 0x0FU;
-        fp_hex[i * 2U]      = (h < 10U) ? (char)('0' + h) : (char)('A' + h - 10U);
-        fp_hex[i * 2U + 1U] = (l < 10U) ? (char)('0' + l) : (char)('A' + l - 10U);
-    }
-    fp_hex[32U] = '\0';
-
-    (void)memcpy(row1, fp_hex, 16U);
-    row1[16U] = '\0';
-    (void)memcpy(row2, fp_hex + 16U, 16U);
-    row2[16U] = '\0';
-    hal_ui_text(4U, 14U, row1, HAL_UI_WHITE);
-    hal_ui_text(4U, 24U, row2, HAL_UI_WHITE);
+    /* Grouped fingerprint rows leave room for the peer MAC and buttons. */
+    ui_draw_hex_rows(g_ui_ctx.fingerprint, 16U, 4U, 14U);
 
     /* Peer MAC */
     (void)snprintf(mac_str, sizeof(mac_str), "Peer: %02X%02X",
@@ -2198,8 +2202,8 @@ CeePewErr_t ui_chat_show_compose(uint8_t pot_value, uint8_t selected_idx)
 }
 
 
-/* Sprint 12: Helper function to display cryptogram with two hex rows.
- * Displays 16-byte commitment as 32 hex digits (16×2 layout).
+/* Sprint 12: Helper function to display cryptogram with grouped hex rows.
+ * Displays 16-byte commitment as grouped hex (2-byte groups) across the OLED.
  * Centered on display in monospace font.
  * No dynamic allocation; static hex conversion buffer.
  * Two CEEPEW_ASSERTs for bounds checking.
@@ -2209,7 +2213,7 @@ CeePewErr_t ui_crypto_show_cryptogram(const uint8_t commitment[CEEPEW_COMMITMENT
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
     hal_ui_clear();
     hal_ui_text(16U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
-    /* Restore hex rows to original position for consistency with legacy UI */
+    /* Grouped rows keep the full 32-byte commitment readable on 128px OLED */
     ui_draw_hex_rows(commitment, CEEPEW_COMMITMENT_BYTES, 10U, 24U);
 
     return CEEPEW_OK;
@@ -2330,8 +2334,8 @@ static CeePewErr_t render_cryptogram(void)
     draw_hline(0U, 11U, 128U);
     hal_ui_text(4U, 13U, "SHA-256 / 32B", HAL_UI_WHITE);
 
-    /* Hex rows at original position y=24 */
-    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 24U);
+    /* Hex rows at original position y=20 to leave room for status text */
+    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 20U);
 
     /* Determine match status */
     uint8_t status = 0U;
@@ -2919,49 +2923,49 @@ CeePewErr_t ui_manager_update(void)
                     ESP_LOGW("ui", "compose selection failed: %d", (int)edit_err);
                 }
             }
-        } else if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
-            g_ui_ctx.chat_send_confirm_selected = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
-            if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-                g_ui_ctx.button_press_start_ms = now_ms;
-            } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
-                if (g_ui_ctx.chat_send_confirm_selected == 0U) {
-                    uint8_t peer_pk[32U];
-                    CeePewErr_t peer_err = session_get_peer_public_key(peer_pk);
-                    if (peer_err == CEEPEW_OK) {
-                        CeePewErr_t send_err = session_send_message(
-                            (const uint8_t *)g_ui_ctx.compose_buffer,
-                            (uint16_t)g_ui_ctx.compose_length,
-                            g_ble_ctx.peer_mac,
-                            peer_pk);
-                        ceepew_secure_zero(peer_pk, sizeof(peer_pk));
-                        if (send_err == CEEPEW_OK) {
-                            ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
-                            for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
-                                g_ui_ctx.compose_buffer[ci] = 0U;
-                            }
-                            g_ui_ctx.compose_length = 0U;
-                            g_ui_ctx.compose_cursor = 0U;
-                            compose_terminate_buffer();
-                            (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
-                            g_ui_ctx.transition_ready = true;
-                        } else {
-                            ESP_LOGW("ui", "session_send_message failed: %d", (int)send_err);
-                            g_ui_ctx.reject_sequence_start_ms = 0U;
-                            g_ui_ctx.error_start_ms = now_ms;
-                            (void)ui_manager_transition_to(UI_STATE_ERROR);
-                            g_ui_ctx.transition_ready = true;
+        }
+    } else if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
+        g_ui_ctx.chat_send_confirm_selected = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            if (g_ui_ctx.chat_send_confirm_selected == 0U) {
+                uint8_t peer_pk[32U];
+                CeePewErr_t peer_err = session_get_peer_public_key(peer_pk);
+                if (peer_err == CEEPEW_OK) {
+                    CeePewErr_t send_err = session_send_message(
+                        (const uint8_t *)g_ui_ctx.compose_buffer,
+                        (uint16_t)g_ui_ctx.compose_length,
+                        g_ble_ctx.peer_mac,
+                        peer_pk);
+                    ceepew_secure_zero(peer_pk, sizeof(peer_pk));
+                    if (send_err == CEEPEW_OK) {
+                        ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
+                        for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
+                            g_ui_ctx.compose_buffer[ci] = 0U;
                         }
+                        g_ui_ctx.compose_length = 0U;
+                        g_ui_ctx.compose_cursor = 0U;
+                        compose_terminate_buffer();
+                        (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                        g_ui_ctx.transition_ready = true;
                     } else {
-                        ESP_LOGW("ui", "session_get_peer_public_key failed: %d", (int)peer_err);
+                        ESP_LOGW("ui", "session_send_message failed: %d", (int)send_err);
                         g_ui_ctx.reject_sequence_start_ms = 0U;
                         g_ui_ctx.error_start_ms = now_ms;
                         (void)ui_manager_transition_to(UI_STATE_ERROR);
                         g_ui_ctx.transition_ready = true;
                     }
                 } else {
-                    (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
+                    ESP_LOGW("ui", "session_get_peer_public_key failed: %d", (int)peer_err);
+                    g_ui_ctx.reject_sequence_start_ms = 0U;
+                    g_ui_ctx.error_start_ms = now_ms;
+                    (void)ui_manager_transition_to(UI_STATE_ERROR);
                     g_ui_ctx.transition_ready = true;
                 }
+            } else {
+                (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
+                g_ui_ctx.transition_ready = true;
             }
         }
     } else if (g_ui_ctx.current_state == UI_STATE_ERROR ||
@@ -3392,7 +3396,7 @@ CeePewErr_t ui_manager_draw(void)
 
 CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
-    CEEPEW_ASSERT(next_state <= UI_STATE_PAIRING_FAILED, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(next_state <= UI_STATE_CHAT_SEND_CONFIRM, CEEPEW_ERR_PARAM);
     g_ui_ctx.next_state = next_state;
     return CEEPEW_OK;
 }
@@ -3428,19 +3432,8 @@ CeePewErr_t ui_fingerprint_show_confirm(const uint8_t fingerprint[16],
     /* Title */
     hal_ui_text(0U, 0U, "FINGERPRINT", HAL_UI_WHITE);
 
-    /* Fingerprint hex (16 bytes = 32 hex chars, wrap at 8 chars per line) */
-    char fp_hex[65];
-    for (uint8_t i = 0U; i < 16U; i++) {
-        (void)snprintf(&fp_hex[i * 2U], 3U, "%02X", fingerprint[i]);
-    }
-    fp_hex[32] = '\0';
-
-    /* Line 1: First 8 bytes of fingerprint */
-    fp_hex[16] = '\0';
-    hal_ui_text(0U, 14U, fp_hex, HAL_UI_WHITE);
-
-    /* Line 2: Last 8 bytes of fingerprint */
-    hal_ui_text(0U, 24U, &fp_hex[16], HAL_UI_WHITE);
+    /* Fingerprint hex grouped into 2-byte blocks for readability */
+    ui_draw_hex_rows(fingerprint, 16U, 0U, 14U);
 
     /* Line 3: Peer MAC */
     char peer_str[14];
@@ -3464,21 +3457,7 @@ CeePewErr_t ui_fingerprint_show_display(const uint8_t fingerprint[16],
     hal_ui_clear();
     hal_ui_text(0U, 0U, "PEER FINGERPRINT", HAL_UI_WHITE);
 
-    char fp_hex[33];
-    for (uint8_t i = 0U; i < 16U; i++) {
-        (void)snprintf(&fp_hex[i * 2U], 3U, "%02X", fingerprint[i]);
-    }
-    fp_hex[32] = '\0';
-
-    char row1[17];
-    memcpy(row1, fp_hex, 16U);
-    row1[16] = '\0';
-    hal_ui_text(0U, 16U, row1, HAL_UI_WHITE);
-
-    char row2[17];
-    memcpy(row2, fp_hex + 16U, 16U);
-    row2[16] = '\0';
-    hal_ui_text(0U, 26U, row2, HAL_UI_WHITE);
+    ui_draw_hex_rows(fingerprint, 16U, 0U, 16U);
 
     char peer_str[20];
     (void)snprintf(peer_str, sizeof(peer_str), "Peer %02X%02X", peer_mac[4U], peer_mac[5U]);

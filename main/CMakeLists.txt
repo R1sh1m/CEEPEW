@@ -15,6 +15,8 @@ idf_component_register(
         "test_arq_backoff.c"
         "test_power.c"
         "test_hop.c"
+        "test_transport_hop.c"
+        "integration_test_pairing_ui.c"
     INCLUDE_DIRS
         "."
     REQUIRES

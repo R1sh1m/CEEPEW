@@ -370,6 +370,12 @@ static void test_crypto_hkdf_smoke(void){
 /* transport hop deterministic test - call unit test helper */
 void test_hop_determinism(void);
 
+/* comprehensive transport hop PRG tests (defined in test_transport_hop.c) */
+void test_transport_hop_comprehensive(void);
+
+/* pairing UI convergence / symmetry coverage */
+bool test_pairing_ui_coverage(void);
+
 void integration_tests_run_all(void){
     ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║  CEE-PEW End-to-End Integration Test Suite                 ║");
@@ -409,8 +415,20 @@ void integration_tests_run_all(void){
     /* Transport hop permutation deterministic test */
     test_hop_determinism();
 
+    /* Comprehensive transport hop PRG validation tests */
+    test_transport_hop_comprehensive();
+
     /* Power/wakeup tests */
     test_power();
+
+    /* Pairing UI convergence / no-overlap coverage */
+    if (test_pairing_ui_coverage()) {
+        ESP_LOGI(TAG, "[PASS] pairing UI convergence coverage");
+        s_tests_passed++;
+    } else {
+        ESP_LOGE(TAG, "[FAIL] pairing UI convergence coverage");
+        s_tests_failed++;
+    }
 
     /* Summary */
     ESP_LOGI(TAG, "");

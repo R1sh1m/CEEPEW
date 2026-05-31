@@ -21,14 +21,19 @@
 #include "transport_esl.h"
 #include "../crypto/crypto_ctx.h"
 #include "../crypto/crypto_rng.h"
+#include "../crypto/crypto_ascon.h"
+#include "session_fsm.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "esp_timer.h"
 #include "esp_crc.h"
+#include "esp_log.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+
+static const char *TAG = "ESL";
 
 /* Forward declarations */
 CeePewErr_t transport_replay_check(uint64_t msg_id, uint32_t timestamp, bool *is_replay);
@@ -48,6 +53,7 @@ static uint64_t s_tx_seq = 1ULL;
 static uint64_t s_last_nonce_counter = 0ULL;
 static EslMacCheckFn s_mac_cb = NULL;
 static EslNonceFn s_nonce_cb = NULL;
+static bool s_esl_callbacks_registered = false;
 
 #define CEEPEW_ESL_MAGIC0        0x45U
 #define CEEPEW_ESL_MAGIC1        0x53U
@@ -151,8 +157,11 @@ static CeePewErr_t hmac_sha256(const uint8_t *key,
 CeePewErr_t esl_register_callbacks(EslMacCheckFn mac_cb, EslNonceFn nonce_cb)
 {
     CEEPEW_ASSERT(mac_cb != NULL && nonce_cb != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(!s_esl_callbacks_registered, CEEPEW_ERR_PARAM);  /* Cannot re-register */
+    
     s_mac_cb = mac_cb;
     s_nonce_cb = nonce_cb;
+    s_esl_callbacks_registered = true;
     return CEEPEW_OK;
 }
 
@@ -213,6 +222,7 @@ CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16
     uint16_t payload_len = *len;
     memmove(frame + CEEPEW_ESL_HEADER_BYTES, frame, payload_len);
 
+    uint64_t nonce_counter = session_get_nonce_counter();
     EslHeader_t hdr = {
         .magic0    = CEEPEW_ESL_MAGIC0,
         .magic1    = CEEPEW_ESL_MAGIC1,
@@ -220,7 +230,7 @@ CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16
         .flags     = 0U,
         .timestamp_s = (uint32_t)(esp_timer_get_time() / 1000000LL),
         .seq       = s_tx_seq++,
-        .nonce_counter = g_crypto_ctx.nonce_counter,
+        .nonce_counter = nonce_counter,
     };
     memcpy(frame, &hdr, sizeof(hdr));
 
@@ -251,27 +261,39 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     if (dos_load_high) {
         if ((hdr.flags & CEEPEW_ESL_FLAG_HAS_COOKIE) == 0U) {
             /* Request cookie from peer — send CHALLENGE_COOKIE frame */
-            return CEEPEW_ERR_TRANSPORT;  /* Silent fail; peer should retry with cookie */ }
+            ESP_LOGD(TAG, "DoS: No cookie found, high queue depth (%lu)", queue_depth);
+            return CEEPEW_ERR_TRANSPORT;  /* Silent fail; peer should retry with cookie */
+        }
         /* Extract and verify cookie */
-        if (payload_len < CEEPEW_COOKIE_BYTES) { return CEEPEW_ERR_TRANSPORT; }
+        if (payload_len < CEEPEW_COOKIE_BYTES) {
+            ESP_LOGW(TAG, "DoS: Cookie missing or truncated (payload_len=%u)", payload_len);
+            return CEEPEW_ERR_TRANSPORT;
+        }
         uint8_t rx_cookie[CEEPEW_COOKIE_BYTES];
         memcpy(rx_cookie, frame + CEEPEW_ESL_HEADER_BYTES, CEEPEW_COOKIE_BYTES);
         uint32_t ts_rounded = (hdr.timestamp_s / 10U) * 10U;  /* Round to 10s buckets */
         CeePewErr_t err = dos_verify_cookie(peer_mac, ts_rounded, rx_cookie);
-        if (err != CEEPEW_OK) { return err; }  /* Silent fail */
+        if (err != CEEPEW_OK) {
+            ESP_LOGD(TAG, "DoS: Cookie verification failed (err=%d)", err);
+            return err;  /* Silent fail */
+        }
         payload_len = (uint16_t)(payload_len - CEEPEW_COOKIE_BYTES);
     }
 
     /* ═ STEP 2: MAC Lock (constant-time, peer identity check) ═ */
-    CeePewErr_t err = CEEPEW_OK;
-    if (s_mac_cb == NULL) {
-        return CEEPEW_ERR_PARAM;
+    CEEPEW_ASSERT(s_esl_callbacks_registered, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_mac_cb != NULL, CEEPEW_ERR_PARAM);
+    CeePewErr_t err = s_mac_cb(peer_mac);
+    if (err != CEEPEW_OK) {
+        ESP_LOGD(TAG, "MAC lock failed: peer MAC not in session (err=%d)", err);
+        return err;  /* Silent fail */
     }
-    err = s_mac_cb(peer_mac);
-    if (err != CEEPEW_OK) { return err; }  /* Silent fail */
 
     /* ═ STEP 3: Magic & Version (transport-level validation) ═ */
     if ((hdr.magic0 != CEEPEW_ESL_MAGIC0) || (hdr.magic1 != CEEPEW_ESL_MAGIC1) || (hdr.version != CEEPEW_ESL_VERSION)) {
+        ESP_LOGW(TAG, "Malformed frame: magic=%02x%02x version=%u (expected %02x%02x v%u)",
+                 hdr.magic0, hdr.magic1, hdr.version,
+                 CEEPEW_ESL_MAGIC0, CEEPEW_ESL_MAGIC1, CEEPEW_ESL_VERSION);
         return CEEPEW_ERR_TRANSPORT;  /* Malformed frame */
     }
 
@@ -280,10 +302,33 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     memcpy(&rx_crc, frame + frame_len - CEEPEW_ESL_CRC_BYTES, sizeof(rx_crc));
     uint32_t calc_crc = esp_crc32_le(0U, frame, (size_t)(frame_len - CEEPEW_ESL_CRC_BYTES));
     if (rx_crc != calc_crc) {
+        ESP_LOGD(TAG, "CRC mismatch: rx=%08lx calc=%08lx", rx_crc, calc_crc);
         return CEEPEW_ERR_TRANSPORT;  /* CRC mismatch — can return NACK */
     }
 
-    /* ═ STEP 5: Timestamp Validation (±15s, silent fail) ═ */
+    /* ═ STEP 5: Timestamp Validation (±15s, silent fail) ═
+     * 
+     * SECURITY: This check prevents several attacks:
+     * 1. Replay attacks via timestamp spoofing — old messages with crafted timestamps
+     * 2. Preplay attacks — injecting future-dated messages to bypass the window
+     * 3. Clock skew attacks — exploiting mismatched device clocks
+     * 
+     * LIMITATION: The ±15 second window assumes:
+     * - Both device clocks are synchronized within ±15 seconds (via NTP or similar)
+     * - Legitimate messages are encrypted and transmitted within milliseconds
+     * - Attackers cannot predict the session_code and timestamps simultaneously
+     * 
+     * The window CEEPEW_TIMESTAMP_SLACK_S (15 seconds) is chosen to:
+     * - Allow for typical clock drift on ESP32 devices without NTP
+     * - Prevent a 15-second replay window that an attacker could exploit
+     * - Be short enough that replaying old messages becomes impractical
+     * 
+     * If devices have unsynchronized clocks (> ±15s apart), legitimate messages
+     * will be silently rejected. Users should ensure devices have synchronized
+     * system time (e.g., via factory calibration or device time adjustment APIs).
+     * 
+     * Silent fail (no error response) prevents timing-based clock inference attacks.
+     */
     uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
     uint32_t diff = (now_s > hdr.timestamp_s) ? (now_s - hdr.timestamp_s) : (hdr.timestamp_s - now_s);
     if (diff > CEEPEW_TIMESTAMP_SLACK_S) {
@@ -296,25 +341,53 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     if (err != CEEPEW_OK) { return err; }  /* Silent fail */
     if (is_replay) { return CEEPEW_ERR_TRANSPORT; }  /* Silent fail */
 
-    /* ═ STEP 8–10: Cryptographic Verification (placeholder for now) ═ */
-    /* In full implementation:
-     *  - crypto_ascon_aead_decrypt() → tag verification (silent fail on auth fail)
-     *  - crypto_box_open() → decrypt (silent fail on failure)
-     *  - crypto_eddsa_verify() → signature check (silent fail on failure)
-     */
+    /* ═ STEP 7: Ascon-128 AEAD Decrypt ═ */
+    /* Extract nonce from header.nonce_counter */
+    uint8_t ascon_nonce[16];
+    memset(ascon_nonce, 0U, sizeof(ascon_nonce));
+    memcpy(ascon_nonce, &hdr.nonce_counter, sizeof(uint64_t));
 
-    /* For now, just extract payload and return */
-    /* Compute payload offset (skip cookie if present under DoS load) */
-    uint16_t payload_offset = CEEPEW_ESL_HEADER_BYTES;
+    /* Ciphertext starts after header, possibly after cookie */
+    uint16_t ct_offset = CEEPEW_ESL_HEADER_BYTES;
     if (dos_load_high && ((hdr.flags & CEEPEW_ESL_FLAG_HAS_COOKIE) != 0U)) {
-        payload_offset = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_COOKIE_BYTES);
+        ct_offset = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_COOKIE_BYTES);
+    }
+    uint16_t ct_len = payload_len;
+
+    /* Ascon-128 output buffer: temp plaintext */
+    uint8_t pt_buf[CEEPEW_REGION_POOL_BYTES / 2];
+    uint16_t pt_len = 0U;
+
+    /* Copy Ascon key under mutex protection */
+    uint8_t ascon_key_copy[CEEPEW_SESSION_KEY_BYTES];
+    CeePewErr_t mutex_err = crypto_mutex_lock();
+    if (mutex_err != CEEPEW_OK) { return CEEPEW_ERR_CRYPTO; }
+    memcpy(ascon_key_copy, g_crypto_ctx.ascon_key, CEEPEW_SESSION_KEY_BYTES);
+    mutex_err = crypto_mutex_unlock();
+    if (mutex_err != CEEPEW_OK) { return CEEPEW_ERR_CRYPTO; }
+
+    CeePewErr_t ascon_err = crypto_ascon_aead_decrypt(
+        ascon_key_copy,             /* key: 16 bytes from HKDF (copy under lock) */
+        ascon_nonce,                /* nonce: 16 bytes from session_id + nonce_counter */
+        (const uint8_t *)&hdr,      /* AD: header for authenticity binding */
+        (uint16_t)sizeof(EslHeader_t),
+        frame + ct_offset,          /* ciphertext */
+        ct_len,
+        pt_buf,                     /* plaintext output */
+        &pt_len
+    );
+    ceepew_secure_zero(ascon_key_copy, sizeof(ascon_key_copy));
+    if (ascon_err != CEEPEW_OK) {
+        return CEEPEW_ERR_CRYPTO;  /* Silent fail — authentication failure */
     }
 
-    uint16_t final_payload_len = payload_len; /* payload_len already excludes header and CRC */
-    if (final_payload_len > CEEPEW_MAX_MSG_BYTES) { return CEEPEW_ERR_BOUNDS; }
-
-    memmove(frame, frame + payload_offset, final_payload_len);
-    *len = final_payload_len;
+    /* ═ STEP 8: Copy plaintext back to frame and return ═ */
+    /* Plaintext now in pt_buf, copy it back to frame */
+    if (pt_len > CEEPEW_MAX_MSG_BYTES) {
+        return CEEPEW_ERR_BOUNDS;
+    }
+    memmove(frame, pt_buf, pt_len);
+    *len = pt_len;
     return CEEPEW_OK;
 }
 

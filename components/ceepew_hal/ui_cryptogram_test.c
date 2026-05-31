@@ -51,7 +51,10 @@ __attribute__((constructor)) static void ui_cryptogram_selftest(void)
     printf("CEEPEW: ui_cryptogram selftest - CRYPTOGRAM transition PASS\n");
 
     /* Test 2: Test ui_crypto_show_cryptogram() */
-    uint8_t test_commitment[8] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0};
+    uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {
+        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+    };
     if (ui_crypto_show_cryptogram(test_commitment) != CEEPEW_OK) {
         printf("ui_cryptogram selftest: ui_crypto_show_cryptogram() failed\n");
         return;
@@ -88,7 +91,7 @@ __attribute__((constructor)) static void ui_cryptogram_selftest(void)
 
     /* Test 6: Simulate peer commitment verification */
     g_ble_ctx.commitment_verified = true;
-    memcpy(g_ble_ctx.commitment_digest, test_commitment, 8U);
+    memcpy(g_ble_ctx.commitment_digest, test_commitment, CEEPEW_COMMITMENT_BYTES);
     if (ui_manager_draw() != CEEPEW_OK) {
         printf("ui_cryptogram selftest: ui_manager_draw() with peer verification failed\n");
         return;
@@ -97,8 +100,11 @@ __attribute__((constructor)) static void ui_cryptogram_selftest(void)
 
     /* Test 7: Test mismatch scenario */
     g_ble_ctx.commitment_verified = true;
-    uint8_t different_commitment[8] = {0xF0, 0xED, 0xCB, 0xA9, 0x87, 0x65, 0x43, 0x21};
-    memcpy(g_ble_ctx.commitment_digest, different_commitment, 8U);
+    uint8_t different_commitment[CEEPEW_COMMITMENT_BYTES] = {
+        0xF0, 0xED, 0xCB, 0xA9, 0x87, 0x65, 0x43, 0x21,
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE
+    };
+    memcpy(g_ble_ctx.commitment_digest, different_commitment, CEEPEW_COMMITMENT_BYTES);
     if (ui_manager_draw() != CEEPEW_OK) {
         printf("ui_cryptogram selftest: ui_manager_draw() with mismatch failed\n");
         return;
@@ -107,7 +113,7 @@ __attribute__((constructor)) static void ui_cryptogram_selftest(void)
 
     /* Test 8: Test button press transitions to CHAT */
     g_ble_ctx.commitment_verified = true;
-    memcpy(g_ble_ctx.commitment_digest, test_commitment, 8U);
+    memcpy(g_ble_ctx.commitment_digest, test_commitment, CEEPEW_COMMITMENT_BYTES);
     g_ui_ctx.button_pressed = true;
     (void)ui_manager_draw();
     (void)ui_manager_update();

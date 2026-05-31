@@ -8,10 +8,11 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 typedef struct {
     bool     session_active;
-    uint64_t nonce_counter;
     uint8_t  ascon_key[CEEPEW_SESSION_KEY_BYTES];
     uint8_t  box_seed[32U];
     uint8_t  session_id[8U];
@@ -19,8 +20,12 @@ typedef struct {
 } CryptoCtx_t;
 
 extern CryptoCtx_t g_crypto_ctx;
+extern SemaphoreHandle_t g_crypto_mutex;
 
 CeePewErr_t crypto_ctx_init(void);
 CeePewErr_t crypto_ctx_destroy(void);
+CeePewErr_t crypto_mutex_init(void);
+CeePewErr_t crypto_mutex_lock(void);
+CeePewErr_t crypto_mutex_unlock(void);
 
 #endif /* CRYPTO_CTX_H */

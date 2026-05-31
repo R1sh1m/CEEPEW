@@ -43,6 +43,12 @@ CeePewErr_t hal_radio_set_channel(uint8_t channel);
 typedef void (*hal_radio_send_status_cb_t)(esp_now_send_status_t status);
 CeePewErr_t hal_radio_set_send_status_cb(hal_radio_send_status_cb_t cb);
 
+/* Nonce counter getter callback: required for channel hopping */
+typedef uint64_t (*hal_radio_get_nonce_counter_cb_t)(void);
+
+/* Set crypto context and nonce counter getter for channel hopping */
+CeePewErr_t hal_radio_set_hop_context(const void *crypto_ctx, hal_radio_get_nonce_counter_cb_t nonce_getter);
+
 /* hal_radio_get_rx_queue: Return the RX frame queue handle.
  *
  * The queue is created during hal_radio_init() and persists for the lifetime
