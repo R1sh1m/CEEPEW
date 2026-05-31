@@ -4,6 +4,7 @@ idf_component_register(
         "hal_gpio.c"
         "hal_adc.c"
         "esp_adc_cal.c"
+        "hal_efuse.c"
         "hal_oled.c"
         "hal_input.c"
         "hal_input_additions.c"
@@ -24,6 +25,7 @@ idf_component_register(
         "."
     REQUIRES
         main
+        crypto
         esp_driver_gpio
         esp_driver_ledc
         esp_adc
@@ -38,4 +40,5 @@ idf_component_register(
         esp_common
         esp_system
         efuse
+    driver
 )
