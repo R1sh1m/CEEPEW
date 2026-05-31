@@ -24,11 +24,14 @@
 #define CEEPEW_OLED_TEXT_GLYPH_W 6U
 #define CEEPEW_OLED_TEXT_GLYPH_H 8U
 #define CEEPEW_OLED_MAX_TEXT_CHARS (CEEPEW_OLED_WIDTH_PX / CEEPEW_OLED_TEXT_GLYPH_W)
+#define CEEPEW_OLED_I2C_SETTLE_MS 20U
+#define CEEPEW_OLED_I2C_INTER_PAGE_DELAY_MS 1U
 
 static const char *TAG = "hal_oled";
 
 typedef struct {
     bool initialised;
+    bool use_sh1106_offset_mode;
     i2c_master_bus_handle_t bus_handle;
     esp_lcd_panel_io_handle_t io_handle;
     esp_lcd_panel_handle_t panel_handle;
@@ -39,6 +42,7 @@ typedef struct {
 
 static OledState_t s_state = {
     .initialised = false,
+    .use_sh1106_offset_mode = false,
     .bus_handle = NULL,
     .io_handle = NULL,
     .panel_handle = NULL,
@@ -213,6 +217,14 @@ static void oled_set_pixel_unchecked(uint8_t x, uint8_t y, bool on) {
 
 static void oled_release_panel_io(void)
 {
+    /* FIX: drain any pending async I2C transactions before teardown.
+     * Skipping this causes "Wrong I2C status, cannot delete device" when
+     * the bus is destroyed while the DMA queue still holds failed ops. */
+    if (s_state.bus_handle != NULL) {
+        (void)i2c_master_bus_wait_all_done(s_state.bus_handle, 200);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(2U));
     if (s_state.panel_handle != NULL) {
         (void)esp_lcd_panel_del(s_state.panel_handle);
         s_state.panel_handle = NULL;
@@ -227,11 +239,13 @@ static void oled_release_resources(void)
 {
     oled_release_panel_io();
     if (s_state.bus_handle != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(2U));
         (void)i2c_del_master_bus(s_state.bus_handle);
         s_state.bus_handle = NULL;
     }
     s_state.active_addr = 0U;
     s_state.active_freq_hz = 0U;
+    s_state.use_sh1106_offset_mode = false;
 }
 
 static CeePewErr_t oled_tx_cmd(uint8_t cmd)
@@ -289,6 +303,7 @@ static CeePewErr_t oled_force_known_display_mode(void)
     if (err != CEEPEW_OK) { return err; }
     err = oled_tx_cmd(0xAFU);                     /* Display ON */
     if (err != CEEPEW_OK) { return err; }
+    vTaskDelay(pdMS_TO_TICKS(CEEPEW_OLED_I2C_SETTLE_MS));
     return CEEPEW_OK;
 }
 
@@ -296,7 +311,6 @@ static CeePewErr_t oled_flush_raw_pages(uint8_t col_offset)
 {
     CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
     CEEPEW_ASSERT(col_offset <= 3U, CEEPEW_ERR_BOUNDS);
-
     CeePewErr_t err = oled_tx_cmd1(0x20U, 0x02U); /* Page addressing mode */
     if (err != CEEPEW_OK) {
         return err;
@@ -320,23 +334,26 @@ static CeePewErr_t oled_flush_raw_pages(uint8_t col_offset)
         if (rc != ESP_OK) {
             return CEEPEW_ERR_HW;
         }
+        vTaskDelay(pdMS_TO_TICKS(CEEPEW_OLED_I2C_INTER_PAGE_DELAY_MS));
     }
-
     return CEEPEW_OK;
 }
 
 static CeePewErr_t oled_create_bus(uint32_t speed_hz)
 {
+    ESP_LOGI(TAG, "Initializing I2C bus at %lu Hz with SDA=%d SCL=%d",
+             (unsigned long)speed_hz, CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL);
+
     i2c_master_bus_config_t bus_config = {
         .i2c_port = CEEPEW_I2C_PORT,
         .sda_io_num = CEEPEW_PIN_I2C_SDA,
         .scl_io_num = CEEPEW_PIN_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7U,
+        .glitch_ignore_cnt = 2U,              /* Reduce aggression for faster I2C transitions */
         .intr_priority = 0,
-        .trans_queue_depth = 0U,
+        .trans_queue_depth     = 64U,             /* Prevent queue overflow during panel init + mode setup */
         .flags = {
-            .enable_internal_pullup = 1U,
+            .enable_internal_pullup = 0U,     /* Assume external pull-ups on board */
             .allow_pd = 0U,
         },
     };
@@ -349,11 +366,14 @@ static CeePewErr_t oled_create_bus(uint32_t speed_hz)
         s_state.bus_handle = NULL;
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "I2C bus created successfully");
     return CEEPEW_OK;
 }
 
 static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
 {
+    ESP_LOGI(TAG, "Attempting panel init at I2C address 0x%02X", (unsigned int)addr);
+
     esp_lcd_panel_io_i2c_config_t io_config = {
         .dev_addr = addr,
         .scl_speed_hz = s_state.active_freq_hz,
@@ -366,12 +386,16 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
             .disable_control_phase = 0U,
         },
     };
+
+    ESP_LOGI(TAG, "Creating panel IO at 0x%02X with %lu Hz", 
+             (unsigned int)addr, (unsigned long)s_state.active_freq_hz);
     esp_err_t rc = esp_lcd_new_panel_io_i2c(s_state.bus_handle, &io_config, &s_state.io_handle);
     if (rc != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_new_panel_io_i2c failed at 0x%02X: 0x%x",
                  (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "Panel IO created successfully");
 
     esp_lcd_panel_ssd1306_config_t ssd1306_config = {
         .height = (uint8_t)CEEPEW_OLED_HEIGHT_PX,
@@ -387,31 +411,53 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
         .vendor_config = &ssd1306_config,
     };
 
+    ESP_LOGI(TAG, "Creating SSD1306 panel");
     rc = esp_lcd_new_panel_ssd1306(s_state.io_handle, &panel_config, &s_state.panel_handle);
     if (rc != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_new_panel_ssd1306 failed at 0x%02X: 0x%x",
                  (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "SSD1306 panel created successfully");
 
+    ESP_LOGI(TAG, "Resetting panel");
     rc = esp_lcd_panel_reset(s_state.panel_handle);
     if (rc != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_panel_reset failed at 0x%02X: 0x%x",
                  (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "Panel reset successfully");
+
+    ESP_LOGI(TAG, "Initializing panel (THIS IS WHERE IT FAILS)");
     rc = esp_lcd_panel_init(s_state.panel_handle);
     if (rc != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_panel_init failed at 0x%02X: 0x%x",
                  (unsigned int)addr, rc);
+        ESP_LOGW(TAG, "ERROR 0x108 typically indicates I2C bus error or device not responding");
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "Panel init successful");
+
+    /* FIX: wait for the ~16 async SSD1306 init commands to fully complete
+     * before queuing any further transactions. Without this, the queue fills
+     * and oled_force_known_display_mode() fails with "ops list is full". */
+    (void)i2c_master_bus_wait_all_done(s_state.bus_handle, 500);
+
+    ESP_LOGI(TAG, "Enabling display");
     rc = esp_lcd_panel_disp_on_off(s_state.panel_handle, true);
     if (rc != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_panel_disp_on_off failed at 0x%02X: 0x%x",
                  (unsigned int)addr, rc);
         return CEEPEW_ERR_HW;
     }
+    ESP_LOGI(TAG, "Display enabled successfully");
+
+    /* FIX: drain the disp_on_off transaction too before the 16-command
+     * force_known_display_mode sequence. The existing vTaskDelay only
+     * yields CPU; it does not block until DMA is done. */
+    (void)i2c_master_bus_wait_all_done(s_state.bus_handle, 500);
+    vTaskDelay(pdMS_TO_TICKS(CEEPEW_OLED_I2C_SETTLE_MS));
 
     CeePewErr_t mode_err = oled_force_known_display_mode();
     if (mode_err != CEEPEW_OK) {
@@ -420,6 +466,7 @@ static CeePewErr_t oled_init_panel_at_addr(uint8_t addr)
     }
 
     s_state.active_addr = addr;
+    ESP_LOGI(TAG, "Panel successfully initialized at 0x%02X", (unsigned int)addr);
     return CEEPEW_OK;
 }
 
@@ -438,6 +485,8 @@ CeePewErr_t hal_oled_init(void){
     CEEPEW_ASSERT(!s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SDA) && GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SCL), CEEPEW_ERR_PINS);
     CEEPEW_ASSERT(CEEPEW_OLED_WIDTH_PX == 128U && CEEPEW_OLED_HEIGHT_PX == 64U, CEEPEW_ERR_PARAM);
+    
+    ESP_LOGI(TAG, "hal_oled_init: Starting SSD1306 initialization");
     memset(s_state.framebuffer, 0, sizeof(s_state.framebuffer));
 
     const uint8_t addr_candidates[2] = {
@@ -453,21 +502,28 @@ CeePewErr_t hal_oled_init(void){
         if ((speed_idx == 1U) && (speed_candidates[1] == speed_candidates[0])) {
             continue;
         }
+        
+        ESP_LOGI(TAG, "Trying I2C speed %lu Hz", (unsigned long)speed_candidates[speed_idx]);
 
         oled_release_resources();
         err = oled_create_bus(speed_candidates[speed_idx]);
         if (err != CEEPEW_OK) {
+            ESP_LOGW(TAG, "Failed to create I2C bus at %lu Hz", (unsigned long)speed_candidates[speed_idx]);
             continue;
         }
 
         for (uint8_t addr_idx = 0U; addr_idx < 2U; addr_idx++) {
+            ESP_LOGI(TAG, "Trying I2C address 0x%02X", (unsigned int)addr_candidates[addr_idx]);
             err = oled_init_panel_at_addr(addr_candidates[addr_idx]);
             if (err == CEEPEW_OK) {
+                ESP_LOGI(TAG, "SUCCESS: Panel initialized at address 0x%02X", (unsigned int)addr_candidates[addr_idx]);
                 break;
             }
+            ESP_LOGW(TAG, "Address 0x%02X failed, trying next", (unsigned int)addr_candidates[addr_idx]);
             oled_release_panel_io();
         }
         if (err == CEEPEW_OK) {
+            ESP_LOGI(TAG, "SUCCESS: Using %lu Hz", (unsigned long)speed_candidates[speed_idx]);
             break;
         }
 
@@ -475,6 +531,7 @@ CeePewErr_t hal_oled_init(void){
     }
 
     if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "FAILED: Could not initialize SSD1306 at any address/frequency combination");
         oled_release_resources();
         return err;
     }
@@ -485,16 +542,19 @@ CeePewErr_t hal_oled_init(void){
     s_state.initialised = true;
     err = hal_oled_clear();
     if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "hal_oled_clear failed");
         oled_release_resources();
         s_state.initialised = false;
         return err;
     }
     err = hal_oled_flush();
     if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "hal_oled_flush failed");
         oled_release_resources();
         s_state.initialised = false;
         return err;
     }
+    ESP_LOGI(TAG, "OLED initialization complete");
     return CEEPEW_OK;
 }
 
@@ -508,14 +568,24 @@ CeePewErr_t hal_oled_flush(void){
     CEEPEW_ASSERT(s_state.initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(s_state.io_handle != NULL, CEEPEW_ERR_HW);
 
-    /* Write as raw pages; also repeat with +2 column offset to support
-     * SSD1306-compatible modules that expose SH1106-style RAM origin. */
-    CeePewErr_t err = oled_flush_raw_pages(0U);
+    const uint8_t base_offset = s_state.use_sh1106_offset_mode ? 2U : 0U;
+    CeePewErr_t err = oled_flush_raw_pages(base_offset);
     if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "hal_oled_flush: raw page flush failed (offset 0)");
+        ESP_LOGE(TAG, "hal_oled_flush: raw page flush failed (offset %u)",
+                 (unsigned int)base_offset);
+        if (!s_state.use_sh1106_offset_mode) {
+            CeePewErr_t fb_err = oled_flush_raw_pages(2U);
+            if (fb_err == CEEPEW_OK) {
+                s_state.use_sh1106_offset_mode = true;
+                ESP_LOGW(TAG, "hal_oled_flush: switched to SH1106-style +2 column offset mode");
+                return CEEPEW_OK;
+            }
+        }
         return err;
     }
-    (void)oled_flush_raw_pages(2U);
+    if (s_state.use_sh1106_offset_mode && (base_offset == 2U)) {
+        return CEEPEW_OK;
+    }
     return CEEPEW_OK;
 }
 
