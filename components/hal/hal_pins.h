@@ -27,6 +27,8 @@
 /* ── OLED Display (SSD1306, I2C) ─────────────────────────────────── */
 #define CEEPEW_PIN_I2C_SDA          GPIO_NUM_26
 #define CEEPEW_PIN_I2C_SCL          GPIO_NUM_27
+#define CEEPEW_PIN_I2C_SDA_FALLBACK GPIO_NUM_21
+#define CEEPEW_PIN_I2C_SCL_FALLBACK GPIO_NUM_22
 #define CEEPEW_I2C_PORT             ((i2c_port_t)0)
 #define CEEPEW_I2C_FREQ_HZ          400000U
 #define CEEPEW_I2C_FREQ_FALLBACK_HZ 100000U

@@ -6,6 +6,7 @@ idf_component_register(
         "esp_adc_cal.c"
         "hal_efuse.c"
         "hal_oled.c"
+        "hal_i2c_scanner.c"
         "hal_input.c"
         "hal_input_additions.c"
         "hal_radio.c"

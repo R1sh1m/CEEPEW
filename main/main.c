@@ -20,6 +20,7 @@
 #include "hal_rng.h"
 #include "crypto_rng.h"
 #include "hal_pins.h"
+#include "hal_i2c_scanner.h"
 #include "hal_oled.h"
 #include "hal_ui.h"
 #include "ui_manager.h"
@@ -56,6 +57,9 @@ void app_main(void){
         ESP_LOGE(TAG, "hal_pins_validate failed: %d", (int)err);
         return;
     }
+
+    /* Boot-time I2C diagnostic scan — helps identify OLED address/wiring issues */
+    (void)hal_i2c_scanner_scan_bus();
 
     err = hal_adc_init();
     if (err != CEEPEW_OK) {

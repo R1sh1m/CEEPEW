@@ -34,6 +34,8 @@ static const char *TAG = "hal_oled";
 #define CTRL_DATA     0x40U   /* D/C = 1 : data stream    */
 
 #define I2C_TIMEOUT_MS  200   /* generous per-transaction timeout */
+#define OLED_PROBE_ATTEMPTS   3U
+#define OLED_PROBE_RETRY_MS  50U
 
 /* Glyph geometry */
 #define GLYPH_W   5U
@@ -120,6 +122,58 @@ static CeePewErr_t hw_init(void)
     return CEEPEW_OK;
 }
 
+static void oled_bus_recover(gpio_num_t sda_pin, gpio_num_t scl_pin)
+{
+    const gpio_config_t od_cfg = {
+        .pin_bit_mask = (1ULL << (uint32_t)sda_pin) |
+                        (1ULL << (uint32_t)scl_pin),
+        .mode         = GPIO_MODE_OUTPUT_OD,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+
+    (void)gpio_config(&od_cfg);
+    (void)gpio_set_level(sda_pin, 1);
+    vTaskDelay(pdMS_TO_TICKS(1U));
+
+    for (uint8_t clk = 0U; clk < 9U; clk++) {
+        if (gpio_get_level(sda_pin) != 0) {
+            break;
+        }
+        (void)gpio_set_level(scl_pin, 0);
+        vTaskDelay(pdMS_TO_TICKS(1U));
+        (void)gpio_set_level(scl_pin, 1);
+        vTaskDelay(pdMS_TO_TICKS(1U));
+    }
+
+    (void)gpio_set_level(scl_pin, 1);
+    vTaskDelay(pdMS_TO_TICKS(1U));
+    (void)gpio_set_level(sda_pin, 0);
+    vTaskDelay(pdMS_TO_TICKS(1U));
+    (void)gpio_set_level(sda_pin, 1);
+    vTaskDelay(pdMS_TO_TICKS(10U));
+}
+
+static esp_err_t oled_probe_with_retry(i2c_master_bus_handle_t bus, uint8_t addr)
+{
+    for (uint8_t attempt = 0U; attempt < OLED_PROBE_ATTEMPTS; attempt++) {
+        esp_err_t rc = i2c_master_probe(bus, addr, I2C_TIMEOUT_MS);
+        if (rc == ESP_OK) {
+            return ESP_OK;
+        }
+        ESP_LOGD(TAG, "probe 0x%02X attempt %u/%u failed (%d)",
+                 (unsigned)addr,
+                 (unsigned)(attempt + 1U),
+                 (unsigned)OLED_PROBE_ATTEMPTS,
+                 (int)rc);
+        if ((attempt + 1U) < OLED_PROBE_ATTEMPTS) {
+            vTaskDelay(pdMS_TO_TICKS(OLED_PROBE_RETRY_MS));
+        }
+    }
+    return ESP_FAIL;
+}
+
 /* ?? Page flush ???????????????????????????????????????????????????????? */
 static CeePewErr_t flush_at_offset(uint8_t col_offset)
 {
@@ -150,70 +204,154 @@ CeePewErr_t hal_oled_init(void)
 
     const uint32_t speeds[2] = { CEEPEW_I2C_FREQ_HZ, CEEPEW_I2C_FREQ_FALLBACK_HZ };
     const uint8_t  addrs[2]  = { CEEPEW_OLED_I2C_ADDR, CEEPEW_OLED_I2C_ADDR_FB };
+    const gpio_num_t sda_pins[2] = { CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SDA_FALLBACK };
+    const gpio_num_t scl_pins[2] = { CEEPEW_PIN_I2C_SCL, CEEPEW_PIN_I2C_SCL_FALLBACK };
 
     CeePewErr_t err = CEEPEW_ERR_HW;
 
-    for (uint8_t si = 0U; si < 2U && err != CEEPEW_OK; si++) {
-        if (si == 1U && speeds[1] == speeds[0]) { continue; }
-
-        const i2c_master_bus_config_t bus_cfg = {
-            .i2c_port              = CEEPEW_I2C_PORT,
-            .sda_io_num            = CEEPEW_PIN_I2C_SDA,
-            .scl_io_num            = CEEPEW_PIN_I2C_SCL,
-            .clk_source            = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt     = 7U,
-            .intr_priority         = 0,
-            /*
-             * trans_queue_depth = 0 ? synchronous mode.
-             * Every i2c_master_transmit() blocks until the physical transfer
-             * completes before returning.  The queue can never fill because
-             * there is no queue.  FreeRTOS yields to other tasks (BLE, etc.)
-             * through the driver's internal semaphore during each byte transfer.
-             */
-            .trans_queue_depth     = 0U,
-            .flags = {
-                .enable_internal_pullup = 0U,
-                .allow_pd               = 0U,
-            },
-        };
-
-        ESP_LOGI(TAG, "Creating I2C bus at %lu Hz", (unsigned long)speeds[si]);
-        if (i2c_new_master_bus(&bus_cfg, &s.bus) != ESP_OK) {
-            ESP_LOGW(TAG, "i2c_new_master_bus failed");
-            s.bus = NULL;
+    for (uint8_t pi = 0U; pi < 2U && err != CEEPEW_OK; pi++) {
+        if (pi == 1U &&
+            sda_pins[1] == sda_pins[0] &&
+            scl_pins[1] == scl_pins[0]) {
+            continue;
+        }
+        if (!GPIO_IS_VALID_GPIO(sda_pins[pi]) || !GPIO_IS_VALID_GPIO(scl_pins[pi])) {
             continue;
         }
 
-        for (uint8_t ai = 0U; ai < 2U && err != CEEPEW_OK; ai++) {
-            ESP_LOGI(TAG, "Probing 0x%02X", (unsigned)addrs[ai]);
-            if (i2c_master_probe(s.bus, addrs[ai], I2C_TIMEOUT_MS) != ESP_OK) {
-                ESP_LOGW(TAG, "No ACK from 0x%02X", (unsigned)addrs[ai]);
-                continue;
-            }
-            ESP_LOGI(TAG, "ACK from 0x%02X", (unsigned)addrs[ai]);
+        ESP_LOGI(TAG, "Trying I2C pins SDA=%d SCL=%d", (int)sda_pins[pi], (int)scl_pins[pi]);
+        oled_bus_recover(sda_pins[pi], scl_pins[pi]);
 
-            const i2c_device_config_t dev_cfg = {
-                .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-                .device_address  = addrs[ai],
-                .scl_speed_hz    = speeds[si],
+        for (uint8_t si = 0U; si < 2U && err != CEEPEW_OK; si++) {
+            if (si == 1U && speeds[1] == speeds[0]) { continue; }
+
+            const i2c_master_bus_config_t bus_cfg = {
+                .i2c_port              = CEEPEW_I2C_PORT,
+                .sda_io_num            = sda_pins[pi],
+                .scl_io_num            = scl_pins[pi],
+                .clk_source            = I2C_CLK_SRC_DEFAULT,
+                .glitch_ignore_cnt     = 7U,
+                .intr_priority         = 0,
+                /*
+                 * trans_queue_depth = 0 ? synchronous mode.
+                 * Every i2c_master_transmit() blocks until the physical transfer
+                 * completes before returning.  The queue can never fill because
+                 * there is no queue.  FreeRTOS yields to other tasks (BLE, etc.)
+                 * through the driver's internal semaphore during each byte transfer.
+                 */
+                .trans_queue_depth     = 0U,
+                .flags = {
+                    .enable_internal_pullup = 1U,
+                    .allow_pd               = 0U,
+                },
             };
-            if (i2c_master_bus_add_device(s.bus, &dev_cfg, &s.dev) != ESP_OK) {
-                ESP_LOGW(TAG, "bus_add_device failed");
+
+            ESP_LOGI(TAG, "Creating I2C bus at %lu Hz", (unsigned long)speeds[si]);
+            if (i2c_new_master_bus(&bus_cfg, &s.bus) != ESP_OK) {
+                ESP_LOGW(TAG, "i2c_new_master_bus failed");
+                s.bus = NULL;
                 continue;
             }
-            s.addr = addrs[ai];
-            err = CEEPEW_OK;
-        }
 
-        if (err != CEEPEW_OK) {
-            (void)i2c_del_master_bus(s.bus);
-            s.bus = NULL;
+            vTaskDelay(pdMS_TO_TICKS(10U));
+
+            for (uint8_t ai = 0U; ai < 2U && err != CEEPEW_OK; ai++) {
+                ESP_LOGI(TAG, "Probing 0x%02X (up to %u attempts)",
+                         (unsigned)addrs[ai], (unsigned)OLED_PROBE_ATTEMPTS);
+                if (oled_probe_with_retry(s.bus, addrs[ai]) != ESP_OK) {
+                    ESP_LOGW(TAG, "No ACK from 0x%02X after %u attempts",
+                             (unsigned)addrs[ai], (unsigned)OLED_PROBE_ATTEMPTS);
+                    continue;
+                }
+                ESP_LOGI(TAG, "ACK from 0x%02X", (unsigned)addrs[ai]);
+
+                const i2c_device_config_t dev_cfg = {
+                    .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                    .device_address  = addrs[ai],
+                    .scl_speed_hz    = speeds[si],
+                };
+                if (i2c_master_bus_add_device(s.bus, &dev_cfg, &s.dev) != ESP_OK) {
+                    ESP_LOGW(TAG, "bus_add_device failed");
+                    continue;
+                }
+                s.addr = addrs[ai];
+                err = CEEPEW_OK;
+            }
+
+            if (err != CEEPEW_OK) {
+                (void)i2c_del_master_bus(s.bus);
+                s.bus = NULL;
+            }
         }
     }
 
     if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "No SSD1306 found on I2C bus");
-        return CEEPEW_ERR_HW;
+        ESP_LOGE(TAG, "No SSD1306 found on configured pins; scanning all GPIO pairs for I2C slaves");
+        
+        /* Fallback: scan all valid GPIO pins for any I2C slave at 0x3C/0x3D */
+        const gpio_num_t all_pins[] = {
+            GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, GPIO_NUM_15,
+            GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_21, GPIO_NUM_22,
+            GPIO_NUM_23, GPIO_NUM_25, GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_32, GPIO_NUM_33
+        };
+        const uint8_t num_pins = sizeof(all_pins) / sizeof(all_pins[0]);
+        
+        for (uint8_t sda_idx = 0U; sda_idx < num_pins && err != CEEPEW_OK; sda_idx++) {
+            for (uint8_t scl_idx = 0U; scl_idx < num_pins && err != CEEPEW_OK; scl_idx++) {
+                if (sda_idx == scl_idx || 
+                    !GPIO_IS_VALID_GPIO(all_pins[sda_idx]) ||
+                    !GPIO_IS_VALID_GPIO(all_pins[scl_idx])) {
+                    continue;
+                }
+                
+                const i2c_master_bus_config_t scan_cfg = {
+                    .i2c_port              = CEEPEW_I2C_PORT,
+                    .sda_io_num            = all_pins[sda_idx],
+                    .scl_io_num            = all_pins[scl_idx],
+                    .clk_source            = I2C_CLK_SRC_DEFAULT,
+                    .glitch_ignore_cnt     = 7U,
+                    .intr_priority         = 0,
+                    .trans_queue_depth     = 0U,
+                    .flags = {
+                        .enable_internal_pullup = 1U,
+                        .allow_pd               = 0U,
+                    },
+                };
+                
+                if (i2c_new_master_bus(&scan_cfg, &s.bus) != ESP_OK) {
+                    continue;
+                }
+                
+                vTaskDelay(pdMS_TO_TICKS(10U));
+                
+                for (uint8_t addr_idx = 0U; addr_idx < 2U && err != CEEPEW_OK; addr_idx++) {
+                    if (i2c_master_probe(s.bus, addrs[addr_idx], I2C_TIMEOUT_MS) == ESP_OK) {
+                        ESP_LOGI(TAG, "*** FOUND SSD1306 at 0x%02X on SDA=%d SCL=%d ***",
+                                 (unsigned)addrs[addr_idx], (int)all_pins[sda_idx], (int)all_pins[scl_idx]);
+                        
+                        const i2c_device_config_t dev_cfg = {
+                            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                            .device_address  = addrs[addr_idx],
+                            .scl_speed_hz    = CEEPEW_I2C_FREQ_HZ,
+                        };
+                        if (i2c_master_bus_add_device(s.bus, &dev_cfg, &s.dev) == ESP_OK) {
+                            s.addr = addrs[addr_idx];
+                            err = CEEPEW_OK;
+                        }
+                    }
+                }
+                
+                if (err != CEEPEW_OK) {
+                    (void)i2c_del_master_bus(s.bus);
+                    s.bus = NULL;
+                }
+            }
+        }
+        
+        if (err != CEEPEW_OK) {
+            ESP_LOGE(TAG, "No SSD1306 found on any GPIO pair");
+            return CEEPEW_ERR_HW;
+        }
     }
 
     ESP_LOGI(TAG, "Running init sequence on 0x%02X", (unsigned)s.addr);
