@@ -5,7 +5,6 @@ idf_component_register(
         "hal_adc.c"
         "esp_adc_cal.c"
         "hal_efuse.c"
-        "hal_oled.c"
         "hal_i2c_scanner.c"
         "hal_input.c"
         "hal_input_additions.c"
@@ -16,7 +15,7 @@ idf_component_register(
         "hal_ui.c"
         "hal_ui_helpers.c"
         "layout.c"
-        
+
         "ui_manager.c"
         "ui_manager_test.c"
         "task_arch.c"
@@ -27,6 +26,7 @@ idf_component_register(
     REQUIRES
         main
         crypto
+        ssd1306
         esp_driver_gpio
         esp_driver_ledc
         esp_adc
@@ -34,7 +34,7 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
-        esp_lcd
+        esp_driver_i2c
         nvs_flash
         log
         freertos

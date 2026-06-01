@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "ssd1306.c"
+        "ssd1306_i2c_new.c"
+    PRIV_REQUIRES
+        driver
+        esp_driver_i2c
+        esp_driver_gpio
+    INCLUDE_DIRS
+        "."
+)

@@ -3,6 +3,12 @@
  * Core UI rendering API: abstraction over SSD1306 OLED display.
  * Provides primitive drawing (pixels, lines, rects, circles),
  * font rendering, and a simple scene graph for UI composition.
+ *
+ * The display driver underneath is the vendored ssd1306 component
+ * (nopnop2002/esp-idf-ssd1306, MIT, see components/ssd1306/LICENSE).
+ * All hal_ui_* drawing primitives write into that driver's internal
+ * page buffer; hal_ui_flush() pushes all 8 pages over I2C in
+ * page-addressing mode (no malloc, no async queue).
  */
 
 #ifndef HAL_UI_H
@@ -12,6 +18,7 @@
 #include <stdbool.h>
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#include "ssd1306.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,13 +43,19 @@ typedef struct {
     uint8_t  h;
 } HalUIRect_t;
 
-/* Initialize UI subsystem (call once after hal_oled_init) */
+/* Initialize UI subsystem and bring up the OLED panel. Replaces the
+ * prior hal_oled_init(); the new flow performs I2C bus recovery, tries
+ * the configured (pin × speed × address) matrix, then falls back to a
+ * full GPIO-pair scan, all within hal_ui_init().
+ *
+ * Returns CEEPEW_OK on success, CEEPEW_ERR_HW if no SSD1306 was found. */
 CeePewErr_t hal_ui_init(void);
 
 /* Clear entire display (fill with black) */
 CeePewErr_t hal_ui_clear(void);
 
-/* Flush framebuffer to display (refresh the OLED) */
+/* Flush framebuffer to display (refresh the OLED). Retries once with
+ * the SH1106 +2 column offset if the SSD1306 flush fails. */
 CeePewErr_t hal_ui_flush(void);
 
 /* Set a single pixel at (x, y) */
@@ -69,7 +82,7 @@ CeePewErr_t hal_ui_circle(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t c
 /* Draw filled circle */
 CeePewErr_t hal_ui_circle_fill(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color);
 
-/* Draw text string at (x, y) in 5×8 monospace font (character width=6) */
+/* Draw text string at (x, y) in 5×7 monospace font (character width=6) */
 CeePewErr_t hal_ui_text(uint8_t x, uint8_t y, const char *str, HalUIColor_t color);
 
 /* Draw single character at (x, y) */
@@ -84,8 +97,13 @@ CeePewErr_t hal_ui_fit_text(const char *src, uint8_t max_px_width, char *out, ui
 /* Draw text by inverting pixels over existing background; useful for black-on-white text. */
 CeePewErr_t hal_ui_text_invert(uint8_t x, uint8_t y, const char *str);
 
-/* Get current framebuffer pointer (for advanced drawing) */
-uint8_t *hal_ui_framebuffer(void);
+/* Return a pointer to the underlying SSD1306_t device (vendored driver).
+ * Returns NULL if hal_ui_init has not succeeded. Used by the boot
+ * splash in main.c to access charge-pump control and raw I2C commands.
+ *
+ * Note: callers MUST NOT call ssd1306_init() on the returned device,
+ * and MUST NOT modify _i2c_bus_handle / _i2c_dev_handle. */
+SSD1306_t *hal_ui_get_dev(void);
 
 #ifdef __cplusplus
 }

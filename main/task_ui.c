@@ -28,7 +28,7 @@
 
 #include "hal_input.h"
 #include "hal_pins.h"
-#include "hal_oled.h"
+#include "hal_ui.h"
 #include "ui_manager.h"
 
 extern QueueHandle_t g_ui_event_queue;
