@@ -25,3 +25,6 @@ sdkconfig.old
 .github/
 .clangd
 sdkconfig.production
+.claude/
+docs/
+tests/
