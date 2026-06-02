@@ -1,7 +1,7 @@
 build/
 sdkconfig
 sdkconfig.defaults
-keys/
+.claude/
 *.pem
 *.key
 *.p12
@@ -25,3 +25,5 @@ sdkconfig.old
 .github/
 .clangd
 sdkconfig.production
+CLAUDE.md
+docs/
