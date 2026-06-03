@@ -39,6 +39,10 @@
 static SSD1306_t s_dev;             /* vendored display handle           */
 static bool      s_ui_initialised;  /* hal_ui_init completed successfully */
 static bool      s_sh1106_mode;     /* SH1106 needs +2 col offset         */
+static bool      s_framebuffer_dirty; /* set by any drawing primitive,
+                                       * cleared after a successful I2C
+                                       * push. Skips redundant flushes on
+                                       * idle static screens. */
 static uint32_t  s_last_flush_diag_ms;
 static bool      s_nonzero_flush_seen;
 
@@ -295,19 +299,76 @@ static esp_err_t ssd1306_scan_all_pins(void)
 }
 
 /* Custom no-malloc flush. Writes all 8 pages of the upstream's internal
- * _page[]._segs[] buffer to the panel using i2c_master_transmit directly,
- * with the page-addressing command stream. SH1106 panels get a +2 column
- * start offset. */
+ * _page[]._segs[] buffer to the panel using i2c_master_transmit directly.
+ *
+ * Fast path (SSD1306): put the panel in horizontal-addressing mode, then
+ * push the entire 1 KB framebuffer in a single I2C transaction. That's
+ * 2 blocking I2C transactions per frame instead of 16 (8 pages × 2 trans
+ * each) — cuts per-frame bus overhead by ~6x.
+ *
+ * SH1106 fallback: SH1106 does NOT support SET_COLUMN_RANGE / SET_PAGE_RANGE
+ * in horizontal mode (it lacks those commands), so we keep the original
+ * per-page path. col_offset is the +2 SH1106 column shift.
+ */
 static CeePewErr_t ssd1306_flush_pages_no_malloc(SSD1306_t *dev, uint8_t col_offset)
 {
     if (dev == NULL || dev->_i2c_dev_handle == NULL) { return CEEPEW_ERR_BUSY; }
 
+    if (col_offset == 0U) {
+        /* ── SSD1306 fast path: horizontal addressing, 2 transactions ──
+         *
+         * The SET_PAGE_START (0xB0) command at the start pins the panel's
+         * internal page counter to page 0 and resets the column pointer to
+         * 0. Without this, if a previous flush had an I2C NACK mid-write
+         * (leaving the page counter at some non-zero value), the next flush
+         * would have its first page land at y=8*page rather than y=0 —
+         * which produces the "headings pushed to the bottom" symptom.
+         * Resetting the page pointer here costs 2 bytes per frame and
+         * makes every flush deterministic. */
+        const uint8_t cmd_stream[12U] = {
+            0x00U,                                    /* CTRL_CMD                */
+            0xB0U,                                    /* SET_PAGE_START — page 0  */
+            0x00U,                                    /* SET_LOWER_COL — 0        */
+            0x10U,                                    /* SET_HIGHER_COL — 0       */
+            0x20U, 0x00U,                             /* HORIZONTAL_ADDR_MODE     */
+            0x21U, 0x00U, 0x7FU,                      /* col range [0..127]       */
+            0x22U, 0x00U, 0x07U,                      /* page range [0..7]        */
+        };
+        esp_err_t rc = i2c_master_transmit(dev->_i2c_dev_handle,
+                                           cmd_stream, sizeof(cmd_stream),
+                                           I2C_FLUSH_TIMEOUT_TICKS);
+        if (rc != ESP_OK) {
+            ESP_LOGE(TAG, "horiz cmd failed: %d (%s)",
+                     (int)rc, esp_err_to_name(rc));
+            return CEEPEW_ERR_HW;
+        }
+
+        /* One data transaction: [0x40] + 1024 framebuffer bytes.
+         * Stack-allocated, no malloc, fits in 4 KB UI task stack with room
+         * to spare. */
+        uint8_t data_stream[1U + 1024U];
+        data_stream[0U] = 0x40U;
+        for (uint8_t page = 0U; page < 8U; page++) {
+            memcpy(&data_stream[1U + (uint16_t)page * 128U],
+                   dev->_page[page]._segs, 128U);
+        }
+        rc = i2c_master_transmit(dev->_i2c_dev_handle,
+                                 data_stream, sizeof(data_stream),
+                                 I2C_FLUSH_TIMEOUT_TICKS);
+        if (rc != ESP_OK) {
+            ESP_LOGE(TAG, "horiz data failed: %d (%s)",
+                     (int)rc, esp_err_to_name(rc));
+            return CEEPEW_ERR_HW;
+        }
+        return CEEPEW_OK;
+    }
+
+    /* ── SH1106 (or any panel needing column offset) fallback ── */
     for (uint8_t page = 0U; page < 8U; page++) {
         const uint8_t col_low  = (uint8_t)(col_offset & 0x0FU);
         const uint8_t col_high = (uint8_t)(0x10U | ((col_offset >> 4U) & 0x0FU));
         const uint8_t page_cmd = (uint8_t)(0xB0U | page);
 
-        /* One transaction: command stream = [col_low, col_high, page_set]. */
         const uint8_t cmd_stream[4] = {
             0x00U,         /* CTRL_CMD = command stream */
             col_low,
@@ -323,7 +384,6 @@ static CeePewErr_t ssd1306_flush_pages_no_malloc(SSD1306_t *dev, uint8_t col_off
             return CEEPEW_ERR_HW;
         }
 
-        /* Second transaction: data stream = [0x40] + 128 bytes from buffer. */
         uint8_t data_stream[1U + 128U];
         data_stream[0U] = 0x40U;
         memcpy(&data_stream[1U], dev->_page[page]._segs, 128U);
@@ -350,6 +410,7 @@ CeePewErr_t hal_ui_init(void)
     ESP_LOGI(TAG, "hal_ui_init (vendored ssd1306 driver, I2C only)");
     memset(&s_dev, 0, sizeof(s_dev));
     s_sh1106_mode = false;
+    s_framebuffer_dirty = true;   /* initial flush below is non-redundant */
     s_nonzero_flush_seen = false;
     s_last_flush_diag_ms = 0U;
 
@@ -386,12 +447,20 @@ CeePewErr_t hal_ui_clear(void)
     for (uint8_t p = 0U; p < 8U; p++) {
         memset(s_dev._page[p]._segs, 0, 128U);
     }
+    s_framebuffer_dirty = true;
     return CEEPEW_OK;
 }
 
 CeePewErr_t hal_ui_flush(void)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+
+    /* Skip the I2C push entirely if nothing changed since the last flush.
+     * Static screens (info, fingerprint-confirm, error, …) hit this path
+     * every tick after the first draw, leaving the bus free for BLE. */
+    if (!s_framebuffer_dirty) {
+        return CEEPEW_OK;
+    }
 
     /* Diagnostic: count non-zero bytes (mirrors prior behavior) */
     uint32_t nonzero_bytes = 0U;
@@ -431,6 +500,11 @@ CeePewErr_t hal_ui_flush(void)
             ESP_LOGE(TAG, "hal_ui_flush failed on both SSD1306 and SH1106 attempts");
         }
     }
+    /* Only clear the dirty flag on a successful push so a transient I2C
+     * failure still gets retried on the next tick. */
+    if (err == CEEPEW_OK) {
+        s_framebuffer_dirty = false;
+    }
     return err;
 }
 
@@ -446,6 +520,7 @@ static inline void fb_pixel(uint8_t x, uint8_t y, bool on)
     const uint8_t  bit  = (uint8_t)(1U << (y & 0x07U));
     if (on) { s_dev._page[page]._segs[x] |= bit; }
     else    { s_dev._page[page]._segs[x] = (uint8_t)(s_dev._page[page]._segs[x] & ~bit); }
+    s_framebuffer_dirty = true;
 }
 
 CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color)
@@ -460,6 +535,7 @@ CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color)
             const uint8_t page = (uint8_t)(y >> 3);
             const uint8_t bit  = (uint8_t)(1U << (y & 0x07U));
             s_dev._page[page]._segs[x] ^= bit;
+            s_framebuffer_dirty = true;
             break;
         }
         default: return CEEPEW_ERR_PARAM;

@@ -142,17 +142,58 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
                                  const uint8_t peer_public_key[32]);
 
 /* Get peer's Ed25519 public key (for signature verification).
- * In full implementation, exchanged during Phase 2.
+ * Returns the key that was stored via session_set_peer_public_key() during
+ * the BLE commitment exchange. No derivation or RNG is performed.
  *
  * PARAMETERS:
  *   peer_pk: Output buffer for 32-byte Ed25519 public key (not NULL)
  *
  * RETURNS:
  *   CEEPEW_OK — Peer public key populated
- *   CEEPEW_ERR_PARAM — Not in phase 3 or session not active
+ *   CEEPEW_ERR_PARAM — Not in phase 2+, session not active, or peer's key has
+ *                      not yet been received via the BLE commitment exchange
  *   CEEPEW_ERR_NULL_PTR — peer_pk is NULL
  */
 CeePewErr_t session_get_peer_public_key(uint8_t peer_pk[32]);
+
+/* Store the peer's ephemeral Ed25519 public key, received over BLE during
+ * the Phase 2 commitment exchange. Must be called before
+ * session_get_peer_public_key() will return a valid key. Idempotent.
+ *
+ * PARAMETERS:
+ *   peer_pk: 32-byte peer's ephemeral Ed25519 public key (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — peer_pk is NULL
+ */
+CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32]);
+
+/* Copy the local ephemeral Ed25519 public key (generated at session_phase2_initiate)
+ * into pk_out. Used by the transport layer to publish our sign_pk to the peer
+ * over BLE during the commitment exchange. Available in phase 2 and 3.
+ *
+ * PARAMETERS:
+ *   pk_out: Output buffer for 32-byte local sign_pk (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Local sign_pk populated
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — pk_out is NULL
+ */
+CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32]);
+
+/* Apply a peer-uptime offset (seconds) to the ESL timestamp check.
+ * Computed by the transport layer from a one-shot BLE time-sync characteristic
+ * read. Calling with 0 clears any applied offset.
+ */
+CeePewErr_t session_set_peer_uptime_offset(int32_t offset_s);
+
+/* Read the currently-applied peer-uptime offset (seconds).
+ * Returns 0 if no offset has been set.
+ */
+int32_t session_get_peer_uptime_offset(void);
 
 /* MAC-locking security check (constant-time).
  * Verify frame came from the bound peer (silent discard on mismatch).

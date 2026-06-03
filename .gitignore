@@ -27,3 +27,5 @@ sdkconfig.old
 sdkconfig.production
 CLAUDE.md
 docs/
+opencode.json
+.cache/

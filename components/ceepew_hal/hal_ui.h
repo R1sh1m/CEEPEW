@@ -55,7 +55,9 @@ CeePewErr_t hal_ui_init(void);
 CeePewErr_t hal_ui_clear(void);
 
 /* Flush framebuffer to display (refresh the OLED). Retries once with
- * the SH1106 +2 column offset if the SSD1306 flush fails. */
+ * the SH1106 +2 column offset if the SSD1306 flush fails. If nothing
+ * has been drawn since the last successful flush, this is a no-op
+ * (no I2C traffic). */
 CeePewErr_t hal_ui_flush(void);
 
 /* Set a single pixel at (x, y) */

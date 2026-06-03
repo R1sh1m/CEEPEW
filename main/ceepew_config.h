@@ -78,7 +78,10 @@
 /* -------------------------------------------------------------------------- */
 /* Input / UI                                                                  */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_UI_LOOP_DELAY_MS          30U
+#define CEEPEW_UI_LOOP_DELAY_MS          15U   /* ~60 Hz render cap; worst-case
+                                                   * full-frame I2C push ~6 ms,
+                                                   * leaves ~9 ms of slack per
+                                                   * tick for BLE/session on C1. */
 #define CEEPEW_BUTTON_DEBOUNCE_MS        25U
 #define CEEPEW_DIAG_HOLD_MS              2000U
 #define CEEPEW_DIAG_PAGES                6U
@@ -124,7 +127,11 @@
 /* ESL / Transport / Replay                                                    */
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_REPLAY_WINDOW_SIZE        64U
-#define CEEPEW_TIMESTAMP_SLACK_S         15U
+#define CEEPEW_TIMESTAMP_SLACK_S         45U   /* widened from 15 to tolerate raw-uptime skew
+                                                  * between two devices; WireGuard 64-bit replay
+                                                  * bitmap still catches exact replays within the
+                                                  * wider window. A future BLE time-sync
+                                                  * characteristic will replace this. */
 #define CEEPEW_ESPNOW_CHANNEL            1U
 #define CEEPEW_HOP_CHANNELS              9U
 #define CEEPEW_HOP_SHIFT                 6U

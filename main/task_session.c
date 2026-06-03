@@ -137,6 +137,27 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* Nothing to do once active session is established */
         if (phase == 3U && session_is_active()) {return CEEPEW_OK;}
 
+        /* BLE link-drop detection during the pairing flow. If the user is in
+         * code entry / countdown / confirm and the BLE link has dropped to
+         * IDLE (no GATTC, no GATTS, not connecting), force a UI revert to
+         * PAIRING_FAILED so the device is not stuck on a screen the user
+         * can no longer complete. */
+        bool in_pairing_screen = (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY ||
+                                  g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+                                  g_ui_ctx.current_state == UI_STATE_CONFIRM);
+        if (in_pairing_screen &&
+            ble_state == BLE_IDLE &&
+            !g_ble_ctx.gattc_connected &&
+            !g_ble_ctx.gatts_connected &&
+            !g_ble_ctx.connecting &&
+            peer == NULL) {
+            ESP_LOGW(TAG, "BLE link dropped during pairing flow — reverting UI to PAIRING_FAILED");
+            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+            g_ui_ctx.transition_ready = true;
+            return CEEPEW_OK;
+        }
+
         /* Reset phase-latched flags whenever we drop below their stage. */
         if (phase < 1U) {
             s_ble_peer_latched = false;

@@ -158,8 +158,10 @@ static uint8_t  s_write_attempt                = 0U;
 #define CEEPEW_WRITE_RETRY_DELAY_MS 250U
 
 /* [FIX-2] Responder watchdog: if connected but no commitment arrives in
- *  CEEPEW_RESPONDER_WATCHDOG_MS, restart discovery. */
-#define CEEPEW_RESPONDER_WATCHDOG_MS  35000U
+ *  CEEPEW_RESPONDER_WATCHDOG_MS, restart discovery. Must be ≥ longest
+ *  expected code-entry time × 2. 120s leaves comfortable headroom for
+ *  manual dial-and-confirm flows. */
+#define CEEPEW_RESPONDER_WATCHDOG_MS  120000U
 static uint32_t s_responder_connected_at_ms    = 0U;  /* 0 = watchdog disarmed */
 static bool s_gattc_mtu_ready = false;
 
@@ -865,13 +867,32 @@ CeePewErr_t transport_ble_exchange_commitment(const uint8_t *commitment_digest, 
     CeePewErr_t serr = session_get_commitment_with_sig(signed_commit, &signed_len);
     if (serr != CEEPEW_OK) {
         /* Fallback: if session layer cannot produce signed commitment, fall back to caller-provided digest */
-        for (uint8_t i = 0U; i < (CEEPEW_COMMITMENT_BYTES + 64U); i++) { g_ble_ctx.commitment_digest[i] = 0U; }
+        for (uint8_t i = 0U; i < (CEEPEW_COMMITMENT_BYTES + 64U + 32U); i++) { g_ble_ctx.commitment_digest[i] = 0U; }
         memcpy(g_ble_ctx.commitment_digest, commitment_digest, len);
         g_ble_ctx.local_commitment_len = len;
     } else {
-        for (uint8_t i = 0U; i < (CEEPEW_COMMITMENT_BYTES + 64U); i++) { g_ble_ctx.commitment_digest[i] = 0U; }
+        for (uint8_t i = 0U; i < (CEEPEW_COMMITMENT_BYTES + 64U + 32U); i++) { g_ble_ctx.commitment_digest[i] = 0U; }
         memcpy(g_ble_ctx.commitment_digest, signed_commit, signed_len);
         g_ble_ctx.local_commitment_len = signed_len;
+    }
+
+    /* Append our ephemeral Ed25519 public key so the peer can verify our
+     * commitment signature. Get it via session_get_public_key-like API by
+     * reaching into s_session. sign_pk. (We don't export that field, so use
+     * session_get_commitment_with_sig's signed version — the signature itself
+     * is over the commitment, not the sign_pk.) */
+    {
+        extern CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32]);
+        uint8_t local_pk[32];
+        CeePewErr_t pk_err = session_get_local_sign_pk(local_pk);
+        if (pk_err == CEEPEW_OK &&
+            (uint16_t)g_ble_ctx.local_commitment_len + 32U <=
+                sizeof(g_ble_ctx.commitment_digest)) {
+            memcpy(&g_ble_ctx.commitment_digest[g_ble_ctx.local_commitment_len],
+                   local_pk, 32U);
+            g_ble_ctx.local_commitment_len = (uint8_t)(g_ble_ctx.local_commitment_len + 32U);
+        }
+        ceepew_secure_zero(local_pk, sizeof(local_pk));
     }
 
 #ifdef CONFIG_BT_ENABLED
@@ -946,16 +967,28 @@ CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest, uint8_t 
     if (g_ble_ctx.state != BLE_PAIRING && g_ble_ctx.state != BLE_CONNECTED) {
         return CEEPEW_ERR_PARAM;
     }
-    CEEPEW_ASSERT(len == CEEPEW_COMMITMENT_BYTES || len == CEEPEW_COMMITMENT_LEGACY_BYTES, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(len == CEEPEW_COMMITMENT_BYTES ||
+                  len == CEEPEW_COMMITMENT_LEGACY_BYTES ||
+                  len == (CEEPEW_COMMITMENT_BYTES + 64U + 32U),
+                  CEEPEW_ERR_PARAM);
+
+    /* v2 wire format: commitment[16] || sig[64] || sign_pk[32] = 112 bytes.
+     * The session verifier only needs commitment+sig. If we got 112, hand it
+     * only the first 80 bytes. The sign_pk was already extracted by the
+     * GATTS write handler and forwarded to session_set_peer_public_key(). */
+    uint8_t verifier_len = len;
+    if (verifier_len == (CEEPEW_COMMITMENT_BYTES + 64U + 32U)) {
+        verifier_len = (uint8_t)(CEEPEW_COMMITMENT_BYTES + 64U);
+    }
 
     /* Defensive: record peer length */
     g_ble_ctx.peer_commitment_len = len;
-    g_ble_ctx.peer_commitment_legacy = (len == CEEPEW_COMMITMENT_LEGACY_BYTES);
+    g_ble_ctx.peer_commitment_legacy = (verifier_len == CEEPEW_COMMITMENT_LEGACY_BYTES);
 
      /* Delegate verification (commitment + optional signature) to session layer.
       * session_verify_peer_commitment_with_sig performs constant-time commitment compare
       * and verifies an appended Ed25519 signature if present. */
-     CeePewErr_t verr = session_verify_peer_commitment_with_sig(peer_digest, len);
+     CeePewErr_t verr = session_verify_peer_commitment_with_sig(peer_digest, verifier_len);
      if (verr != CEEPEW_OK) {
          /* Defensive: record failure and log for diagnostics. Do NOT reveal details. */
          g_ble_ctx.verify_fail_count++;
@@ -1271,7 +1304,15 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
                        || g_ble_ctx.handoff_ready
                        || session_is_active();
 
-        const uint32_t PEER_LOST_TIMEOUT_MS = CEEPEW_DISCOVERY_PEER_CLEAR_MS;
+        /* State-aware peer-keep window. While the user is in the pairing
+         * flow (code entry / countdown / confirm / keyder / fingerprint),
+         * the peer does not re-advertise — extending the keep window to
+         * 3 min lets the user take their time dialing the code. */
+        bool in_pairing_flow = (g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY &&
+                                g_ui_ctx.current_state <= UI_STATE_FINGERPRINT_CONFIRM);
+        const uint32_t PEER_LOST_TIMEOUT_MS = in_pairing_flow
+                                              ? CEEPEW_PAIRING_PEER_KEEP_MS
+                                              : CEEPEW_DISCOVERY_PEER_CLEAR_MS;
 
         if (!skip_clear
             && g_ble_ctx.discovered
@@ -1622,8 +1663,11 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         }
 
         if (name_ptr != NULL && found_name_len > 0U) {
-            if (found_name_len > 16U) {
-                found_name_len = 16U;
+            /* Cap at 15, not 16: the name is later copied into
+             * BlePeerRecord_t.name[16] and null-terminated in place.
+             * Capping at 15 keeps the NUL within the 16-byte array. */
+            if (found_name_len > 15U) {
+                found_name_len = 15U;
             }
             memcpy(found_name, name_ptr, found_name_len);
             found_name[found_name_len] = '\0';
@@ -1664,13 +1708,20 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                               payload_has_ceepew_name);
 
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        /* State-aware peer-keep window. While in the pairing flow, the
+         * peer does not re-advertise (manual code entry) so the 20 s
+         * default would yank the peer mid-typing. */
+        bool in_pairing_flow = (g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY &&
+                                g_ui_ctx.current_state <= UI_STATE_FINGERPRINT_CONFIRM);
+        uint32_t keep_ms = in_pairing_flow ? CEEPEW_PAIRING_PEER_KEEP_MS
+                                           : CEEPEW_DISCOVERY_PEER_CLEAR_MS;
         if (g_ble_ctx.discovered &&
             !g_ble_ctx.gattc_connected &&
             !g_ble_ctx.gatts_connected &&
             !g_ble_ctx.commitment_verified &&
             !g_ble_ctx.handoff_ready &&
             !session_is_active() &&
-            !transport_ble_peer_is_recent_at(now_ms, CEEPEW_DISCOVERY_PEER_CLEAR_MS)) {
+            !transport_ble_peer_is_recent_at(now_ms, keep_ms)) {
             ESP_LOGI(TAG, "Cached peer expired after %lu ms — clearing discovery cache",
                      (unsigned long)(now_ms - g_ble_ctx.last_seen_ms));
             transport_ble_clear_discovery_peer_state();
@@ -2225,7 +2276,15 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
              * Otherwise the prepare sequence was cancelled. */
             if (param->exec_write.exec_write_flag) {
                 if (g_ble_ctx.pending_peer_commitment_len == CEEPEW_COMMITMENT_BYTES ||
-                    g_ble_ctx.pending_peer_commitment_len == CEEPEW_COMMITMENT_LEGACY_BYTES) {
+                    g_ble_ctx.pending_peer_commitment_len == CEEPEW_COMMITMENT_LEGACY_BYTES ||
+                    g_ble_ctx.pending_peer_commitment_len == (CEEPEW_COMMITMENT_BYTES + 64U + 32U)) {
+                    /* v2 wire format: extract the peer's sign_pk from the
+                     * tail of the prepare-write buffer if the length is 112. */
+                    if (g_ble_ctx.pending_peer_commitment_len == (CEEPEW_COMMITMENT_BYTES + 64U + 32U)) {
+                        extern CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32]);
+                        (void)session_set_peer_public_key(
+                            &g_ble_ctx.pending_peer_commitment[CEEPEW_COMMITMENT_BYTES + 64U]);
+                    }
                     g_ble_ctx.peer_commitment_pending = true;
                     s_responder_connected_at_ms = 0U;  /* disarm watchdog */
                     ESP_LOGI(TAG, "GATTS: exec write — buffered peer commitment (%u bytes) for deferred verification",
@@ -2301,7 +2360,16 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 
             /* Non-prepare writes (normal short or long writes already assembled by stack) */
             if (!param->write.is_prep && param->write.handle == g_ble_ctx.gatts_char_handle) {
-                if (param->write.len == CEEPEW_COMMITMENT_BYTES || param->write.len == CEEPEW_COMMITMENT_LEGACY_BYTES) {
+                if (param->write.len == CEEPEW_COMMITMENT_BYTES ||
+                    param->write.len == CEEPEW_COMMITMENT_LEGACY_BYTES ||
+                    param->write.len == (CEEPEW_COMMITMENT_BYTES + 64U + 32U)) {
+                    /* v2 wire format: commitment[16] || sig[64] || sign_pk[32] = 112 bytes.
+                     * Extract the sign_pk into the session layer if present. */
+                    if (param->write.len == (CEEPEW_COMMITMENT_BYTES + 64U + 32U)) {
+                        extern CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32]);
+                        (void)session_set_peer_public_key(
+                            &param->write.value[CEEPEW_COMMITMENT_BYTES + 64U]);
+                    }
                     memcpy(g_ble_ctx.pending_peer_commitment, param->write.value, param->write.len);
                     g_ble_ctx.pending_peer_commitment_len = (uint8_t)param->write.len;
                     g_ble_ctx.peer_commitment_pending = true;

@@ -55,6 +55,9 @@ typedef enum {
 
 #define CEEPEW_DISCOVERY_PEER_VISIBLE_MS 15000U
 #define CEEPEW_DISCOVERY_PEER_CLEAR_MS   20000U
+#define CEEPEW_PAIRING_PEER_KEEP_MS      180000U /* 3 min during pairing flow — code
+                                                  * entry can take 30-60s; do not
+                                                  * yank the peer mid-typing. */
 
 /* Peer discovery record (found during scan) */
 typedef struct {
@@ -78,12 +81,12 @@ typedef struct {
     uint8_t        local_mac[6];
     uint8_t        peer_mac[6];
     esp_ble_addr_type_t peer_addr_type;
-    uint8_t        commitment_digest[CEEPEW_COMMITMENT_BYTES + 64];      /* Truncated SHA256(session_code) + optional Ed25519 sig */
+    uint8_t        commitment_digest[CEEPEW_COMMITMENT_BYTES + 64U + 32U]; /* commitment || sig || sign_pk */
     uint8_t        local_commitment_len; /* bytes stored for local commitment */
-    uint8_t        peer_commitment_len;  /* bytes received from peer (8 or 16) */
+    uint8_t        peer_commitment_len;  /* bytes received from peer (8 or 16, plus 64+32 in v2) */
     bool           peer_commitment_legacy; /* true if peer uses legacy 8-byte commit */
     bool           is_initiator_role;     /* true = we opened the GATTC connection */
-    uint8_t        pending_peer_commitment[CEEPEW_COMMITMENT_BYTES + 64];
+    uint8_t        pending_peer_commitment[CEEPEW_COMMITMENT_BYTES + 64U + 32U];
     uint8_t        pending_peer_commitment_len;
     bool           peer_commitment_pending;
     uint8_t        reconnect_attempts;   /* reconnect attempts after disconnect */
