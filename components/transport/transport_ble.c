@@ -334,6 +334,25 @@ static bool transport_ble_peer_is_recent_at(uint32_t now_ms, uint32_t max_age_ms
     return (uint32_t)(now_ms - g_ble_ctx.last_seen_ms) <= max_age_ms;
 }
 
+static const char *transport_ble_hci_reason_name(uint8_t reason)
+{
+    switch (reason) {
+        case 0x05: return "AUTH_FAILURE";
+        case 0x06: return "PIN_OR_KEY_MISSING";
+        case 0x08: return "CONNECTION_TIMEOUT";
+        case 0x13: return "REMOTE_USER_TERMINATED";
+        case 0x14: return "REMOTE_LOW_RESOURCES";
+        case 0x15: return "REMOTE_POWER_OFF";
+        case 0x16: return "LOCAL_HOST_TERMINATED";
+        case 0x1A: return "UNSUPPORTED_REMOTE_FEATURE";
+        case 0x22: return "LMP_RESPONSE_TIMEOUT";
+        case 0x28: return "INSTANT_PASSED";
+        case 0x3B: return "LOCAL_HOST_TERMINATED_CONN";
+        case 0x3E: return "CONN_FAILED_ESTABLISHMENT";
+        default:   return "UNKNOWN";
+    }
+}
+
 static uint8_t transport_ble_reason_from_gatt_status(esp_gatt_status_t status)
 {
     if (status == ESP_GATT_AUTH_FAIL || status == ESP_GATT_INSUF_AUTHENTICATION) {
@@ -1797,6 +1816,18 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         }
     } break;
 
+    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT: {
+        if (!param) { break; }
+        if (param->update_conn_params.status == ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGI(TAG, "Conn params updated: int_min=%d int_max=%d latency=%d timeout=%d",
+                     param->update_conn_params.min_int, param->update_conn_params.max_int,
+                     param->update_conn_params.latency, param->update_conn_params.timeout);
+        } else {
+            ESP_LOGW(TAG, "Conn param update FAILED: status=%d",
+                     param->update_conn_params.status);
+        }
+    } break;
+
     default:
         break;
     }
@@ -2072,7 +2103,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             g_ble_ctx.gattc_connected = false;
             g_ble_ctx.connecting = false;
             g_ble_ctx.gattc_char_handle = 0U;
-            ESP_LOGI(TAG, "GATTC disconnected");
+            ESP_LOGI(TAG, "GATTC disconnected: reason=0x%02x (%s) conn_id=%u",
+                     param->disconnect.reason,
+                     transport_ble_hci_reason_name(param->disconnect.reason),
+                     (unsigned)param->disconnect.conn_id);
 
             /* Accumulate connected duration for current peer */
             {
@@ -2205,11 +2239,26 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             ESP_LOGI(TAG,
                      "GATTS connected: conn_id=%u state=BLE_CONNECTED watchdog_armed",
                      (unsigned)g_ble_ctx.conn_id);
+            {
+                esp_ble_conn_update_params_t cp = {0};
+                memcpy(cp.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+                cp.min_int  = 8;    /* 10 ms  (8  * 1.25 ms) */
+                cp.max_int  = 16;   /* 20 ms  (16 * 1.25 ms) */
+                cp.latency  = 0;
+                cp.timeout  = 200;  /* 4000 ms supervision timeout (200 * 20 ms) */
+                esp_err_t cp_err = esp_ble_gap_update_conn_params(&cp);
+                if (cp_err != ESP_OK) {
+                    ESP_LOGW(TAG, "Conn param update request failed: %d", cp_err);
+                }
+            }
             break;
 
         case ESP_GATTS_DISCONNECT_EVT:
             g_ble_ctx.gatts_connected = false;
-            ESP_LOGI(TAG, "GATTS disconnected");
+            ESP_LOGI(TAG, "GATTS disconnected: reason=0x%02x (%s) conn_id=%u",
+                     param->disconnect.reason,
+                     transport_ble_hci_reason_name(param->disconnect.reason),
+                     (unsigned)param->disconnect.conn_id);
 
            /* Accumulate connected duration for current peer */
            {
@@ -2474,25 +2523,13 @@ uint32_t transport_ble_get_peer_age_ms(void)
 
     /* Copy under lock */
     ble_ctx_lock();
-    uint32_t acc_ms = g_ble_ctx.accumulated_conn_ms;
-    uint32_t gatt_since = g_ble_ctx.gatt_connected_since_ms;
-    uint32_t last_seen = g_ble_ctx.last_seen_ms;
-    bool gatt_connected = (g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected);
+    uint32_t disc_start_ts = g_ble_ctx.discovery_start_ts;
+    bool discovered = g_ble_ctx.discovered;
     ble_ctx_unlock();
 
-    if (gatt_connected && gatt_since != 0U) {
-        uint32_t cur_ms = (now_ms > gatt_since) ? (now_ms - gatt_since) : 0U;
-        if (cur_ms > UINT32_MAX - acc_ms) {
-            age_ms = UINT32_MAX;
-        } else {
-            age_ms = acc_ms + cur_ms;
-        }
-    } else {
-        if (acc_ms != 0U) {
-            age_ms = acc_ms;
-        } else {
-            age_ms = (last_seen == 0U) ? 0U : (now_ms - last_seen);
-        }
+    if (discovered && disc_start_ts != 0U) {
+        /* Total age is time since discovery started */
+        age_ms = (now_ms > (disc_start_ts * 1000U)) ? (now_ms - (disc_start_ts * 1000U)) : 0U;
     }
 
     return age_ms;

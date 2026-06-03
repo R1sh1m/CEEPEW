@@ -152,6 +152,13 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             !g_ble_ctx.connecting &&
             peer == NULL) {
             ESP_LOGW(TAG, "BLE link dropped during pairing flow — reverting UI to PAIRING_FAILED");
+            ESP_LOGW(TAG, "  state=%s adv=%u scan=%u gattc=%u gatts=%u connect=%u committed=%u verified=%u",
+                     task_session_ble_state_name(ble_state),
+                     g_ble_ctx.is_advertising, g_ble_ctx.is_scanning,
+                     g_ble_ctx.gattc_connected, g_ble_ctx.gatts_connected,
+                     g_ble_ctx.connecting,
+                     g_ble_ctx.commitment_verified ? 1U : 0U,
+                     g_ble_ctx.handoff_ready ? 1U : 0U);
             g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
             (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
             g_ui_ctx.transition_ready = true;

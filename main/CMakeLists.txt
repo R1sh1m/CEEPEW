@@ -16,6 +16,7 @@ idf_component_register(
         "test_power.c"
         "test_hop.c"
         "test_transport_hop.c"
+        "test_pairing_handoff.c"
         "integration_test_pairing_ui.c"
     INCLUDE_DIRS
         "."

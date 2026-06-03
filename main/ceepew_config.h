@@ -140,6 +140,7 @@
 #define CEEPEW_COOKIE_ROTATE_S           120U
 #define CEEPEW_COOKIE_BYTES              16U
 #define CEEPEW_MAX_RECONNECT_ATTEMPTS    5U
+#define CEEPEW_RESPONDER_ACK_TIMEOUT_MS  5000U
 
 /* -------------------------------------------------------------------------- */
 /* Region Allocator                                                            */

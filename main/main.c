@@ -144,6 +144,10 @@ void app_main(void){
         esp_restart();  /* Cannot proceed without BLE */
     }
 
+    /* On-device pairing handoff regression test (runs once at boot) */
+    extern void test_pairing_handoff_run(void);
+    test_pairing_handoff_run();
+
     /* BLE advertising/scan start is driven from BLE GATT/GAP events to avoid race conditions */
 
     /* CRITICAL: Initialize region allocator before any pipeline or session use */
