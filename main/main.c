@@ -22,7 +22,6 @@
 #include "hal_pins.h"
 #include "hal_i2c_scanner.h"
 #include "hal_ui.h"
-#include "ssd1306.h"
 #include "ui_manager.h"
 #include "task_arch.h"
 #include "esp_wifi.h"
@@ -82,7 +81,7 @@ void app_main(void){
 
     /* Single init for both the panel and the UI layer. The previous
      * hal_oled_init() / hal_ui_init() pair is now collapsed into one call
-     * because both share the same vendored SSD1306_t device. */
+     * because the UI layer wraps the in-house ceepew_oled panel handle. */
     err = hal_ui_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
@@ -147,6 +146,11 @@ void app_main(void){
     /* On-device pairing handoff regression test (runs once at boot) */
     extern void test_pairing_handoff_run(void);
     test_pairing_handoff_run();
+
+    /* On-device key-convergence + post-derive sync barrier regression
+     * test. Exercises the fixes for the 4 critical pairing bugs. */
+    extern void test_pairing_convergence_run(void);
+    test_pairing_convergence_run();
 
     /* BLE advertising/scan start is driven from BLE GATT/GAP events to avoid race conditions */
 

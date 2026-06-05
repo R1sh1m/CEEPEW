@@ -1,37 +1,26 @@
-/* main/ceepew_assert.h */
+/* components/ceepew_oled/ceepew_assert.h
+ *
+ * Project-wide assert macros and the CeePewErr_t type.
+ *
+ * Lives in the ceepew_oled component (the lowest layer of the
+ * dependency graph) so that:
+ *  - ceepew_oled_gfx_primitives.h can use CeePewErr_t in its public
+ *    function signatures without depending on main.
+ *  - main/, ceepew_hal/, etc. include this header through the normal
+ *    REQUIRES chain. There is no circular REQUIRES in the component
+ *    DAG.
+ *
+ * CeePewErr_t itself is defined in hal_ui_types.h (same component).
+ */
 #ifndef CEEPEW_ASSERT_H
 #define CEEPEW_ASSERT_H
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "hal_ui_types.h"
 
-typedef enum{
-    CEEPEW_OK = 0,
-    CEEPEW_ERR_NULL_PTR = 1,
-    CEEPEW_ERR_BOUNDS = 2,
-    CEEPEW_ERR_PARAM = 3,
-    CEEPEW_ERR_NONCE_EXHAUSTED = 4,
-    CEEPEW_ERR_CRYPTO = 5,
-    CEEPEW_ERR_TRANSPORT = 6,
-    CEEPEW_ERR_FEC = 7,
-    CEEPEW_ERR_PINS = 8,
-    CEEPEW_ERR_ALLOC = 9,
-    CEEPEW_ERR_INTERNAL = 10,
-    CEEPEW_ERR_TIMEOUT = 11,
-    CEEPEW_ERR_OVERFLOW = 12,
-    CEEPEW_ERR_UNSUPPORTED = 13,
-    CEEPEW_ERR_BUSY = 14,
-    CEEPEW_ERR_HW = 15,
-    CEEPEW_ERR_NOENT = 16,
-    CEEPEW_ERR_REPLAY = 17,
-    CEEPEW_ERR_SIG_FAIL = 18,
-    CEEPEW_ERR_MAX_RETRIES = 19,
-    CEEPEW_ERR_AUTH_FAIL = 20,
-    CEEPEW_ERR_FEC_UNCORRECT = 21,
-    CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED = 22
-} CeePewErr_t;
-
-/* Forward declaration for assertion logger. Implemented elsewhere. */
+/* Forward declaration for assertion logger. Implemented in
+ * ceepew_assert.c, also in this component. */
 void ceepew_log_assert(const char *expr, const char *file, int line, CeePewErr_t code);
 
 /* CEEPEW_ASSERT: return 'err' in non-void functions when condition fails. */

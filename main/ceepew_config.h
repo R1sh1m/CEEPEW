@@ -33,7 +33,26 @@
 
 /* Commitment sizes */
 #define CEEPEW_COMMITMENT_BYTES          32U
-#define CEEPEW_COMMITMENT_LEGACY_BYTES   8U
+/* Truncated commitment for advertisement-based exchange.
+ * Fits in 31-byte SCAN_RSP alongside the 8-byte complete name and the
+ * 4-byte manufacturer-data AD header (company 0xCEEE + subtype 0x50):
+ *   8 (name) + 1+1+2+1+2+16 (mfr data) = 31 bytes (after Phase 7).
+ * 128 bits of SHA-256 is sufficient because the 4-digit session code
+ * itself only has 10,000 possible values (~13 bits of entropy). */
+#define CEEPEW_COMMITMENT_ADV_BYTES      16U
+
+/* Beacon replay defense (Bug 2 fix). Each commitment beacon carries a
+ * 2-byte monotonic nonce. The receiver rejects any beacon whose nonce
+ * is not strictly greater than the highest nonce it has previously
+ * accepted from this peer — closing the "first-scan-wins" replay window
+ * where a captured beacon could be re-broadcast by a hostile device.
+ *
+ * Wire layout in the mfr AD payload after the company/subtype header:
+ *   [2B nonce][16B commitment]   (18 bytes payload, 22 with header)
+ * SCAN_RSP budget: 8 (name) + 1+1+2+1+2+16 = 31 bytes — exactly at limit. */
+#define CEEPEW_BEACON_NONCE_BYTES       2U
+#define CEEPEW_BEACON_PAYLOAD_BYTES     (CEEPEW_COMMITMENT_ADV_BYTES + CEEPEW_BEACON_NONCE_BYTES)
+#define CEEPEW_BEACON_MFR_AD_BYTES      (5U + CEEPEW_BEACON_PAYLOAD_BYTES)  /* incl. length+type+company+subtype */
 
 /* -------------------------------------------------------------------------- */
 /* Nonce Safety                                                                */
@@ -62,6 +81,19 @@
 #define CEEPEW_ARQ_MAX_RETRIES           3U
 #define CEEPEW_ARQ_TIMEOUT_MS            500U
 #define CEEPEW_SEQ_WINDOW_SIZE           32U
+
+/* Post-derive sync barrier — 1-byte magic plaintexts exchanged inside the
+ * encrypted ESP-NOW tunnel to verify that crypto_box works in BOTH
+ * directions before the UI advances to PAIRING_SUCCESS. Without this
+ * round-trip, an initiator whose local key derivation succeeds would
+ * transition the UI while the responder was still in PAIRING (Bug 3).
+ *
+ * The magic values are chosen > 0x7F so they can never collide with
+ * ASCII chat text typed by the user. */
+#define CEEPEW_KEY_SYNC_HELLO_BYTE       0xA5U   /* initiator → responder */
+#define CEEPEW_KEY_SYNC_ACK_BYTE         0x5AU   /* responder → initiator */
+#define CEEPEW_KEY_SYNC_TIMEOUT_MS       10000U  /* Give up → PAIRING_FAILED */
+#define CEEPEW_KEY_SYNC_RETRY_MS         250U    /* Initiator retransmit cadence */
 
 /* -------------------------------------------------------------------------- */
 /* Session                                                                     */
@@ -105,6 +137,29 @@
 #define CEEPEW_RGB_ERROR_BLINK_MS        300U   /* Error/nonce_exhausted blink*/
 #define CEEPEW_RGB_REJECT_SEQUENCE_CT    3U     /* Red blinks on fingerprint reject */
 
+/* Pairing Supervisor Watchdog (Event-Driven Architecture)
+ *
+ * Per phase, the supervisor records T_enter and if the phase does not advance
+ * within CEEPEW_PHASE_TIMEOUT_MS, it forces a radio restart. */
+#define CEEPEW_PHASE_TIMEOUT_MS          10000U /* Default per-phase watchdog */
+#define CEEPEW_PHASE_TIMEOUT_CONNECT_MS  8000U  /* CONNECTING phase           */
+#define CEEPEW_PHASE_TIMEOUT_MTU_MS      5000U  /* MTU_NEGOTIATING phase      */
+#define CEEPEW_PHASE_TIMEOUT_DISC_MS     6000U  /* CHAR_DISCOVERING phase     */
+#define CEEPEW_PHASE_TIMEOUT_VERIFY_MS   15000U /* VERIFICATION phase         */
+#define CEEPEW_PHASE_TIMEOUT_GATT_MS     2000U  /* Hybrid-GATT: GATTC_OPEN → write must complete */
+#define CEEPEW_PHASE_TIMEOUT_OVERALL_MS  30000U /* Whole-pairing ceiling      */
+
+/* Pairing event queue depth — small because handlers drain quickly. */
+#define CEEPEW_PAIRING_EVENT_QUEUE_DEPTH 12U
+
+/* Pairing supervisor task parameters */
+#define CEEPEW_SUPERVISOR_PERIOD_MS      500U   /* 2 Hz watchdog tick         */
+#define CEEPEW_SUPERVISOR_PRIORITY       2U     /* Below UI/Session tasks     */
+#define CEEPEW_SUPERVISOR_STACK_BYTES    3072U  /* Local to transport_ble     */
+#define CEEPEW_RECONNECT_JITTER_MIN_MS   200U   /* Reconnect backoff floor    */
+#define CEEPEW_RECONNECT_JITTER_MAX_MS   800U   /* Reconnect backoff ceiling  */
+#define CEEPEW_MAX_RECONNECT_ATTEMPTS    5U     /* From spec: 5 attempts max  */
+
 /* -------------------------------------------------------------------------- */
 /* FEC (Hamming)                                                               */
 /* -------------------------------------------------------------------------- */
@@ -139,7 +194,6 @@
 #define CEEPEW_DOS_QUEUE_THRESHOLD       6U
 #define CEEPEW_COOKIE_ROTATE_S           120U
 #define CEEPEW_COOKIE_BYTES              16U
-#define CEEPEW_MAX_RECONNECT_ATTEMPTS    5U
 #define CEEPEW_RESPONDER_ACK_TIMEOUT_MS  5000U
 
 /* -------------------------------------------------------------------------- */

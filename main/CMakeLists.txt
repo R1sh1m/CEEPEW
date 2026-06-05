@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-        "ceepew_assert.c"
         "ceepew_security_utils.c"
         "session_fsm.c"
         "session_msgstore.c"
@@ -17,11 +16,13 @@ idf_component_register(
         "test_hop.c"
         "test_transport_hop.c"
         "test_pairing_handoff.c"
+        "test_pairing_convergence.c"
         "integration_test_pairing_ui.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         ceepew_hal
+        ceepew_oled
         crypto
         ecc
         compress

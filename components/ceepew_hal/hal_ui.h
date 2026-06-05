@@ -4,11 +4,11 @@
  * Provides primitive drawing (pixels, lines, rects, circles),
  * font rendering, and a simple scene graph for UI composition.
  *
- * The display driver underneath is the vendored ssd1306 component
- * (nopnop2002/esp-idf-ssd1306, MIT, see components/ssd1306/LICENSE).
- * All hal_ui_* drawing primitives write into that driver's internal
- * page buffer; hal_ui_flush() pushes all 8 pages over I2C in
- * page-addressing mode (no malloc, no async queue).
+ * The display driver underneath is the in-house ceepew_oled component
+ * (see components/ceepew_oled/, MIT). All hal_ui_* drawing primitives
+ * write into that driver's framebuffer; hal_ui_flush() pushes the
+ * framebuffer to the panel over I2C using the driver's
+ * ceepew_oled_display() / ceepew_oled_display_sh1106() entry points.
  */
 
 #ifndef HAL_UI_H
@@ -18,7 +18,7 @@
 #include <stdbool.h>
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
-#include "ssd1306.h"
+#include "hal_ui_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,25 +28,15 @@ extern "C" {
 #define HAL_UI_WIDTH_PX   128U
 #define HAL_UI_HEIGHT_PX  64U
 
-/* Color modes (1-bit display: on/off) */
-typedef enum {
-    HAL_UI_BLACK = 0U,
-    HAL_UI_WHITE = 1U,
-    HAL_UI_INVERT = 2U
-} HalUIColor_t;
+/* HalUIColor_t and HalUIRect_t live in hal_ui_types.h so they can be
+ * shared with components/ceepew_oled/ceepew_oled_gfx_primitives.h without
+ * a circular include. */
 
-/* Rectangular region: (x, y) origin, (w, h) size */
-typedef struct {
-    uint8_t  x;
-    uint8_t  y;
-    uint8_t  w;
-    uint8_t  h;
-} HalUIRect_t;
 
-/* Initialize UI subsystem and bring up the OLED panel. Replaces the
- * prior hal_oled_init(); the new flow performs I2C bus recovery, tries
- * the configured (pin × speed × address) matrix, then falls back to a
- * full GPIO-pair scan, all within hal_ui_init().
+
+/* Initialize UI subsystem and bring up the OLED panel. Performs I2C
+ * bus recovery, tries the configured (pin × speed × address) matrix,
+ * then falls back to a full GPIO-pair scan, all within hal_ui_init().
  *
  * Returns CEEPEW_OK on success, CEEPEW_ERR_HW if no SSD1306 was found. */
 CeePewErr_t hal_ui_init(void);
@@ -98,14 +88,6 @@ CeePewErr_t hal_ui_fit_text(const char *src, uint8_t max_px_width, char *out, ui
 
 /* Draw text by inverting pixels over existing background; useful for black-on-white text. */
 CeePewErr_t hal_ui_text_invert(uint8_t x, uint8_t y, const char *str);
-
-/* Return a pointer to the underlying SSD1306_t device (vendored driver).
- * Returns NULL if hal_ui_init has not succeeded. Used by the boot
- * splash in main.c to access charge-pump control and raw I2C commands.
- *
- * Note: callers MUST NOT call ssd1306_init() on the returned device,
- * and MUST NOT modify _i2c_bus_handle / _i2c_dev_handle. */
-SSD1306_t *hal_ui_get_dev(void);
 
 #ifdef __cplusplus
 }

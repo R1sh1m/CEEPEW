@@ -1,27 +1,29 @@
 /* main/test_pairing_handoff.c
  *
- * Regression test for the "optimistic BLE handoff" bug.
+ * Regression test for the beacon-based commitment handshake.
  *
- * Pre-fix behaviour: the initiator flipped handoff_ready / commitment_verified
- * / state = BLE_DONE immediately on receiving a GATTC write ACK for its own
- * commitment. The BLE-stack ACK only proves the responder's GATT layer
- * received the bytes — not that the responder's application verified the
- * session code. The result was the "one device enters chat, the other fails"
- * symptom observed on the bench.
+ * The pairing handshake is now connectionless: each device broadcasts a
+ * 16-byte truncated SHA-256 commitment in SCAN_RSP (manufacturer AD
+ * 0xCEEE/0x50).  The first device to receive a peer beacon calls
+ * transport_ble_verify_pending_commitment() which:
  *
- * Post-fix behaviour: the initiator only promotes to BLE_DONE after
- * peer_verification_result == CEEPEW_VERIFY_OK is observed. The
- * transport_ble_check_verification_result() poll is the single point at which
- * the handoff becomes ready.
+ *   - defers if the local commitment is not yet ready
+ *   - returns CEEPEW_OK on match and sets
+ *       g_ble_ctx.commitment_verified = true
+ *       g_ble_ctx.handoff_ready       = true
+ *       g_ble_ctx.ready_for_chat      = true
+ *       g_ble_ctx.state               = BLE_DONE
+ *   - returns CEEPEW_ERR_AUTH_FAIL on mismatch
  *
- * This test exercises the post-fix path by directly manipulating
- * g_ble_ctx.peer_verification_result and asserting the right outcomes from
- * the public verification API. It does not require a second physical device.
+ * This test exercises the four cases by directly manipulating g_ble_ctx
+ * and asserting the public API.  No second physical device is required.
  */
 
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "transport_ble.h"
+#include "session_fsm.h"
+#include "ui_manager.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <stdint.h>
@@ -41,129 +43,148 @@ static bool handoff_check(bool ok, const char *label)
 }
 
 /*
- * Test 1: A GATTC write ACK alone (no peer verification result observed)
- * must NOT promote the initiator to BLE_DONE / handoff_ready.
- *
- * We simulate this by ensuring peer_verification_pending is set and
- * peer_verification_result remains CEEPEW_VERIFY_PENDING. After polling
- * transport_ble_check_verification_result, handoff_ready must remain false.
+ * Test 1: A pending peer commitment with no local commitment loaded must
+ * DEFER — the call must return CEEPEW_OK and leave handoff_ready false.
  */
-static bool handoff_test_write_ack_does_not_promote(void)
+static bool handoff_test_defers_without_local_commitment(void)
 {
     bool ok = true;
 
-    /* Establish a baseline: clear flags, set pending, leave result at PENDING. */
-    g_ble_ctx.commitment_verified = false;
-    g_ble_ctx.handoff_ready       = false;
-    g_ble_ctx.state               = BLE_PAIRING;
-    g_ble_ctx.peer_verification_pending = true;
-    g_ble_ctx.peer_verification_result  = CEEPEW_VERIFY_PENDING;
-    g_ble_ctx.verification_timeout_ms   = 0U;  /* never time out in this test */
+    g_ble_ctx.commitment_verified        = false;
+    g_ble_ctx.handoff_ready              = false;
+    g_ble_ctx.ready_for_chat             = false;
+    g_ble_ctx.state                      = BLE_PAIRING;
+    g_ble_ctx.local_commitment_len       = 0U;
+    memset(g_ble_ctx.commitment_digest, 0U, sizeof(g_ble_ctx.commitment_digest));
+    g_ble_ctx.peer_commitment_pending    = true;
+    g_ble_ctx.pending_peer_commitment_len = CEEPEW_COMMITMENT_ADV_BYTES;
+    memset(g_ble_ctx.pending_peer_commitment, 0xAAU, CEEPEW_COMMITMENT_ADV_BYTES);
 
-    /* Poll the verification-result watchdog. It must NOT promote handoff. */
-    CeePewErr_t err = transport_ble_check_verification_result();
-    ok &= handoff_check(err == CEEPEW_OK, "poll returns OK while result is PENDING");
+    CeePewErr_t err = transport_ble_verify_pending_commitment();
+    ok &= handoff_check(err == CEEPEW_OK, "deferred verification returns OK");
+    ok &= handoff_check(g_ble_ctx.peer_commitment_pending,
+                        "peer_commitment_pending stays true while deferred");
     ok &= handoff_check(!g_ble_ctx.commitment_verified,
-                        "commitment_verified stays false on PENDING");
+                        "commitment_verified stays false while deferred");
     ok &= handoff_check(!g_ble_ctx.handoff_ready,
-                        "handoff_ready stays false on PENDING");
-    ok &= handoff_check(g_ble_ctx.state == BLE_PAIRING,
-                        "state stays BLE_PAIRING on PENDING");
+                        "handoff_ready stays false while deferred");
+    ok &= handoff_check(!transport_ble_handoff_ready(),
+                        "transport_ble_handoff_ready() returns false while deferred");
 
     return ok;
 }
 
 /*
- * Test 2: A CEEPEW_VERIFY_OK result must promote the initiator to
- * BLE_DONE / handoff_ready, but only via the verification-result path
- * (NOT via a write-ACK path that the bug fix removed).
+ * Test 2: Matching beacon commitments must PROMOTE the device to
+ * BLE_DONE / handoff_ready / commitment_verified.
  */
-static bool handoff_test_ok_result_promotes(void)
+static bool handoff_test_matching_beacon_promotes(void)
 {
     bool ok = true;
 
-    g_ble_ctx.commitment_verified = false;
-    g_ble_ctx.handoff_ready       = false;
-    g_ble_ctx.state               = BLE_PAIRING;
-    g_ble_ctx.peer_verification_pending = true;
-    g_ble_ctx.peer_verification_result  = CEEPEW_VERIFY_OK;
-    g_ble_ctx.verification_timeout_ms   = 0U;
+    uint8_t shared_commitment[CEEPEW_COMMITMENT_ADV_BYTES];
+    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_ADV_BYTES; i++) {
+        shared_commitment[i] = (uint8_t)(0x10U + i);
+    }
 
-    CeePewErr_t err = transport_ble_check_verification_result();
-    ok &= handoff_check(err == CEEPEW_OK, "poll returns OK on VERIFY_OK");
+    g_ble_ctx.commitment_verified          = false;
+    g_ble_ctx.handoff_ready                = false;
+    g_ble_ctx.ready_for_chat               = false;
+    g_ble_ctx.state                        = BLE_ADVERTISING_AND_SCANNING;
+    g_ble_ctx.local_commitment_len         = CEEPEW_COMMITMENT_ADV_BYTES;
+    memcpy(g_ble_ctx.commitment_digest, shared_commitment,
+           CEEPEW_COMMITMENT_ADV_BYTES);
+    g_ble_ctx.peer_commitment_pending      = true;
+    g_ble_ctx.pending_peer_commitment_len  = CEEPEW_COMMITMENT_ADV_BYTES;
+    memcpy(g_ble_ctx.pending_peer_commitment, shared_commitment,
+           CEEPEW_COMMITMENT_ADV_BYTES);
+
+    CeePewErr_t err = transport_ble_verify_pending_commitment();
+    ok &= handoff_check(err == CEEPEW_OK, "matching beacon returns OK");
     ok &= handoff_check(g_ble_ctx.commitment_verified,
-                        "commitment_verified flipped to true on VERIFY_OK");
+                        "commitment_verified set on match");
     ok &= handoff_check(g_ble_ctx.handoff_ready,
-                        "handoff_ready flipped to true on VERIFY_OK");
-    ok &= handoff_check(!g_ble_ctx.peer_verification_pending,
-                        "peer_verification_pending cleared on VERIFY_OK");
+                        "handoff_ready set on match");
+    ok &= handoff_check(g_ble_ctx.ready_for_chat,
+                        "ready_for_chat set on match");
+    ok &= handoff_check(g_ble_ctx.state == BLE_DONE,
+                        "state advanced to BLE_DONE on match");
+    ok &= handoff_check(!g_ble_ctx.peer_commitment_pending,
+                        "peer_commitment_pending cleared on match");
     ok &= handoff_check(transport_ble_handoff_ready(),
-                        "transport_ble_handoff_ready() returns true after OK");
+                        "transport_ble_handoff_ready() returns true after match");
 
     return ok;
 }
 
 /*
- * Test 3: A CEEPEW_VERIFY_MISMATCH result must NOT promote; it must return
- * CEEPEW_ERR_AUTH_FAIL so the caller (task_session) can transition to
- * UI_STATE_PAIRING_FAILED.
+ * Test 3: Mismatching beacon commitments must FAIL the verification and
+ * return CEEPEW_ERR_AUTH_FAIL.  The UI state machine handles the user-
+ * facing failure transition; we assert that the BLE state does NOT advance.
  */
 static bool handoff_test_mismatch_does_not_promote(void)
 {
     bool ok = true;
 
-    g_ble_ctx.commitment_verified = false;
-    g_ble_ctx.handoff_ready       = false;
-    g_ble_ctx.state               = BLE_PAIRING;
-    g_ble_ctx.peer_verification_pending = true;
-    g_ble_ctx.peer_verification_result  = CEEPEW_VERIFY_MISMATCH;
-    g_ble_ctx.verify_fail_count         = 0U;
-    g_ble_ctx.verification_timeout_ms   = 0U;
+    uint8_t local_commitment[CEEPEW_COMMITMENT_ADV_BYTES];
+    uint8_t peer_commitment[CEEPEW_COMMITMENT_ADV_BYTES];
+    for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_ADV_BYTES; i++) {
+        local_commitment[i] = (uint8_t)(0x20U + i);
+        peer_commitment[i]  = (uint8_t)(0x90U + i);
+    }
 
-    CeePewErr_t err = transport_ble_check_verification_result();
+    g_ble_ctx.commitment_verified          = false;
+    g_ble_ctx.handoff_ready                = false;
+    g_ble_ctx.ready_for_chat               = false;
+    g_ble_ctx.state                        = BLE_ADVERTISING_AND_SCANNING;
+    g_ble_ctx.local_commitment_len         = CEEPEW_COMMITMENT_ADV_BYTES;
+    memcpy(g_ble_ctx.commitment_digest, local_commitment,
+           CEEPEW_COMMITMENT_ADV_BYTES);
+    g_ble_ctx.peer_commitment_pending      = true;
+    g_ble_ctx.pending_peer_commitment_len  = CEEPEW_COMMITMENT_ADV_BYTES;
+    memcpy(g_ble_ctx.pending_peer_commitment, peer_commitment,
+           CEEPEW_COMMITMENT_ADV_BYTES);
+
+    CeePewErr_t err = transport_ble_verify_pending_commitment();
     ok &= handoff_check(err == CEEPEW_ERR_AUTH_FAIL,
-                        "poll returns ERR_AUTH_FAIL on MISMATCH");
+                        "mismatching beacon returns ERR_AUTH_FAIL");
     ok &= handoff_check(!g_ble_ctx.commitment_verified,
-                        "commitment_verified stays false on MISMATCH");
+                        "commitment_verified stays false on mismatch");
     ok &= handoff_check(!g_ble_ctx.handoff_ready,
-                        "handoff_ready stays false on MISMATCH");
-    ok &= handoff_check(!g_ble_ctx.peer_verification_pending,
-                        "peer_verification_pending cleared on MISMATCH");
-    ok &= handoff_check(g_ble_ctx.verify_fail_count == 1U,
-                        "verify_fail_count incremented on MISMATCH");
+                        "handoff_ready stays false on mismatch");
+    ok &= handoff_check(!g_ble_ctx.ready_for_chat,
+                        "ready_for_chat stays false on mismatch");
+    ok &= handoff_check(g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING,
+                        "state stays BLE_ADVERTISING_AND_SCANNING on mismatch");
     ok &= handoff_check(!transport_ble_handoff_ready(),
-                        "transport_ble_handoff_ready() returns false on MISMATCH");
+                        "transport_ble_handoff_ready() returns false on mismatch");
 
     return ok;
 }
 
 /*
- * Test 4: A verification-result timeout must return CEEPEW_ERR_HW so the
- * caller can fail over to UI_STATE_PAIRING_FAILED with reason LINK_FAIL.
+ * Test 4: No pending peer commitment → the call is a no-op and returns
+ * CEEPEW_OK.  This is the expected state between beacon exchanges.
  */
-static bool handoff_test_timeout_does_not_promote(void)
+static bool handoff_test_no_pending_returns_ok(void)
 {
     bool ok = true;
 
-    g_ble_ctx.commitment_verified = false;
-    g_ble_ctx.handoff_ready       = false;
-    g_ble_ctx.state               = BLE_PAIRING;
-    g_ble_ctx.peer_verification_pending = true;
-    g_ble_ctx.peer_verification_result  = CEEPEW_VERIFY_PENDING;
-    g_ble_ctx.verify_fail_count         = 0U;
-    /* Force timeout by setting verification_timeout_ms to a value already in the past. */
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-    g_ble_ctx.verification_timeout_ms = (now_ms > 0U) ? (now_ms - 1U) : 0U;
+    g_ble_ctx.commitment_verified     = false;
+    g_ble_ctx.handoff_ready           = false;
+    g_ble_ctx.ready_for_chat          = false;
+    g_ble_ctx.state                   = BLE_ADVERTISING_AND_SCANNING;
+    g_ble_ctx.local_commitment_len    = CEEPEW_COMMITMENT_ADV_BYTES;
+    g_ble_ctx.peer_commitment_pending = false;
+    g_ble_ctx.pending_peer_commitment_len = 0U;
 
-    CeePewErr_t err = transport_ble_check_verification_result();
-    ok &= handoff_check(err == CEEPEW_ERR_HW,
-                        "poll returns ERR_HW on verification timeout");
+    CeePewErr_t err = transport_ble_verify_pending_commitment();
+    ok &= handoff_check(err == CEEPEW_OK,
+                        "no pending commitment returns OK");
     ok &= handoff_check(!g_ble_ctx.commitment_verified,
-                        "commitment_verified stays false on timeout");
+                        "commitment_verified stays false on no-op");
     ok &= handoff_check(!g_ble_ctx.handoff_ready,
-                        "handoff_ready stays false on timeout");
-    ok &= handoff_check(g_ble_ctx.verify_fail_count == 1U,
-                        "verify_fail_count incremented on timeout");
+                        "handoff_ready stays false on no-op");
 
     return ok;
 }
@@ -171,23 +192,30 @@ static bool handoff_test_timeout_does_not_promote(void)
 /* Public entry point. */
 void test_pairing_handoff_run(void)
 {
-    ESP_LOGI(TAG, "=== Pairing handoff regression test ===");
+    ESP_LOGI(TAG, "=== Pairing handoff (beacon) test ===");
+
+    /* Save the entire BLE context before any test mutates it. */
+    BleContext_t saved_ctx;
+    memcpy(&saved_ctx, &g_ble_ctx, sizeof(BleContext_t));
 
     uint32_t passed = 0U, failed = 0U;
     bool ok;
 
-    ok = handoff_test_write_ack_does_not_promote();
+    ok = handoff_test_defers_without_local_commitment();
     passed += ok ? 1U : 0U; failed += ok ? 0U : 1U;
 
-    ok = handoff_test_ok_result_promotes();
+    ok = handoff_test_matching_beacon_promotes();
     passed += ok ? 1U : 0U; failed += ok ? 0U : 1U;
 
     ok = handoff_test_mismatch_does_not_promote();
     passed += ok ? 1U : 0U; failed += ok ? 0U : 1U;
 
-    ok = handoff_test_timeout_does_not_promote();
+    ok = handoff_test_no_pending_returns_ok();
     passed += ok ? 1U : 0U; failed += ok ? 0U : 1U;
 
-    ESP_LOGI(TAG, "Pairing handoff test summary: passed=%u failed=%u",
+    /* Restore BLE context — zero side effects on production state. */
+    memcpy(&g_ble_ctx, &saved_ctx, sizeof(BleContext_t));
+
+    ESP_LOGI(TAG, "Pairing handoff test summary: passed=%u failed=%u (g_ble_ctx restored)",
              (unsigned)passed, (unsigned)failed);
 }

@@ -184,11 +184,75 @@ CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32]);
  */
 CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32]);
 
+/* Copy the 32-byte human-verified session code into out. Used by the
+ * transport layer to derive the GATT-side sign_pk encryption key (see
+ * transport_ble_gatt_crypto.c). The session code is the trust anchor:
+ * both peers must enter the same value at pairing time, so the derived
+ * key is identical at both ends without any key exchange.
+ *
+ * Available in phase 2 and 3.
+ *
+ * PARAMETERS:
+ *   out: Output buffer for 32-byte session code (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Session code populated
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — out is NULL
+ */
+CeePewErr_t session_get_session_code(uint8_t out[32]);
+
 /* Apply a peer-uptime offset (seconds) to the ESL timestamp check.
  * Computed by the transport layer from a one-shot BLE time-sync characteristic
  * read. Calling with 0 clears any applied offset.
  */
 CeePewErr_t session_set_peer_uptime_offset(int32_t offset_s);
+
+/* Set the initiator/responder role for this session. Must be called
+ * BEFORE session_phase2_derive_key() so the nonce counter starts at the
+ * correct parity (initiator: even, responder: odd). Both peers compute
+ * the same role from the same MAC ordering — no network exchange needed.
+ *
+ * PARAMETERS:
+ *   initiator: true if local MAC < peer MAC
+ *
+ * RETURNS:
+ *   CEEPEW_OK
+ */
+CeePewErr_t session_set_role(bool initiator);
+
+/* Get the current role assignment (true = initiator, false = responder).
+ * Returns false if role has not been set. */
+bool session_get_role(void);
+
+/* Mark the post-derive sync barrier as cleared. Called by the session
+ * task after an encrypted MSG_TYPE_KEY_ACK round-trip has been verified.
+ * Until this is set, the FSM must NOT transition the UI to PAIRING_SUCCESS.
+ *
+ * Idempotent. Returns CEEPEW_OK.
+ */
+CeePewErr_t session_mark_sync_barrier_cleared(void);
+
+/* Has the post-derive sync barrier been cleared? Used by the session
+ * task to gate the UI transition to PAIRING_SUCCESS. */
+bool session_sync_barrier_cleared(void);
+
+/* Drive the post-derive sync exchange. Call from the session task main
+ * loop while in phase 3 and the sync barrier is uncleared. The initiator
+ * retransmits a 1-byte HELLO inside the encrypted tunnel until the
+ * responder's ACK arrives or CEEPEW_KEY_SYNC_TIMEOUT_MS elapses.
+ *
+ * Returns CEEPEW_ERR_TIMEOUT if the deadline has passed (caller should
+ * transition to PAIRING_FAILED), CEEPEW_OK otherwise. */
+CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms);
+
+/* Called by the session task's RX path when a 1-byte post-derive sync
+ * payload is decoded. Routes the byte to the appropriate handler:
+ *   CEEPEW_KEY_SYNC_HELLO_BYTE → mark cleared, return CEEPEW_ERR_NEED_TX
+ *                                (caller should send the ACK)
+ *   CEEPEW_KEY_SYNC_ACK_BYTE   → mark cleared, return CEEPEW_OK
+ *   anything else              → return CEEPEW_ERR_PARAM (ignored) */
+CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte);
 
 /* Read the currently-applied peer-uptime offset (seconds).
  * Returns 0 if no offset has been set.
@@ -220,6 +284,18 @@ CeePewErr_t session_mac_lock_check(const uint8_t peer_mac[6]);
  *   CEEPEW_OK — Session ended and cleaned up
  */
 CeePewErr_t session_end(void);
+
+/* Reset session FSM from pairing phase back to discovery (phase 1).
+ * Calls session_end() to securely zero all key material, then
+ * re-initialises Phase 1 with the stored local device ID so the
+ * device is immediately ready to re-discover and re-pair.
+ * Safe to call from any phase; idempotent when phase == 1.
+ *
+ * RETURNS:
+ *   CEEPEW_OK  — Session reset to discovery
+ *   CEEPEW_ERR — Session phase unknown (pre-1, or re-init failed)
+ */
+CeePewErr_t session_reset_to_discovery(void);
 
 /* Phase 4: Secure wipe triggered by TTL expiry or nonce exhaustion.
  * Securely zeros all key material, resets region allocator,

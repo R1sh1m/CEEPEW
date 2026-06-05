@@ -26,7 +26,7 @@ idf_component_register(
     REQUIRES
         main
         crypto
-        ssd1306
+        ceepew_oled
         esp_driver_gpio
         esp_driver_ledc
         esp_adc
