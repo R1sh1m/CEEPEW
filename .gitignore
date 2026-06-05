@@ -29,3 +29,6 @@ CLAUDE.md
 docs/
 opencode.json
 .cache/
+verify_handoff_fix.ps1
+sdkconfig.production
+skills-lock.json
