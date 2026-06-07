@@ -25,7 +25,7 @@
  *    bring-up (ceepew_oled_multi_attempt), and a last-ditch GPIO-pair
  *    scan (ceepew_oled_scan_all_pins) are exposed for the boot path.
  *
- * License: MIT (see components/ceepew_oled/LICENSE).
+ * License: GPL-3.0-only (see /LICENSE).
  *
  * I2C transport patterns derived from the public-domain
  * nopnop2002/esp-idf-ssd1306 reference implementation (MIT) and adapted

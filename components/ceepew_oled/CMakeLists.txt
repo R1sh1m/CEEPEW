@@ -3,7 +3,6 @@ idf_component_register(
         "ceepew_oled.c"
         "ceepew_oled_gfx_primitives.c"
         "ceepew_oled_font_adapter.c"
-        "ceepew_assert.c"
     INCLUDE_DIRS
         "include"
         "."
@@ -13,4 +12,6 @@ idf_component_register(
         esp_driver_i2c
         esp_timer
         esp_common
+    PRIV_REQUIRES
+        main
 )

@@ -19,8 +19,7 @@
  *     ceepew_oled_font_adapter.c, which exposes Adafruit_GFX's GFXfont
  *     format but consumes the existing s_font5x7 byte data.
  *
- * Functions derived from Adafruit_GFX.cpp (BSD-2-Clause) — see the
- * component LICENSE file.
+ * Functions derived from Adafruit_GFX.cpp (BSD-2-Clause).
  */
 
 #ifndef CEEPEW_OLED_GFX_PRIMITIVES_H

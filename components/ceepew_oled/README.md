@@ -287,7 +287,7 @@ Defined at the top of `ceepew_oled.c` (file-static `#define`s):
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+GPL-3.0-only. See [`/LICENSE`](../../LICENSE).
 
 ## Provenance
 

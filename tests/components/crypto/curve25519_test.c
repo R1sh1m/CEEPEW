@@ -1,17 +1,21 @@
-/* components/crypto/curve25519_test.c */
+/* tests/components/crypto/curve25519_test.c
+ *
+ * Self-test for X25519 using RFC7748 test vectors. Invoked from
+ * tests/main/integration_test_e2e.c:integration_tests_run_all() via
+ * the curve25519_selftest_run() entry point. No constructor — the
+ * diagnostic harness drives the call deterministically.
+ *
+ * The file is gated by CEEPEW_ENABLE_SELFTEST which is defined in
+ * tests/CMakeLists.txt when CONFIG_CEEPEW_BUILD_TESTS is on. The
+ * source lives in tests/ so it does NOT enter the production binary
+ * (tests/CMakeLists.txt registers SRCS "" when the option is off).
+ */
 
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include "curve25519.h"
 #include "ceepew_assert.h"
-
-/* Self-test for X25519 using RFC7748 test vectors.
-   To enable run-time execution of these tests, define CEEPEW_ENABLE_SELFTEST
-   in the project build (e.g., add -DCEEPEW_ENABLE_SELFTEST to compiler flags
-   or set it in sdkconfig as a component CFLAGS). Tests will log results via
-   printf. They do not abort the build on failure.
-*/
 
 #ifdef CEEPEW_ENABLE_SELFTEST
 
@@ -22,7 +26,7 @@ static int hex2bin(const char *hex, uint8_t *out, size_t outlen) {
         char a = hex[2*i];
         char b = hex[2*i+1];
         uint8_t va = (a >= '0' && a <= '9') ? (a - '0') : (a >= 'a' && a <= 'f') ? (10 + a - 'a') : (a >= 'A' && a <= 'F') ? (10 + a - 'A') : 255;
-        uint8_t vb = (b >= '0' && b <= '9') ? (b - '0') : (b >= 'a' && b <= 'f') ? (10 + b - 'a') : (b >= 'A' && b <= 'F') ? (10 + b - 'A') : 255;
+        uint8_t vb = (b >= '0' && b <= '9') ? (b - '0') : (b >= 'a' && a <= 'f') ? (10 + b - 'a') : (b >= 'A' && b <= 'F') ? (10 + b - 'A') : 255;
         if (va == 255 || vb == 255) return -2;
         out[i] = (uint8_t)((va << 4) | vb);
     }
@@ -59,9 +63,7 @@ static void run_vector(const char *label, const char *k_hex, const char *u_hex, 
     }
 }
 
-/* Run tests at startup via constructor attribute so user can just build and
-   run firmware to see results. Guarded by CEEPEW_ENABLE_SELFTEST. */
-__attribute__((constructor)) static void curve25519_selftest(void) {
+void curve25519_selftest_run(void) {
     printf("CEEPEW: Running X25519 RFC7748 self-tests\n");
 
     /* RFC7748 test vector 1 */

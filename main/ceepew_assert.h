@@ -1,16 +1,17 @@
-/* components/ceepew_oled/ceepew_assert.h
+/* main/ceepew_assert.h
  *
  * Project-wide assert macros and the CeePewErr_t type.
  *
- * Lives in the ceepew_oled component (the lowest layer of the
- * dependency graph) so that:
- *  - ceepew_oled_gfx_primitives.h can use CeePewErr_t in its public
- *    function signatures without depending on main.
- *  - main/, ceepew_hal/, etc. include this header through the normal
- *    REQUIRES chain. There is no circular REQUIRES in the component
- *    DAG.
+ * Hosted in main/ so all components can include it without depending on
+ * the OLED driver. Previously lived in components/ceepew_oled/. The
+ * implementation of ceepew_log_assert() is in main/ceepew_assert.c.
  *
- * CeePewErr_t itself is defined in hal_ui_types.h (same component).
+ * CeePewErr_t itself is defined in hal_ui_types.h (components/ceepew_oled).
+ * We keep the transitive include here intentionally: ~100 TUs in the
+ * codebase use CeePewErr_t without including hal_ui_types.h directly,
+ * so removing the include would require a separate sweep. The cost
+ * of the transitive include is one extra preprocessor pass per TU
+ * and zero runtime cost.
  */
 #ifndef CEEPEW_ASSERT_H
 #define CEEPEW_ASSERT_H
@@ -20,7 +21,7 @@
 #include "hal_ui_types.h"
 
 /* Forward declaration for assertion logger. Implemented in
- * ceepew_assert.c, also in this component. */
+ * main/ceepew_assert.c. */
 void ceepew_log_assert(const char *expr, const char *file, int line, CeePewErr_t code);
 
 /* CEEPEW_ASSERT: return 'err' in non-void functions when condition fails. */

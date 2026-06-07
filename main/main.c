@@ -144,6 +144,7 @@ void app_main(void){
     }
 
     /* On-device pairing handoff regression test (runs once at boot) */
+#if CONFIG_CEEPEW_BUILD_TESTS
     extern void test_pairing_handoff_run(void);
     test_pairing_handoff_run();
 
@@ -151,6 +152,7 @@ void app_main(void){
      * test. Exercises the fixes for the 4 critical pairing bugs. */
     extern void test_pairing_convergence_run(void);
     test_pairing_convergence_run();
+#endif /* CONFIG_CEEPEW_BUILD_TESTS */
 
     /* BLE advertising/scan start is driven from BLE GATT/GAP events to avoid race conditions */
 

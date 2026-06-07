@@ -1,0 +1,21 @@
+menu "CEE-PEW Build Options"
+
+    config CEEPEW_BUILD_TESTS
+        bool "Diagnostic Mode (build & auto-run internal test suite)"
+        default n
+        help
+            Compile the internal test suite under tests/ and auto-run
+            it on boot. A "=== DIAGNOSTIC REPORT ===" block is printed
+            to the serial console. Production builds MUST leave this
+            disabled (default).
+
+    config CEEPEW_OLED_FORCE_FAST_FALLBACK
+        bool "Force 800 kHz Fm+ OLED fallback at boot"
+        default n
+        help
+            Compile-time opt-in to use the 800 kHz Fast-mode-plus
+            fallback path in components/ceepew_oled at panel init
+            time, instead of probing for it reactively. Useful in
+            production for known-good wiring; off by default.
+
+endmenu

@@ -5,7 +5,7 @@
  * font rendering, and a simple scene graph for UI composition.
  *
  * The display driver underneath is the in-house ceepew_oled component
- * (see components/ceepew_oled/, MIT). All hal_ui_* drawing primitives
+ * (see components/ceepew_oled/, GPL-3.0-only). All hal_ui_* drawing primitives
  * write into that driver's framebuffer; hal_ui_flush() pushes the
  * framebuffer to the panel over I2C using the driver's
  * ceepew_oled_display() / ceepew_oled_display_sh1106() entry points.

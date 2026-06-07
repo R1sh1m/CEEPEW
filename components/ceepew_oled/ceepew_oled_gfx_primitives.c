@@ -6,8 +6,7 @@
  * circle, bitmap blit) are derived from the BSD-2-Clause Adafruit_GFX
  * library. They are pure-C ports that write directly into the
  * ceepew_oled framebuffer, with no vtable dispatch, no C++ runtime,
- * and no dynamic allocation. See components/ceepew_oled/LICENSE for
- * the full license notice.
+ * and no dynamic allocation.
  *
  * The font rendering (write() for a GFXfont) uses the column-major
  * "classic 5x7" pixel order that matches both Adafruit's glcdfont.c

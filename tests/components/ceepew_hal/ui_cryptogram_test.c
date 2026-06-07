@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "ui_manager.h"
 #include "hal_ui.h"
+#include "session_msgstore.h"
 #include "../transport/transport_ble.h"
 
 #ifdef CEEPEW_ENABLE_SELFTEST
@@ -21,7 +22,7 @@ __attribute__((weak)) CeePewErr_t session_get_commitment(uint8_t commitment[CEEP
     return CEEPEW_OK;
 }
 
-__attribute__((constructor)) static void ui_cryptogram_selftest(void)
+void ui_cryptogram_selftest_run(void)
 {
     printf("CEEPEW: ui_cryptogram selftest start\n");
 

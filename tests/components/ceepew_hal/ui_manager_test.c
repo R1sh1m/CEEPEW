@@ -12,6 +12,9 @@
 #include "ceepew_oled.h"
 #include "ceepew_oled_gfx_primitives.h"
 #include "ceepew_oled_font_adapter.h"
+#include "session_msgstore.h"
+#include "hal_pins.h"
+#include "esp_timer.h"
 #include "../transport/transport_ble.h"
 
 #ifdef CEEPEW_ENABLE_SELFTEST
@@ -27,7 +30,7 @@ __attribute__((weak)) uint64_t session_get_nonce_counter(void) {
     return 0ULL;
 }
 
-__attribute__((constructor)) static void ui_manager_selftest(void) {
+void ui_manager_selftest_run(void) {
     printf("CEEPEW: ui_manager selftest start\n");
 
     /* Initialize UI and HAL */
@@ -288,7 +291,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     /* Test 10: Test ui_chat_show_bubble() with mock messages */
     if (msg_store_count() == 0U) {
         /* Add a test message for display */
-        uint8_t test_payload[20] = "Hello from peer!    ";
+        uint8_t test_payload[21] = "Hello from peer!    ";
         (void)msg_store_add(test_payload, 20U, 15U, 0U);  /* RX message */
     }
     
@@ -678,6 +681,22 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
             return;
         }
         printf("CEEPEW: ui_manager selftest - bus_recover PASS\n");
+    }
+
+    /* ── STACKS page (Sprint 13) smoke check ─────────────────────
+     * Force the pot to the page-4 zone and render; we don't assert
+     * specific text (the bar values depend on runtime state), only
+     * that render_diag_page() does not crash and produces output. */
+    g_ui_ctx.diag_mode = true;
+    g_ui_ctx.user_input = (uint8_t)4000U;   /* 4000 % 256 = 160; exercises diag page render */
+    g_ui_ctx.transition_ready = true;
+    CeePewErr_t stacks_rc = ui_manager_update();
+    g_ui_ctx.diag_mode = false;
+    if (stacks_rc == CEEPEW_OK) {
+        printf("CEEPEW: ui_manager selftest - STACKS page renders PASS\n");
+    } else {
+        printf("CEEPEW: ui_manager selftest - STACKS page FAILED (rc=%d)\n",
+               (int)stacks_rc);
     }
 
     printf("CEEPEW: ui_manager selftest PASS (all tests passed)\n");

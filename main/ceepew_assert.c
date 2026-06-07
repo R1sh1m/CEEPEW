@@ -1,8 +1,8 @@
-/* components/ceepew_oled/ceepew_assert.c
+/* main/ceepew_assert.c
  *
  * Implementation of ceepew_log_assert, the logger called by every
- * CEEPEW_ASSERT macro site. Lives in ceepew_oled so that the lowest
- * layer of the component DAG owns the error reporting code.
+ * CEEPEW_ASSERT macro site. Hosted in main/ so all components can
+ * link against it without depending on the OLED driver.
  *
  * CEEPEW_DEBUG_SERIAL is defined globally via -D in the project's
  * CMake toolchain file (and gated by main/ceepew_config.h). We use

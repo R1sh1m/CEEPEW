@@ -13,7 +13,7 @@
  *    i2c_master_bus_rm_device() lifecycle. (Today, the only caller
  *    is hal_ui.c, which keeps the bus alive for the entire session.)
  *
- * License: MIT. See components/ceepew_oled/LICENSE.
+ * License: GPL-3.0-only. See /LICENSE.
  */
 
 #include "ceepew_oled.h"

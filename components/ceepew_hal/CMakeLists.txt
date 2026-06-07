@@ -11,13 +11,13 @@ idf_component_register(
         "hal_radio.c"
         "hal_rgb.c"
         "hal_rng.c"
+        "hal_temp.c"
         "hal_timer.c"
         "hal_ui.c"
         "hal_ui_helpers.c"
         "layout.c"
 
         "ui_manager.c"
-        "ui_manager_test.c"
         "task_arch.c"
         "hal_power.c"
     INCLUDE_DIRS
