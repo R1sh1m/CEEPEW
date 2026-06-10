@@ -568,7 +568,7 @@ esp_err_t ceepew_oled_bus_bringup(gpio_num_t sda, gpio_num_t scl,
         /* Synchronous mode: no async queue, every i2c_master_transmit()
          * blocks until the physical transfer completes. Prevents the
          * async queue overflow that caused hangs in the prior driver. */
-        .trans_queue_depth     = 1U,
+        .trans_queue_depth     = 0U,
         .flags = {
             .enable_internal_pullup = 1U,
             .allow_pd               = 0U,
