@@ -87,10 +87,13 @@ CeePewErr_t session_phase2_derive_key(void);
 
 /* Enforce nonce limit before every encryption operation.
  * SECURITY: Must be called BEFORE every call to crypto_box or crypto_ascon_aead_encrypt.
- * Increments nonce_counter AFTER checking limit.
+ * Increments nonce_counter by 2 AFTER checking limit, preserving parity:
+ *   initiator uses even nonces (0,2,4,...), responder uses odd (1,3,5,...).
+ * Both nonce sequences are guaranteed disjoint — no collision possible.
  *
  * RETURNS:
  *   CEEPEW_OK — Nonce counter incremented, safe to encrypt
+ *   CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED — Counter >= 90% of hard limit
  *   CEEPEW_ERR_NONCE_EXHAUSTED — Nonce counter >= CEEPEW_NONCE_HARD_LIMIT
  *   CEEPEW_ERR_PARAM — Not in phase 3 or session not active
  */
@@ -183,6 +186,40 @@ CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32]);
  *   CEEPEW_ERR_NULL_PTR — pk_out is NULL
  */
 CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32]);
+
+/* ── X25519 ECDH public key exchange ─────────────────────────────────────── */
+
+/* Get the local ephemeral X25519 public key (generated at session_phase2_derive_key).
+ * Used by the transport layer to exchange the ECDH key with the peer over BLE.
+ * Available in phase 3.
+ *
+ * PARAMETERS:
+ *   pk_out: Output buffer for 32-byte X25519 public key (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Local box_pubkey populated
+ *   CEEPEW_ERR_PARAM — Not in phase 3
+ *   CEEPEW_ERR_NULL_PTR — pk_out is NULL
+ */
+CeePewErr_t session_get_local_box_pubkey(uint8_t pk_out[32]);
+
+/* Store the peer's ephemeral X25519 public key, received over BLE.
+ * Must be called before crypto_box encrypt/decrypt will work correctly.
+ * Idempotent.
+ *
+ * PARAMETERS:
+ *   peer_pk: 32-byte peer's X25519 public key (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — peer_pk is NULL
+ */
+CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32]);
+
+/* Check if the peer's X25519 public key has been received.
+ * Returns false until session_set_peer_box_pubkey() has been called. */
+bool session_peer_box_pubkey_valid(void);
 
 /* Copy the 32-byte human-verified session code into out. Used by the
  * transport layer to derive the GATT-side sign_pk encryption key (see
@@ -404,6 +441,14 @@ CeePewErr_t session_get_commitment_with_sig(uint8_t *out_buf, uint8_t *out_len);
  * Returns CEEPEW_OK on successful verification (commitment and signature ok)
  */
 CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, uint8_t len);
+
+/* ── Test injection setters (replace the old __attribute__((weak)) mocks) ──
+ * Setting a value short-circuits the corresponding session_get_*() return.
+ * Safe to call from any context. Marked with a leading underscore on the
+ * shadow flag in implementation to make grep cleaner. */
+void session_test_set_id(uint64_t id);
+void session_test_set_nonce_counter(uint64_t nc);
+void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]);
 
 #ifdef __cplusplus
 }

@@ -1,11 +1,11 @@
 /* components/ceepew_oled/ceepew_oled_font_adapter.c
  *
- * Implementation of the GFXfont adapter for s_font5x7[95][5].
+ * Implementation of the GFXfont adapter for the 5x7 monospace font.
  *
  * The bitmap byte layout in s_font5x7 is column-major, bit 0 = top row,
  * 5 bytes per glyph — identical to Adafruit_GFX's glcdfont.c. We reuse
  * the byte data verbatim and emit a 95-entry GFXglyph table that points
- * bitmapOffset at the right offset within s_font5x7.
+ * bitmapOffset at the right offset within the bitmap array.
  *
  * All 95 glyphs share the same width (5), height (7), xAdvance (6),
  * xOffset (0), and yOffset (0). Only bitmapOffset varies (i*5 for
@@ -14,13 +14,13 @@
  * No dynamic allocation. All output is `static const` and ends up in
  * flash (.rodata).
  *
- * Font source: a local 475-byte copy of the byte data is compiled in
- * (CEEPEW_OLED_FONT_FALLBACK_LOCAL = 1). This breaks the symbol
- * dependency on components/ceepew_hal/ui_manager.c::s_font5x7 and
- * avoids a circular REQUIRES between ceepew_oled and ceepew_hal. The
- * local copy is byte-identical to s_font5x7, so all rendered glyphs
- * match the legacy ceepew_hal/ui_manager.c render path exactly. The
- * cost is 475 bytes of flash duplication.
+ * Font source: a local 475-byte copy of the byte data is compiled in.
+ * The legacy `s_font5x7[95][5]` in components/ceepew_hal/ui_manager.c
+ * was a duplicate of this byte data; keeping the data here means the
+ * OLED rendering path no longer needs any link-time reference to
+ * ceepew_hal. The two byte arrays are byte-identical, so all rendered
+ * glyphs match the legacy ceepew_hal/ui_manager.c render path exactly.
+ * Cost: 475 bytes of flash duplication.
  */
 
 #include "ceepew_oled_font_adapter.h"
@@ -28,11 +28,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CEEPEW_OLED_FONT_FALLBACK_LOCAL 1
-
-#if CEEPEW_OLED_FONT_FALLBACK_LOCAL
-/* Local fallback: same data as s_font5x7, used only if the extern
- * symbol cannot be resolved at link time. */
 static const uint8_t s_local_font5x7[95][5] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00 }, /* 20   */
     { 0x00, 0x00, 0x5F, 0x00, 0x00 }, /* 21 ! */
@@ -130,13 +125,10 @@ static const uint8_t s_local_font5x7[95][5] = {
     { 0x00, 0x41, 0x36, 0x08, 0x00 }, /* 7D } */
     { 0x08, 0x08, 0x2A, 0x1C, 0x08 }, /* 7E ~ */
 };
-#endif /* CEEPEW_OLED_FONT_FALLBACK_LOCAL */
-
-extern const uint8_t s_font5x7[95][5];
 
 /* 95 glyph descriptors. All glyphs share the same width/height/advance;
  * only bitmapOffset varies. The values (5, 7, 6, 0, 0) match the
- * s_font5x7 table at components/ceepew_hal/ui_manager.c. */
+ * 5x7 font table above. */
 static const ceepew_oled_GFXglyph_t s_glyphs[95] = {
     {   0U, 5U, 7U, 6U,  0,  0 }, /* 0x20  */
     {   5U, 5U, 7U, 6U,  0,  0 }, /* 0x21 ! */
@@ -236,11 +228,7 @@ static const ceepew_oled_GFXglyph_t s_glyphs[95] = {
 };
 
 static const ceepew_oled_GFXfont_t s_default_font = {
-#if CEEPEW_OLED_FONT_FALLBACK_LOCAL
     .bitmap  = s_local_font5x7[0],
-#else
-    .bitmap  = &s_font5x7[0][0],
-#endif
     .glyph   = s_glyphs,
     .first   = 0x20U,
     .last    = 0x7EU,

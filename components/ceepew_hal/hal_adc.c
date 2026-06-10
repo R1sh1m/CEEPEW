@@ -4,16 +4,12 @@
 #include "hal_pins.h"
 #include "esp_err.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
 
 /* Provide sensible defaults if the project didn't define them */
 #define CEEPEW_ADC_SAMPLES_PER_READ CEEPEW_ADC_SAMPLES
 
 static bool s_initialised = false;
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
-static adc_cali_handle_t s_adc_cali_handle = NULL;
-static bool s_adc_calibrated = false;
 
 CeePewErr_t hal_adc_init(void){
     CEEPEW_ASSERT(!s_initialised, CEEPEW_ERR_BUSY);
@@ -30,11 +26,6 @@ CeePewErr_t hal_adc_init(void){
         s_adc_handle = NULL;
         return CEEPEW_ERR_HW;
     }
-    adc_cali_line_fitting_config_t cali_cfg = { .unit_id = CEEPEW_ADC_UNIT, .atten = (adc_atten_t)CEEPEW_ADC_ATTEN, .bitwidth = (adc_bitwidth_t)CEEPEW_ADC_WIDTH,};
-#if CONFIG_IDF_TARGET_ESP32
-    cali_cfg.default_vref = 0U; /* safe default if eFuse not burned */
-#endif
-    s_adc_calibrated = (adc_cali_create_scheme_line_fitting(&cali_cfg, &s_adc_cali_handle) == ESP_OK);
     s_initialised = true;
     return CEEPEW_OK;
 }
@@ -52,10 +43,6 @@ CeePewErr_t hal_adc_read_raw(uint16_t *out_raw){
     }
     uint16_t avg = (uint16_t)(total / CEEPEW_ADC_SAMPLES_PER_READ);
     if (avg > CEEPEW_ADC_MAX_RAW){avg = (uint16_t)CEEPEW_ADC_MAX_RAW;}
-    if (s_adc_calibrated){
-        int mv = 0;
-        (void)adc_cali_raw_to_voltage(s_adc_cali_handle, (int)avg, &mv);
-    }
     *out_raw = avg;
     return CEEPEW_OK;
 }

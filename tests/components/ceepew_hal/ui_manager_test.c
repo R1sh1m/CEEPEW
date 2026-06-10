@@ -16,22 +16,17 @@
 #include "hal_pins.h"
 #include "esp_timer.h"
 #include "../transport/transport_ble.h"
+#include "session_fsm.h"
 
 #ifdef CEEPEW_ENABLE_SELFTEST
 
-/* Mock/stub implementations for session FSM functions (Sprint 10) */
-__attribute__((weak)) uint64_t session_get_id(void) {
-    /* Return a test session ID for fingerprint rendering */
-    return 0x0123456789ABCDEFULL;
-}
-
-__attribute__((weak)) uint64_t session_get_nonce_counter(void) {
-    /* Return 0 initially, can be mocked to test commitment verification */
-    return 0ULL;
-}
-
 void ui_manager_selftest_run(void) {
     printf("CEEPEW: ui_manager selftest start\n");
+
+    /* Inject deterministic test values for session_get_id / session_get_nonce_counter.
+     * Replaces the old __attribute__((weak)) test stubs. */
+    session_test_set_id(0x0123456789ABCDEFULL);
+    session_test_set_nonce_counter(0ULL);
 
     /* Initialize UI and HAL */
     hal_ui_init();
@@ -39,7 +34,7 @@ void ui_manager_selftest_run(void) {
         printf("ui_manager_init failed\n");
         return;
     }
-    
+
     /* Initialize message store for chat tests */
     if (msg_store_init() != CEEPEW_OK) {
         printf("ui_manager selftest: msg_store_init failed\n");

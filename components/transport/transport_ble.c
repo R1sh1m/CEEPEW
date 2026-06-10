@@ -306,11 +306,13 @@ static void transport_ble_clear_discovery_peer_state_unlocked(void)
     g_ble_ctx.connecting           = false;
     g_ble_ctx.is_initiator_role    = false;
     g_ble_ctx.beacon_nonce_local        = 0U;  /* first encode will set to 1 */
-    g_ble_ctx.beacon_nonce_peer_seen_max = 0U;
+    g_ble_ctx.beacon_nonce_peer_counter_max = 0U;
     g_ble_ctx.peer_gatt_ready            = false;
     g_ble_ctx.gattc_mtu                  = 23U;   /* BLE 4.0 default ATT MTU */
     g_ble_ctx.gattc_sign_pk_mtu_negotiated = false;
     g_ble_ctx.gattc_sign_pk_write_pending = false;
+    g_ble_ctx.reverse_gattc_pending       = false;
+    g_ble_ctx.initiator_sign_pk_sent      = false;
     memset(&g_ble_ctx.peer_record, 0U, sizeof(g_ble_ctx.peer_record));
     s_scan_peer_dedupe_valid = false;
     memset(s_scan_peer_dedupe_mac, 0U, sizeof(s_scan_peer_dedupe_mac));
@@ -1149,6 +1151,40 @@ CeePewErr_t transport_ble_deinit(void)
     return CEEPEW_OK;
 }
 
+CeePewErr_t transport_ble_set_scan_duty_cycle(uint16_t interval_ms, uint16_t window_ms){
+#ifdef CONFIG_BT_ENABLED
+    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(interval_ms > 0U && window_ms > 0U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(window_ms <= interval_ms, CEEPEW_ERR_PARAM);
+
+    /* Convert ms to BLE scan units: 1 unit = 0.625 ms */
+    uint16_t interval_units = (uint16_t)((uint32_t)interval_ms * 1000U / 625U);
+    uint16_t window_units   = (uint16_t)((uint32_t)window_ms * 1000U / 625U);
+
+    esp_ble_scan_params_t scan_params = {
+        .scan_type          = BLE_SCAN_TYPE_ACTIVE,
+        .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
+        .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
+        .scan_interval      = interval_units,
+        .scan_window        = window_units,
+        .scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE,
+    };
+
+    esp_err_t err = esp_ble_gap_set_scan_params(&scan_params);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "set_scan_duty_cycle failed: %d (%s)", err, esp_err_to_name(err));
+        return CEEPEW_ERR_HW;
+    }
+    ESP_LOGI(TAG, "BLE scan duty: interval=%u ms, window=%u ms (%u%%)",
+             (unsigned)interval_ms, (unsigned)window_ms,
+             (unsigned)((uint32_t)window_ms * 100U / interval_ms));
+    return CEEPEW_OK;
+#else
+    (void)interval_ms; (void)window_ms;
+    return CEEPEW_OK;
+#endif
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * transport_ble_retry_scan_if_needed()
  *
@@ -1596,19 +1632,20 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                  * peer's GATT-ready signal (its commitment_verified
                  * is true). The counter and flag travel together on
                  * the wire so the existing replay defense is preserved
-                 * — the receiver still compares the full 16-bit wire
-                 * value, which is strictly increasing because the
-                 * counter increments on every rebroadcast and the flag
-                 * transition 0→1 only ever increases the high bit. */
+                 * — the receiver compares only the 15-bit counter
+                 * (bits 0-14), ignoring the flag bit, so a flag
+                 * transition 1→0 after device reset does not cause
+                 * false rejection. */
                 uint16_t peer_wire = ((uint16_t)mfr_ptr[3] << 8) |
                                      (uint16_t)mfr_ptr[4];
+                uint16_t peer_counter = peer_wire & 0x7FFFU;
                 bool peer_gatt_ready_now = (peer_wire & 0x8000U) != 0U;
 
                 bool nonce_ok = false;
                 bool new_max  = false;
                 ble_ctx_lock();
-                if (peer_wire > g_ble_ctx.beacon_nonce_peer_seen_max) {
-                    g_ble_ctx.beacon_nonce_peer_seen_max = peer_wire;
+                if (peer_counter > g_ble_ctx.beacon_nonce_peer_counter_max) {
+                    g_ble_ctx.beacon_nonce_peer_counter_max = peer_counter;
                     new_max = true;
                     nonce_ok = true;
                     /* Set peer_gatt_ready ONLY when accepting a new
@@ -1633,9 +1670,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                              (unsigned)peer_wire,
                              peer_gatt_ready_now ? 1U : 0U);
                 } else {
-                    ESP_LOGW(TAG, "Beacon replay rejected (peer_wire=0x%04x <= seen_max=0x%04x)",
-                             (unsigned)peer_wire,
-                             (unsigned)g_ble_ctx.beacon_nonce_peer_seen_max);
+                    ESP_LOGW(TAG, "Beacon replay rejected (peer_counter=0x%04x <= seen_max=0x%04x)",
+                             (unsigned)peer_counter,
+                             (unsigned)g_ble_ctx.beacon_nonce_peer_counter_max);
                 }
             }
         }
@@ -1847,6 +1884,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
 
             if (param->write.status == ESP_GATT_OK) {
                 ESP_LOGI(TAG, "GATTC sign_pk write complete — closing link");
+                g_ble_ctx.initiator_sign_pk_sent = true;
+                g_ble_ctx.reverse_gattc_pending  = false;
                 (void)transport_ble_disconnect();
             } else {
                 ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d — closing link, "
@@ -1855,6 +1894,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 if (g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS) {
                     g_ble_ctx.reconnect_attempts++;
                 }
+                g_ble_ctx.reverse_gattc_pending = false;
                 (void)transport_ble_disconnect();
             }
         } break;
@@ -2099,6 +2139,16 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     ESP_LOGI(TAG, "GATTS: peer sign_pk authenticated+received via 0xFFF3 (48B Ascon)");
                     transport_ble_post_event(PAIRING_EVENT_SIGN_PK_RECEIVED,
                                              NULL, 0U);
+
+                    /* Mutual sign_pk exchange (M3): if we are the responder,
+                     * schedule a reverse GATTC connection to write our own
+                     * sign_pk to the initiator's 0xFFF3. */
+                    if (!g_ble_ctx.is_initiator_role &&
+                        !g_ble_ctx.initiator_sign_pk_sent &&
+                        !g_ble_ctx.reverse_gattc_pending) {
+                        g_ble_ctx.reverse_gattc_pending = true;
+                        ESP_LOGI(TAG, "GATTS: scheduling reverse GATTC for sign_pk exchange");
+                    }
                 } else {
                     ESP_LOGW(TAG, "GATTS: session_set_peer_public_key failed: %d",
                              (int)pk_err);

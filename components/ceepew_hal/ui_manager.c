@@ -29,12 +29,15 @@
    by completion flags and user input. This architecture allows all 9 screen
    types to coexist in one efficient state machine. */
 
-/* Weak reference to BLE context; actual definition lives in transport_ble.c
-   but a weak symbol here allows building/linking in configurations where the
-   transport component may be omitted during unit tests or static linking. */
-__attribute__((weak)) BleContext_t g_ble_ctx = {0};
+/* Strong definition of g_ble_ctx lives in components/transport/transport_ble.c;
+ * tests/component/ceepew_hal/ui_manager_test.c writes to it directly. Forward
+ * declaration here — the weak fallback was a code smell (linked objects always
+ * resolve to the strong symbol from transport_ble.c). */
+extern BleContext_t g_ble_ctx;
 
-/* Forward declarations of session FSM accessors for Sprint 10 integration */
+/* Forward declarations of session FSM accessors for Sprint 10 integration.
+ * Definitions in main/session_fsm.c; test injection via session_test_set_*()
+ * setters in session_fsm.h. */
 extern uint64_t session_get_id(void);
 extern uint64_t session_get_nonce_counter(void);
 extern CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);

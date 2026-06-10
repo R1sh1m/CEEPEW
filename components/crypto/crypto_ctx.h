@@ -14,7 +14,11 @@
 typedef struct {
     bool     session_active;
     uint8_t  ascon_key[CEEPEW_SESSION_KEY_BYTES];
-    uint8_t  box_seed[32U];
+    uint8_t  box_seed[32U];            /* HKDF derivation seed (retained for key expansion) */
+    uint8_t  box_privkey[32U];         /* Ephemeral X25519 private key (per-session) */
+    uint8_t  box_pubkey[32U];          /* Ephemeral X25519 public key (exchanged via BLE) */
+    uint8_t  peer_box_pubkey[32U];     /* Peer's X25519 public key (received via BLE) */
+    bool     peer_box_pubkey_valid;    /* true once peer_box_pubkey has been received */
     uint8_t  session_id[8U];
     uint8_t  reserved[8U];
 } CryptoCtx_t;

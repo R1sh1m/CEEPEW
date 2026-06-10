@@ -214,11 +214,8 @@ int curve25519_scalarmult(uint8_t q[32], const uint8_t scalar[32], const uint8_t
         fe_add(z3,   x3, z3);
         fe_mul(z3,   z3, tmp0);
 
-        fe A, B, C, D;
-        fe_sq(A, tmp0);
-        fe_sq(B, x2);    /* repurpose: A=(x2-z2)^2, B=(x2+z2)^2 → need recalc */
+        fe C, D;
 
-        /* Redo with correct temporaries */
         fe aa, bb, e, da, cb;
         fe_add(aa, x2, z2); fe_sq(aa, aa);    /* (x2+z2)^2 */
         fe_sub(bb, x2, z2); fe_sq(bb, bb);    /* (x2-z2)^2 */

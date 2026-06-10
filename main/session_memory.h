@@ -21,6 +21,8 @@
 #include "ceepew_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "../components/ceepew_hal/ui_manager.h" /* for UIState_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -263,6 +265,25 @@ _Static_assert(sizeof(UIEventPayload) == 16, "UIEventPayload must be exactly 16 
  *   }
  */
 extern QueueHandle_t g_ui_event_queue;
+
+/* ========================================================================== */
+/* UI Context Lock (Phase 2.C1)                                                */
+/* ========================================================================== */
+/* g_ui_ctx is written by the UI task (Core 0) and read by the session task
+ * (Core 1). To prevent torn reads of multi-byte fields and inconsistent
+ * multi-field reads, all session-task accesses go through the snapshot
+ * helpers below, which take this mutex around the field copy. */
+extern SemaphoreHandle_t g_ui_ctx_lock;
+
+/* Take / release the UI context mutex. session_ui_ctx_lock() blocks if
+ * held; session_ui_ctx_unlock() is non-blocking. Safe to nest (recursive). */
+void session_ui_ctx_lock(void);
+void session_ui_ctx_unlock(void);
+
+/* Snapshot the fields the session task reads most often. Use these in
+ * hot paths instead of direct g_ui_ctx.X reads — a single take/copy/release
+ * is cheaper than 7 take/release pairs in a function body. */
+void session_ui_get_state_snapshot(UIState_t *out_state);
 
 #ifdef __cplusplus
 }

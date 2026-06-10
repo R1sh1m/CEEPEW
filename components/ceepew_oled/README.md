@@ -113,13 +113,13 @@ when the user has Adafruit headers in the include path):
   in flash, so callers never own the storage.
 
 The font's `bitmap` field points at a local 475-byte copy of the
-`s_font5x7[95][5]` byte data (compiled in via
-`CEEPEW_OLED_FONT_FALLBACK_LOCAL = 1`). This breaks the symbol
-dependency on `components/ceepew_hal/ui_manager.c::s_font5x7` and
-avoids a circular `REQUIRES` between `ceepew_oled` and `ceepew_hal`.
-The local copy is byte-identical to `s_font5x7`, so all rendered
-glyphs match the legacy `ceepew_hal/ui_manager.c` render path
-exactly. The cost is 475 bytes of flash duplication.
+5x7 monospace byte data compiled in by `ceepew_oled_font_adapter.c`.
+The copy is byte-identical to the legacy `s_font5x7[95][5]` table
+in `components/ceepew_hal/ui_manager.c`, so all rendered glyphs
+match the legacy render path exactly. Keeping the data here means
+the OLED rendering path has no link-time reference to `ceepew_hal`,
+which keeps the component dependency graph a DAG. The cost is 475
+bytes of flash duplication.
 
 ### Types: `hal_ui_types.h`
 

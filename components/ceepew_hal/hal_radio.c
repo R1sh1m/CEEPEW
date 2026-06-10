@@ -368,6 +368,17 @@ QueueHandle_t hal_radio_get_rx_queue(void){
     return s_rx_queue;
 }
 
+CeePewErr_t hal_radio_set_power_save(wifi_ps_type_t ps_mode){
+    CEEPEW_ASSERT(s_initialised, CEEPEW_ERR_BUSY);
+    esp_err_t rc = esp_wifi_set_ps(ps_mode);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_ps(%d) failed: %d", (int)ps_mode, (int)rc);
+        return CEEPEW_ERR_HW;
+    }
+    ESP_LOGI(TAG, "WiFi PS mode set to %d", (int)ps_mode);
+    return CEEPEW_OK;
+}
+
 CeePewErr_t hal_radio_set_hop_context(const void *crypto_ctx, hal_radio_get_nonce_counter_cb_t nonce_getter){
     CEEPEW_ASSERT(crypto_ctx != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(nonce_getter != NULL, CEEPEW_ERR_NULL_PTR);

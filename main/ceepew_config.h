@@ -64,6 +64,12 @@
 /* The guard at HARD_LIMIT gives a warning window before the counter          */
 /* approaches the danger zone. Session must terminate at HARD_LIMIT.          */
 /*                                                                             */
+/* Nonce parity invariant: initiator uses even nonces (0,2,4,...),            */
+/* responder uses odd nonces (1,3,5,...). session_enforce_nonce_limit()       */
+/* increments by 2 to preserve this. The two nonce sequences are              */
+/* guaranteed disjoint — no collision possible even if both sides encrypt     */
+/* simultaneously.                                                            */
+/*                                                                             */
 /* Phase 4: NONCE_HARD_LIMIT = 2^56 = 72,057,594,037,927,936 IVs             */
 /* At 1 msg/sec, device lifetime = 2,282,404 years (far > device lifespan)   */
 /* At 90% of limit, return CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED (warning)        */
@@ -223,6 +229,24 @@
 /* Pipeline                                                                    */
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_PIPELINE_MAX_STAGES       16U
+
+/* -------------------------------------------------------------------------- */
+/* Power Management                                                            */
+/* -------------------------------------------------------------------------- */
+/* WiFi modem power save (Tier 1): WIFI_PS_MIN_MODEM saves ~15 mA average
+ * while keeping ESP-NOW RX latency < 50 ms. Disabled during active chat
+ * (Phase 3) for minimum latency; enabled during discovery (Phase 1) and
+ * idle. */
+#define CEEPEW_WIFI_PS_DISCOVERY          WIFI_PS_MIN_MODEM
+#define CEEPEW_WIFI_PS_ACTIVE_CHAT        WIFI_PS_NONE
+
+/* BLE scan duty cycling: window/interval ratio controls average power.
+ * 30 ms scan / 300 ms interval = 10% duty cycle (saves ~40% BLE power).
+ * During active pairing (Phase 2), scan is 100% (WIFI_PS_NONE equivalent). */
+#define CEEPEW_BLE_SCAN_INTERVAL_DISC_MS  300U
+#define CEEPEW_BLE_SCAN_WINDOW_DISC_MS    30U
+#define CEEPEW_BLE_SCAN_INTERVAL_PAIR_MS  60U   /* Active pairing: fast scan */
+#define CEEPEW_BLE_SCAN_WINDOW_PAIR_MS    60U
 
 /* -------------------------------------------------------------------------- */
 /* Debug                                                                       */

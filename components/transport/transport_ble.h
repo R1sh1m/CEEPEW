@@ -139,13 +139,15 @@ typedef struct {
     bool           peer_ready_for_chat;         /* Peer's readiness flag (set by verify_pending_commitment_unlocked) */
     uint32_t       peer_ready_timestamp_ms;     /* When peer_ready_for_chat was set */
     /* ── Beacon replay defense (Bug 2 fix) ── */
-    uint16_t       beacon_nonce_local;          /* Last nonce we put in our beacon */
-    uint16_t       beacon_nonce_peer_seen_max;  /* Highest nonce accepted from peer */
+    uint16_t       beacon_nonce_local;          /* Last counter we put in our beacon (bits 0-14 only) */
+    uint16_t       beacon_nonce_peer_counter_max; /* Highest 15-bit counter accepted from peer */
     /* ── Hybrid-GATT gating (Phase 7) ── */
     bool           peer_gatt_ready;             /* Peer's beacon bit 15 set: GATT open safe */
     uint16_t       gattc_mtu;                   /* Negotiated GATTC MTU (default 23) */
     bool           gattc_sign_pk_mtu_negotiated;/* ESP_GATTC_CFG_MTU_EVT received */
     bool           gattc_sign_pk_write_pending; /* Search-cmpl wrote, awaiting ESP_GATTC_WRITE_CHAR_EVT */
+    bool           reverse_gattc_pending;       /* Responder: reverse GATTC for sign_pk exchange pending */
+    bool           initiator_sign_pk_sent;      /* true after our sign_pk has been written to peer */
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
@@ -230,6 +232,11 @@ CeePewErr_t transport_ble_disconnect(void);
 
 /* Deinit BLE subsystem (call on session end) */
 CeePewErr_t transport_ble_deinit(void);
+
+/* Adjust BLE scan duty cycle (interval/window).
+ * Low duty cycle during discovery saves ~40% BLE power.
+ * High duty cycle during pairing for fast connection. */
+CeePewErr_t transport_ble_set_scan_duty_cycle(uint16_t interval_ms, uint16_t window_ms);
 
 /* ========================================================================== */
 /* Event-Driven Pairing Architecture (Deterministic, Non-Blocking)             */

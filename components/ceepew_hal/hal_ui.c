@@ -106,11 +106,7 @@ static CeePewErr_t ssd1306_bringup(void)
     uint8_t                 addr = 0U;
     esp_err_t rc = ceepew_oled_multi_attempt(&pins, &bus, &dev, &addr);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "Configured pins failed; scanning all GPIO pairs");
-        rc = ceepew_oled_scan_all_pins(&bus, &dev, &addr);
-    }
-    if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "No SSD1306/SH1106 found anywhere; hal_ui_init failed");
+        ESP_LOGE(TAG, "OLED not found on primary (26/27) or fallback (21/22) pins");
         return CEEPEW_ERR_HW;
     }
 

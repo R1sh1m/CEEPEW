@@ -46,10 +46,13 @@
 #include "crypto_ctx.h"
 #include "crypto_rng.h"
 #include "transport_esl.h"
+#include "transport_ble.h"
+#include "hal_radio.h"
 #include "ceepew_pipeline.h"
 #include "ceepew_region.h"  /* Phase 4: For region_reset */
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
+#include "crypto_ecdh.h"
 #include "session_fsm.h"
 #include "esp_log.h"
 #include <stdint.h>
@@ -106,6 +109,17 @@ typedef struct {
 
 /* Global session context (per-device; single active session at a time) */
 static SessionCtx_t s_session;
+
+/* Test shadow state. When s_test_*_set is true, the corresponding
+ * session_get_*() returns the test value. This replaces the old
+ * __attribute__((weak)) test fallbacks (ui_manager_test.c, ui_cryptogram_test.c)
+ * with explicit setters — no weak symbols in the binary. */
+static bool     s_test_id_set = false;
+static uint64_t s_test_id     = 0ULL;
+static bool     s_test_nc_set = false;
+static uint64_t s_test_nc     = 0ULL;
+static bool     s_test_commitment_set = false;
+static uint8_t  s_test_commitment[CEEPEW_COMMITMENT_BYTES] = {0U};
 
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
@@ -219,6 +233,11 @@ CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
     s_session.phase = 1U;
     memcpy(s_session.device_id_self, device_id, 6U);
     s_session.session_active = false;
+
+    /* M7: Power management — enable WiFi modem PS + low BLE duty during discovery */
+    (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_DISCOVERY);
+    (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_DISC_MS,
+                                            CEEPEW_BLE_SCAN_WINDOW_DISC_MS);
     return CEEPEW_OK;
 }
 
@@ -249,6 +268,11 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
 
     s_session.phase = 2U;
     memcpy(s_session.session_code, session_code, 32U);
+
+    /* M7: Power management — full power for pairing (fast BLE + low latency) */
+    (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_ACTIVE_CHAT);
+    (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_PAIR_MS,
+                                            CEEPEW_BLE_SCAN_WINDOW_PAIR_MS);
 
     /* Derive a deterministic session_id using helper function */
     uint8_t session_id_bytes[8];
@@ -340,6 +364,15 @@ CeePewErr_t session_phase2_derive_key(void){
     memcpy(g_crypto_ctx.box_seed, hkdf_output + 16U, 32U);
     memcpy(g_crypto_ctx.session_id, hkdf_output + 48U, 8U);
     memcpy(g_crypto_ctx.reserved, hkdf_output + 56U, 8U);
+
+    /* Generate ephemeral X25519 keypair for crypto_box ECDH.
+     * The public key is exchanged with the peer over BLE (M3).
+     * The private key stays in RAM and is securely zeroed on session_end(). */
+    CeePewErr_t ecdh_err = crypto_ecdh_generate_keypair(
+        g_crypto_ctx.box_pubkey, g_crypto_ctx.box_privkey);
+    if (ecdh_err != CEEPEW_OK) { goto error_cleanup; }
+    g_crypto_ctx.peer_box_pubkey_valid = false;
+
     g_crypto_ctx.session_active = true;
 
     memcpy(s_session.session_key, g_crypto_ctx.ascon_key, 16U);
@@ -415,11 +448,15 @@ CeePewErr_t session_enforce_nonce_limit(void){
 
     /* Check for 90% warning level — session should warn but can continue briefly */
     if (s_session.nonce_counter >= CEEPEW_NONCE_WARNING_LIMIT) {
-        s_session.nonce_counter++;
+        s_session.nonce_counter += 2U;
         return CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED;
     }
 
-    s_session.nonce_counter++;
+    /* Increment by 2 to preserve nonce parity: initiator uses even
+     * nonces (0,2,4,...), responder uses odd nonces (1,3,5,...).
+     * Both peers start at complementary parity from MAC ordering,
+     * so the two nonce sequences are guaranteed disjoint. */
+    s_session.nonce_counter += 2U;
     return CEEPEW_OK;
 }
 
@@ -495,6 +532,32 @@ CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32])
 
     memcpy(pk_out, s_session.sign_pk, 32U);
     return CEEPEW_OK;
+}
+
+/* ── X25519 ECDH public key exchange ─────────────────────────────────────── */
+
+CeePewErr_t session_get_local_box_pubkey(uint8_t pk_out[32])
+{
+    CEEPEW_ASSERT(s_session.phase >= 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(pk_out != NULL, CEEPEW_ERR_NULL_PTR);
+
+    memcpy(pk_out, g_crypto_ctx.box_pubkey, 32U);
+    return CEEPEW_OK;
+}
+
+CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32])
+{
+    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(peer_pk != NULL, CEEPEW_ERR_NULL_PTR);
+
+    memcpy(g_crypto_ctx.peer_box_pubkey, peer_pk, 32U);
+    g_crypto_ctx.peer_box_pubkey_valid = true;
+    return CEEPEW_OK;
+}
+
+bool session_peer_box_pubkey_valid(void)
+{
+    return g_crypto_ctx.peer_box_pubkey_valid;
 }
 
 CeePewErr_t session_get_session_code(uint8_t out[32])
@@ -605,17 +668,15 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
     if (mac_err != CEEPEW_OK) { return mac_err; }
     /* Use peer MAC from session context, not own MAC (fix above) */
     memcpy(peer_mac, s_session.device_id_peer, 6U);
-    (void)session_get_peer_public_key(peer_pk);
-    /* If peer_sign_pk is not valid, the receiver's crypto_box will compute
-     * the shared secret using its OWN box_seed (which is identical) and
-     * the sender's box_seed-curve25519-clamp(public) value — wait, no,
-     * this is wrong. Skip the send if we don't have the peer's sign_pk. */
-    if (!s_session.peer_sign_pk_valid) {
-        /* Responder never sent sign_pk; cannot perform ECDH correctly.
+
+    /* Use the peer's X25519 public key for crypto_box ECDH */
+    if (!g_crypto_ctx.peer_box_pubkey_valid) {
+        /* Peer's X25519 key hasn't arrived yet via BLE sign_pk exchange.
          * Wait for it to arrive — but if it never does, the timeout
          * above will fire and we transition to PAIRING_FAILED. */
         return CEEPEW_OK;
     }
+    memcpy(peer_pk, g_crypto_ctx.peer_box_pubkey, 32U);
 
     return session_send_message(hello_plain, 1U, peer_mac, peer_pk);
 }
@@ -675,8 +736,17 @@ CeePewErr_t session_end(void){
     if (err != CEEPEW_OK) { /* continue with zeroing */ }
     err = crypto_ctx_destroy();
     if (err != CEEPEW_OK) { /* continue with zeroing */ }
+    /* Securely zero X25519 ECDH key material */
+    ceepew_secure_zero(g_crypto_ctx.box_privkey, sizeof(g_crypto_ctx.box_privkey));
+    ceepew_secure_zero(g_crypto_ctx.peer_box_pubkey, sizeof(g_crypto_ctx.peer_box_pubkey));
+    g_crypto_ctx.peer_box_pubkey_valid = false;
     session_secure_zero_context();
     region_reset(&g_region);
+
+    /* M7: Return to low-power state after session ends */
+    (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_DISCOVERY);
+    (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_DISC_MS,
+                                            CEEPEW_BLE_SCAN_WINDOW_DISC_MS);
 
     return CEEPEW_OK;
 }
@@ -717,9 +787,13 @@ uint8_t session_get_phase(void) { return s_session.phase; }
 
 bool session_is_active(void) { return s_session.session_active; }
 
-uint64_t session_get_nonce_counter(void) { return s_session.nonce_counter; }
+uint64_t session_get_nonce_counter(void) {
+    if (s_test_nc_set) { return s_test_nc; }
+    return s_session.nonce_counter;
+}
 
 uint64_t session_get_id(void) {
+    if (s_test_id_set) { return s_test_id; }
     return ((uint64_t)g_crypto_ctx.session_id[0] << 56U) |
            ((uint64_t)g_crypto_ctx.session_id[1] << 48U) |
            ((uint64_t)g_crypto_ctx.session_id[2] << 40U) |
@@ -728,6 +802,22 @@ uint64_t session_get_id(void) {
            ((uint64_t)g_crypto_ctx.session_id[5] << 16U) |
            ((uint64_t)g_crypto_ctx.session_id[6] << 8U) |
            ((uint64_t)g_crypto_ctx.session_id[7]);
+}
+
+void session_test_set_id(uint64_t id) {
+    s_test_id = id;
+    s_test_id_set = true;
+}
+
+void session_test_set_nonce_counter(uint64_t nc) {
+    s_test_nc = nc;
+    s_test_nc_set = true;
+}
+
+void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]) {
+    if (c == NULL) { return; }
+    memcpy(s_test_commitment, c, CEEPEW_COMMITMENT_BYTES);
+    s_test_commitment_set = true;
 }
 
 CeePewErr_t session_get_device_id(uint8_t device_id[6])
@@ -740,8 +830,12 @@ CeePewErr_t session_get_device_id(uint8_t device_id[6])
 
 CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
-    CEEPEW_ASSERT(s_session.phase >= 2U && s_session.phase <= 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
+    if (s_test_commitment_set) {
+        memcpy(commitment, s_test_commitment, CEEPEW_COMMITMENT_BYTES);
+        return CEEPEW_OK;
+    }
+    CEEPEW_ASSERT(s_session.phase >= 2U && s_session.phase <= 3U, CEEPEW_ERR_PARAM);
 
     /* Stronger commitment v2: SHA256("CEEPEW_COMMIT_v2" || id_A || id_B || session_code || t_round)
      * Truncate to first 16 bytes for improved collision resistance. Order device ids

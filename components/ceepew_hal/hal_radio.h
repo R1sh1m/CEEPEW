@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "esp_now.h"
+#include "esp_wifi_types.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "ceepew_assert.h"
@@ -61,5 +62,20 @@ CeePewErr_t hal_radio_set_hop_context(const void *crypto_ctx, hal_radio_get_nonc
  * Thread-safe: Can be called from any context (ISR-safe on ESP-IDF).
  */
 QueueHandle_t hal_radio_get_rx_queue(void);
+
+/* hal_radio_set_power_save: Switch WiFi modem power-save mode.
+ *
+ * PARAMETERS:
+ *   ps_mode: WIFI_PS_NONE (active), WIFI_PS_MIN_MODEM (Tier 1 save),
+ *            WIFI_PS_MAX_MODEM (aggressive — not recommended for ESP-NOW).
+ *
+ * USE CASE: Call with WIFI_PS_MIN_MODEM during discovery/idle to save ~15 mA,
+ *           and WIFI_PS_NONE during active chat for minimum latency.
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Mode set successfully
+ *   CEEPEW_ERR_HW — esp_wifi_set_ps() failed
+ */
+CeePewErr_t hal_radio_set_power_save(wifi_ps_type_t ps_mode);
 
 #endif /* CEEPEW_HAL_RADIO_H */

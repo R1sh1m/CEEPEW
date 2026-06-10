@@ -53,6 +53,30 @@
     /* UI event queue: session task posts UI events here */
     QueueHandle_t g_ui_event_queue = NULL;
 
+    /* UI context mutex (Phase 2.C1) — guards g_ui_ctx access between Core 0
+     * (UI task writes) and Core 1 (session task reads). Recursive so the
+     * session task can take it multiple times in nested call paths. */
+    SemaphoreHandle_t g_ui_ctx_lock = NULL;
+
+    void session_ui_ctx_lock(void) {
+        if (g_ui_ctx_lock != NULL) {
+            (void)xSemaphoreTakeRecursive(g_ui_ctx_lock, portMAX_DELAY);
+        }
+    }
+
+    void session_ui_ctx_unlock(void) {
+        if (g_ui_ctx_lock != NULL) {
+            (void)xSemaphoreGiveRecursive(g_ui_ctx_lock);
+        }
+    }
+
+    void session_ui_get_state_snapshot(UIState_t *out_state) {
+        CEEPEW_ASSERT_VOID(out_state != NULL);
+        session_ui_ctx_lock();
+        *out_state = g_ui_ctx.current_state;
+        session_ui_ctx_unlock();
+    }
+
     /* -------------------------------------------------------------------------- */
     /* Session Task State                                                         */
     /* -------------------------------------------------------------------------- */
@@ -109,13 +133,23 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
     static CeePewErr_t task_session_build_session_code(uint8_t session_code[32U]){
         CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
-        CEEPEW_ASSERT(g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY, CEEPEW_ERR_PARAM);
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+        CEEPEW_ASSERT(ui_state >= UI_STATE_CODE_ENTRY, CEEPEW_ERR_PARAM);
+
+        /* Snapshot code_digits under the same lock as the state — they must
+         * be read consistently together (the user can be editing one of them
+         * on Core 0 while we sample on Core 1). */
+        session_ui_ctx_lock();
+        uint8_t digits[4];
+        memcpy(digits, g_ui_ctx.code_digits, 4U);
+        session_ui_ctx_unlock();
 
         /* Expand the 4-digit UI entry into the 32-byte session code expected by
         * the session FSM by repeating the user-selected digits across the buffer. */
         for (uint8_t i = 0U; i < 32U; i++) {
             /* Expand the 4-character UI entry (ASCII bytes) into 32-byte session code */
-            uint8_t ch = g_ui_ctx.code_digits[i % 4U];
+            uint8_t ch = digits[i % 4U];
             /* If stored value is not printable, fallback to '0'+(val%10) */
             if (ch < 32U) { ch = (uint8_t)('0' + (ch % 10U)); }
             session_code[i] = ch;
@@ -132,8 +166,13 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         uint8_t    phase     = session_get_phase();
         BleState_t ble_state = transport_ble_get_state();
         const BlePeerRecord_t *peer = transport_ble_get_peer_cached();
-        if (g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS ||
-            g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
+        /* Phase 2.C1: snapshot current_state under the UI mutex once at the
+         * top of this function. The original 7 read sites below all hit the
+         * same logical value within a single pairing-flow iteration. */
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+        if (ui_state == UI_STATE_PAIRING_SUCCESS ||
+            ui_state == UI_STATE_PAIRING_FAILED) {
             return CEEPEW_OK;
         }
         /* Nothing to do once active session is established */
@@ -143,9 +182,9 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
          * phase). If the user is in code entry / countdown / confirm and the
          * BLE link has dropped to IDLE (no GATTC, no GATTS, not connecting),
          * force a UI revert to PAIRING_FAILED. */
-        bool in_pairing_screen = (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY ||
-                                  g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
-                                  g_ui_ctx.current_state == UI_STATE_CONFIRM);
+        bool in_pairing_screen = (ui_state == UI_STATE_CODE_ENTRY ||
+                                  ui_state == UI_STATE_COUNTDOWN ||
+                                  ui_state == UI_STATE_CONFIRM);
         if (in_pairing_screen &&
             ble_state == BLE_IDLE &&
             !g_ble_ctx.gattc_connected &&
@@ -217,8 +256,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
         /* ── STEP 4: Phase 2 initiate + commitment beacon broadcast ──────── */
         if (phase == 1U && peer != NULL &&
-            (g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
-             g_ui_ctx.current_state == UI_STATE_PAIRING)) {
+            (ui_state == UI_STATE_COUNTDOWN ||
+             ui_state == UI_STATE_PAIRING)) {
 
             uint8_t session_code[32U];
             CeePewErr_t err = task_session_build_session_code(session_code);
@@ -323,6 +362,28 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                     g_ble_ctx.reconnect_attempts++;
                 }
             }
+
+            /* M3: Responder reverse GATTC — after receiving the initiator's
+             * sign_pk via GATTS, open a GATTC back to write our sign_pk. */
+            if (!is_initiator && g_ble_ctx.reverse_gattc_pending &&
+                !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected &&
+                !g_ble_ctx.initiator_sign_pk_sent &&
+                g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS)
+            {
+                if (g_ble_ctx.peer_mac[0] != 0U) {
+                    ESP_LOGI(TAG, "Responder: opening reverse GATTC for sign_pk exchange");
+                    CeePewErr_t conn_err = transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
+                    if (conn_err != CEEPEW_OK && conn_err != CEEPEW_ERR_BUSY) {
+                        ESP_LOGW(TAG, "reverse GATT connect failed: %d (will retry)", (int)conn_err);
+                        g_ble_ctx.reconnect_attempts++;
+                        g_ble_ctx.reverse_gattc_pending = false;
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Responder: no peer addr for reverse GATTC");
+                    g_ble_ctx.reverse_gattc_pending = false;
+                }
+            }
+
             return CEEPEW_OK;
         }
 
@@ -523,10 +584,14 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         int8_t ble_rssi = g_ble_ctx.peer_rssi;
         bool scan_active = (ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING);
 
+        /* Phase 2.C1: snapshot current_state once for the two read sites below. */
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+
         /* Phase 3 (ACTIVE) — once the session is live, nudge any pre-chat UI
          * into the secure-chat derivation path without disturbing later states. */
         if (phase == 3U && active) {
-            UIState_t current = g_ui_ctx.current_state;
+            UIState_t current = ui_state;
             bool pre_chat = (current == UI_STATE_DISCOVERY   ||
                              current == UI_STATE_COUNTDOWN   ||
                              current == UI_STATE_CODE_ENTRY  ||
@@ -541,7 +606,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             }
         }
 
-        UIState_t ui_state = g_ui_ctx.current_state;
+        /* (ui_state already snapshotted above for the pre-chat check.) */
         RgbPattern_t pattern = task_session_map_pattern(ui_state, active);
 
         /* Track discovery scan start time so we can enforce a safe timeout */
@@ -675,83 +740,102 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             return CEEPEW_OK;
         }
 
-        static uint8_t s_work_frame[CEEPEW_PACKET_MAX_BYTES];
-        static uint8_t s_fec_out[CEEPEW_FEC_BUF_MAX];
-        static uint8_t s_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
-        static uint8_t s_ascon_ct[CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES];
-        static uint8_t s_plain[CEEPEW_MAX_MSG_BYTES];
-        static uint8_t s_nonce[24U];
-        static uint8_t s_peer_pk[32U];
-        static uint8_t s_ascon_key[16U];
-        static uint8_t s_sig[64U];
+        uint8_t local_work_frame[CEEPEW_PACKET_MAX_BYTES];
+        uint8_t local_fec_out[CEEPEW_FEC_BUF_MAX];
+        uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
+        uint8_t local_ascon_ct[CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES];
+        uint8_t local_plain[CEEPEW_MAX_MSG_BYTES];
+        uint8_t local_nonce[24U];
+        uint8_t local_sign_pk[32U];
+        uint8_t local_box_pk[32U];
+        uint8_t local_ascon_key[16U];
+        uint8_t local_sig[64U];
 
         CeePewErr_t err = CEEPEW_OK;
         uint16_t work_len = frame->payload_len;
-        memcpy(s_work_frame, frame->payload, frame->payload_len);
+        memcpy(local_work_frame, frame->payload, frame->payload_len);
 
-        err = transport_esl_process_incoming(s_work_frame, &work_len, frame->src_mac, 0U);
+        err = transport_esl_process_incoming(local_work_frame, &work_len, frame->src_mac, 0U);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         bool corrected = false;
-        uint16_t fec_out_len = (uint16_t)sizeof(s_fec_out);
-        err = ecc_hamming_decode(s_work_frame, work_len, s_fec_out, &fec_out_len, &corrected);
+        uint16_t fec_out_len = (uint16_t)sizeof(local_fec_out);
+        err = ecc_hamming_decode(local_work_frame, work_len, local_fec_out, &fec_out_len, &corrected);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         if (fec_out_len < 64U) { return CEEPEW_OK; }
         uint16_t box_ct_len = (uint16_t)(fec_out_len - 64U);
         uint16_t sig_off = box_ct_len;
-        memcpy(s_box_ct, s_fec_out, box_ct_len);
-        memcpy(s_sig, s_fec_out + sig_off, 64U);
+        memcpy(local_box_ct, local_fec_out, box_ct_len);
+        memcpy(local_sig, local_fec_out + sig_off, 64U);
 
         uint64_t rx_nonce_counter = 0ULL;
         err = transport_esl_get_last_nonce_counter(&rx_nonce_counter);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
-        err = session_get_nonce(s_nonce);
+        err = session_get_nonce(local_nonce);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
         for (uint8_t i = 0U; i < 8U; i++) {
-            s_nonce[8U + i] = (uint8_t)((rx_nonce_counter >> (i * 8U)) & 0xFFU);
+            local_nonce[8U + i] = (uint8_t)((rx_nonce_counter >> (i * 8U)) & 0xFFU);
         }
-        err = session_get_peer_public_key(s_peer_pk);
+
+        /* Use the peer's X25519 public key for crypto_box ECDH decryption */
+        if (!session_peer_box_pubkey_valid()) { return CEEPEW_OK; }
+        err = session_get_local_box_pubkey(local_box_pk);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
-        err = crypto_box_decrypt(&g_crypto_ctx, s_nonce, s_peer_pk,
-                                s_box_ct, box_ct_len, s_ascon_ct, &box_ct_len);
+        /* The peer's X25519 pubkey is in g_crypto_ctx.peer_box_pubkey;
+         * pass it directly to crypto_box_decrypt via the context. */
+        err = crypto_box_decrypt(&g_crypto_ctx, local_nonce, g_crypto_ctx.peer_box_pubkey,
+                                local_box_ct, box_ct_len, local_ascon_ct, &box_ct_len);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         uint8_t ascon_nonce[16U];
-        memcpy(ascon_nonce, s_nonce, sizeof(ascon_nonce));
-        err = session_get_session_key(s_ascon_key);
+        memcpy(ascon_nonce, local_nonce, sizeof(ascon_nonce));
+        err = session_get_session_key(local_ascon_key);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
-        uint16_t plain_len = (uint16_t)sizeof(s_plain);
-        err = crypto_ascon_aead_decrypt(s_ascon_key, ascon_nonce, NULL, 0U,
-                                        s_ascon_ct, box_ct_len, s_plain, &plain_len);
+        uint16_t plain_len = (uint16_t)sizeof(local_plain);
+        err = crypto_ascon_aead_decrypt(local_ascon_key, ascon_nonce, NULL, 0U,
+                                        local_ascon_ct, box_ct_len, local_plain, &plain_len);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
-        err = crypto_eddsa_verify(s_peer_pk, s_box_ct, box_ct_len, s_sig);
+        /* Use the peer's Ed25519 sign_pk for signature verification */
+        err = session_get_peer_public_key(local_sign_pk);
+        if (err != CEEPEW_OK) { return CEEPEW_OK; }
+        err = crypto_eddsa_verify(local_sign_pk, local_box_ct, box_ct_len, local_sig);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         uint8_t local_device_id[CEEPEW_DEVICE_ID_BYTES];
         uint8_t fingerprint[CEEPEW_FINGERPRINT_BYTES];
         err = session_get_device_id(local_device_id);
         if (err == CEEPEW_OK) {
-            err = session_compute_fingerprint(s_peer_pk, local_device_id, fingerprint);
+            err = session_compute_fingerprint(local_sign_pk, local_device_id, fingerprint);
             if (err == CEEPEW_OK) {
+                /* Phase 2.C1: snapshot current_state once before the multi-field
+                 * write group below. The fingerprint/peer_mac/transition trio
+                 * is treated as one logical UI update. */
+                UIState_t ui_state;
+                session_ui_get_state_snapshot(&ui_state);
+                session_ui_ctx_lock();
                 memcpy(g_ui_ctx.fingerprint, fingerprint, CEEPEW_FINGERPRINT_BYTES);
                 memcpy(g_ui_ctx.peer_mac, frame->src_mac, CEEPEW_DEVICE_ID_BYTES);
                 g_ui_ctx.fingerprint_confirmed = false;
-                if (g_ui_ctx.current_state != UI_STATE_CHAT &&
-                    g_ui_ctx.current_state != UI_STATE_FINGERPRINT_CONFIRM) {
-                    (void)ui_manager_transition_to(UI_STATE_FINGERPRINT);
+                if (ui_state != UI_STATE_CHAT &&
+                    ui_state != UI_STATE_FINGERPRINT_CONFIRM) {
                     g_ui_ctx.transition_ready = true;
+                }
+                session_ui_ctx_unlock();
+                if (ui_state != UI_STATE_CHAT &&
+                    ui_state != UI_STATE_FINGERPRINT_CONFIRM) {
+                    (void)ui_manager_transition_to(UI_STATE_FINGERPRINT);
                 }
             }
         }
         ceepew_secure_zero(local_device_id, sizeof(local_device_id));
         ceepew_secure_zero(fingerprint, sizeof(fingerprint));
 
-        uint16_t decoded_len = (uint16_t)sizeof(s_work_frame);
-        err = compress_huffman_decompress(s_plain, plain_len, s_work_frame, &decoded_len,
-                                        (uint16_t)sizeof(s_work_frame));
+        uint16_t decoded_len = (uint16_t)sizeof(local_work_frame);
+        err = compress_huffman_decompress(local_plain, plain_len, local_work_frame, &decoded_len,
+                                        (uint16_t)sizeof(local_work_frame));
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         /* Post-derive sync routing (Bug 3 fix). A successful round-trip
@@ -759,25 +843,25 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
          * works in both directions with the converged keys. Route to the
          * sync handler instead of the message store. */
         if (decoded_len == 1U &&
-            (s_work_frame[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
-             s_work_frame[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
-            CeePewErr_t sync_err = session_handle_key_sync_byte(s_work_frame[0]);
+            (local_work_frame[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
+             local_work_frame[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
+            CeePewErr_t sync_err = session_handle_key_sync_byte(local_work_frame[0]);
             if (sync_err == CEEPEW_ERR_NEED_TX) {
-                /* Responder received HELLO — send the ACK back. */
+                /* Responder received HELLO — send the ACK back using X25519 key. */
                 uint8_t ack_plain[1] = { CEEPEW_KEY_SYNC_ACK_BYTE };
                 uint8_t peer_mac[6];
-                uint8_t peer_pk[32];
-                if (session_get_peer_public_key(peer_pk) == CEEPEW_OK) {
+                if (g_crypto_ctx.peer_box_pubkey_valid) {
                     memcpy(peer_mac, frame->src_mac, 6U);
-                    (void)session_send_message(ack_plain, 1U, peer_mac, peer_pk);
+                    (void)session_send_message(ack_plain, 1U, peer_mac,
+                                               g_crypto_ctx.peer_box_pubkey);
                 }
             }
-            ceepew_secure_zero(s_work_frame, sizeof(s_work_frame));
+            ceepew_secure_zero(local_work_frame, sizeof(local_work_frame));
             (void)session_update_last_message_time();
             return CEEPEW_OK;
         }
 
-        err = msg_store_add(s_box_ct, box_ct_len, decoded_len, 0U);
+        err = msg_store_add(local_box_ct, box_ct_len, decoded_len, 0U);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         UIEvent_t ui_event;
@@ -826,6 +910,15 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         if (g_ui_event_queue == NULL) {
             g_ui_event_queue = xQueueCreate(CEEPEW_UI_EVENT_QUEUE_DEPTH, sizeof(UIEvent_t));
             CEEPEW_ASSERT_VOID(g_ui_event_queue != NULL);
+        }
+
+        /* Create UI context mutex (Phase 2.C1) — guards g_ui_ctx access
+         * between the UI task on Core 0 (writes) and the session task on
+         * Core 1 (reads). Recursive to allow nested take/release within
+         * a single function body. */
+        if (g_ui_ctx_lock == NULL) {
+            g_ui_ctx_lock = xSemaphoreCreateRecursiveMutex();
+            CEEPEW_ASSERT_VOID(g_ui_ctx_lock != NULL);
         }
 
         /* Initialize statistics */
@@ -891,6 +984,13 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             } else if (result == pdFAIL) {
                 /* Queue receive timeout (1000ms) — this is normal, no error */
                 s_stats.queue_timeouts++;
+
+                /* Phase 2.C1: snapshot current_state once for the periodic
+                 * maintenance path. The reads at lines below (KEYDER check,
+                 * pair_err handler) all observe the same logical value within
+                 * this 1s tick. */
+                UIState_t ui_state;
+                session_ui_get_state_snapshot(&ui_state);
                 
                 /* Discovery timeout fallback: if we've been scanning for too long, clear RGB to avoid stuck-on LEDs */
                 {
@@ -948,7 +1048,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                             g_ui_ctx.transition_ready = true;
                             continue;
                         }
-                    } else if (g_ui_ctx.current_state == UI_STATE_KEYDER) {
+                    } else if (ui_state == UI_STATE_KEYDER) {
                         /* Barrier just cleared — promote UI to PAIRING_SUCCESS */
                         CEEPEW_LOG(TAG, "Post-derive sync cleared — promoting to PAIRING_SUCCESS");
                         g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_SUCCESS;
@@ -972,8 +1072,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                 CeePewErr_t pair_err = task_session_drive_ble_pairing();
                 if (pair_err != CEEPEW_OK) {
                     CEEPEW_LOG(TAG, "BLE pairing driver returned %d", (int)pair_err);
-                    if (g_ui_ctx.current_state != UI_STATE_PAIRING_FAILED &&
-                        g_ui_ctx.current_state != UI_STATE_PAIRING_SUCCESS) {
+                    if (ui_state != UI_STATE_PAIRING_FAILED &&
+                        ui_state != UI_STATE_PAIRING_SUCCESS) {
                         if (pair_err == CEEPEW_ERR_BUSY) {
                             /* [FIX-1] A write retry is pending — not a permanent failure */
                             CEEPEW_LOG(TAG, "BLE pairing driver busy (write retry pending)");

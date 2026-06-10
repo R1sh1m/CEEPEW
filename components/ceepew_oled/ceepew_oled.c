@@ -321,15 +321,14 @@ static esp_err_t push_full_frame(ceepew_oled_t *dev,
     }
 
     /* 2. Data transaction: 0x40 control byte + 1024 framebuffer bytes.
-     *    Stack-allocated, no malloc. The 4 KB UI task stack has room
-     *    to spare; hal_ui.c will move this to a static .bss buffer in
-     *    a future revision. */
-    uint8_t data_stream[1U + CEEPEW_OLED_BUF_SIZE];
-    data_stream[0U] = CEEPEW_OLED_CTRL_DATA_STREAM;
-    (void)memcpy(&data_stream[1U], dev->buffer, CEEPEW_OLED_BUF_SIZE);
+     *    Static BSS so the 4 KB UI task stack is reserved for render
+     *    recursion / call-graph depth, not frame transport. */
+    static uint8_t s_data_stream[1U + CEEPEW_OLED_BUF_SIZE];
+    s_data_stream[0U] = CEEPEW_OLED_CTRL_DATA_STREAM;
+    (void)memcpy(&s_data_stream[1U], dev->buffer, CEEPEW_OLED_BUF_SIZE);
 
-    rc = i2c_master_transmit(dev_handle, data_stream,
-                             sizeof(data_stream),
+    rc = i2c_master_transmit(dev_handle, s_data_stream,
+                             sizeof(s_data_stream),
                              CEEPEW_OLED_I2C_TIMEOUT_TICKS);
     return rc;
 }
@@ -543,6 +542,9 @@ void ceepew_oled_bus_recover(gpio_num_t sda_pin, gpio_num_t scl_pin)
     (void)gpio_set_level(sda_pin, 0);
     vTaskDelay(pdMS_TO_TICKS(1U));
     (void)gpio_set_level(sda_pin, 1);
+    /* Release pins back to default state so the I2C driver can claim them */
+    gpio_reset_pin(sda_pin);
+    gpio_reset_pin(scl_pin);
     vTaskDelay(pdMS_TO_TICKS(10U));
 }
 
@@ -560,13 +562,13 @@ esp_err_t ceepew_oled_bus_bringup(gpio_num_t sda, gpio_num_t scl,
         .i2c_port              = I2C_NUM_0,
         .sda_io_num            = sda,
         .scl_io_num            = scl,
-        .clk_source            = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt     = 7U,
+        .clk_source            = I2C_CLK_SRC_APB,
+        .glitch_ignore_cnt     = 0U,
         .intr_priority         = 0,
         /* Synchronous mode: no async queue, every i2c_master_transmit()
          * blocks until the physical transfer completes. Prevents the
          * async queue overflow that caused hangs in the prior driver. */
-        .trans_queue_depth     = 0U,
+        .trans_queue_depth     = 1U,
         .flags = {
             .enable_internal_pullup = 1U,
             .allow_pd               = 0U,

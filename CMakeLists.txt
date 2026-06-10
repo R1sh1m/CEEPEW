@@ -24,13 +24,18 @@ idf_build_set_property(MINIMAL_BUILD ON)
 
 project(ceepew)
 
-# The ESP-IDF link order places ceepew_oled.a BEFORE ceepew_hal.a in the
-# rsp, but hal_ui.c.obj (in ceepew_hal.a) calls ceepew_oled_*. The
-# one-pass GNU ld will not re-scan ceepew_oled.a after ceepew_hal.a
-# creates the unresolved refs, so the link fails. Wrap the whole rsp
-# in --start-group / --end-group by injecting the flags into the rsp
-# file in a PRE_LINK step. This makes ld iterate until the unresolved
-# set is empty.
+# Link order: ceepew_oled.a is scanned before ceepew_hal.a because
+# ceepew_hal REQUIRES ceepew_oled. ceepew_oled.a defines ceepew_oled_*
+# symbols but no one in the prior link set has unresolved refs to
+# them, so the one-pass GNU ld discards ceepew_oled.a as "unused."
+# Then ceepew_hal.a (hal_ui.c.obj) creates new unresolved refs to
+# ceepew_oled_*, but ld does not re-scan ceepew_oled.a to resolve
+# them, and the link fails.
+#
+# This is purely a link-order issue, NOT a CMake cycle. The component
+# dep graph is a DAG (verified with `idf.py dependencies` after this
+# fix). Wrap the entire rsp in --start-group / --end-group so ld
+# iterates until the unresolved set is empty.
 if(TARGET ceepew.elf)
     add_custom_command(TARGET ceepew.elf PRE_LINK
         COMMAND ${CMAKE_COMMAND} -E echo

@@ -10,26 +10,26 @@
 #include "hal_ui.h"
 #include "session_msgstore.h"
 #include "../transport/transport_ble.h"
+#include "session_fsm.h"
 
 #ifdef CEEPEW_ENABLE_SELFTEST
-
-/* Mock session FSM functions for Sprint 12 cryptogram tests */
-__attribute__((weak)) CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
-{
-    /* Return test commitment for display */
-    uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
-    memcpy(commitment, test_commitment, CEEPEW_COMMITMENT_BYTES);
-    return CEEPEW_OK;
-}
 
 void ui_cryptogram_selftest_run(void)
 {
     printf("CEEPEW: ui_cryptogram selftest start\n");
 
+    /* Inject a deterministic test commitment for display. Replaces the old
+     * __attribute__((weak)) test stub. */
+    static const uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {
+        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+    };
+    session_test_set_commitment(test_commitment);
+
     /* Initialize UI and HAL */
     hal_ui_init();
     if (ui_manager_init() != CEEPEW_OK) {
-        printf("ui_manager_init failed\n");
+        printf("ui_cryptogram selftest: ui_manager_init failed\n");
         return;
     }
 
@@ -38,6 +38,8 @@ void ui_cryptogram_selftest_run(void)
         printf("ui_cryptogram selftest: msg_store_init failed\n");
         return;
     }
+
+    /* Test 1: Transition to CRYPTOGRAM state */
 
     /* Test 1: Transition to CRYPTOGRAM state */
     (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
@@ -52,10 +54,6 @@ void ui_cryptogram_selftest_run(void)
     printf("CEEPEW: ui_cryptogram selftest - CRYPTOGRAM transition PASS\n");
 
     /* Test 2: Test ui_crypto_show_cryptogram() */
-    uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {
-        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
-        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
-    };
     if (ui_crypto_show_cryptogram(test_commitment) != CEEPEW_OK) {
         printf("ui_cryptogram selftest: ui_crypto_show_cryptogram() failed\n");
         return;
