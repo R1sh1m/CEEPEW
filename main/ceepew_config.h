@@ -33,7 +33,26 @@
 
 /* Commitment sizes */
 #define CEEPEW_COMMITMENT_BYTES          32U
-#define CEEPEW_COMMITMENT_LEGACY_BYTES   8U
+/* Truncated commitment for advertisement-based exchange.
+ * Fits in 31-byte SCAN_RSP alongside the 8-byte complete name and the
+ * 4-byte manufacturer-data AD header (company 0xCEEE + subtype 0x50):
+ *   8 (name) + 1+1+2+1+2+16 (mfr data) = 31 bytes (after Phase 7).
+ * 128 bits of SHA-256 is sufficient because the 4-digit session code
+ * itself only has 10,000 possible values (~13 bits of entropy). */
+#define CEEPEW_COMMITMENT_ADV_BYTES      16U
+
+/* Beacon replay defense (Bug 2 fix). Each commitment beacon carries a
+ * 2-byte monotonic nonce. The receiver rejects any beacon whose nonce
+ * is not strictly greater than the highest nonce it has previously
+ * accepted from this peer — closing the "first-scan-wins" replay window
+ * where a captured beacon could be re-broadcast by a hostile device.
+ *
+ * Wire layout in the mfr AD payload after the company/subtype header:
+ *   [2B nonce][16B commitment]   (18 bytes payload, 22 with header)
+ * SCAN_RSP budget: 8 (name) + 1+1+2+1+2+16 = 31 bytes — exactly at limit. */
+#define CEEPEW_BEACON_NONCE_BYTES       2U
+#define CEEPEW_BEACON_PAYLOAD_BYTES     (CEEPEW_COMMITMENT_ADV_BYTES + CEEPEW_BEACON_NONCE_BYTES)
+#define CEEPEW_BEACON_MFR_AD_BYTES      (5U + CEEPEW_BEACON_PAYLOAD_BYTES)  /* incl. length+type+company+subtype */
 
 /* -------------------------------------------------------------------------- */
 /* Nonce Safety                                                                */
@@ -44,6 +63,12 @@
 /*                                                                             */
 /* The guard at HARD_LIMIT gives a warning window before the counter          */
 /* approaches the danger zone. Session must terminate at HARD_LIMIT.          */
+/*                                                                             */
+/* Nonce parity invariant: initiator uses even nonces (0,2,4,...),            */
+/* responder uses odd nonces (1,3,5,...). session_enforce_nonce_limit()       */
+/* increments by 2 to preserve this. The two nonce sequences are              */
+/* guaranteed disjoint — no collision possible even if both sides encrypt     */
+/* simultaneously.                                                            */
 /*                                                                             */
 /* Phase 4: NONCE_HARD_LIMIT = 2^56 = 72,057,594,037,927,936 IVs             */
 /* At 1 msg/sec, device lifetime = 2,282,404 years (far > device lifespan)   */
@@ -63,6 +88,19 @@
 #define CEEPEW_ARQ_TIMEOUT_MS            500U
 #define CEEPEW_SEQ_WINDOW_SIZE           32U
 
+/* Post-derive sync barrier — 1-byte magic plaintexts exchanged inside the
+ * encrypted ESP-NOW tunnel to verify that crypto_box works in BOTH
+ * directions before the UI advances to PAIRING_SUCCESS. Without this
+ * round-trip, an initiator whose local key derivation succeeds would
+ * transition the UI while the responder was still in PAIRING (Bug 3).
+ *
+ * The magic values are chosen > 0x7F so they can never collide with
+ * ASCII chat text typed by the user. */
+#define CEEPEW_KEY_SYNC_HELLO_BYTE       0xA5U   /* initiator → responder */
+#define CEEPEW_KEY_SYNC_ACK_BYTE         0x5AU   /* responder → initiator */
+#define CEEPEW_KEY_SYNC_TIMEOUT_MS       10000U  /* Give up → PAIRING_FAILED */
+#define CEEPEW_KEY_SYNC_RETRY_MS         250U    /* Initiator retransmit cadence */
+
 /* -------------------------------------------------------------------------- */
 /* Session                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -78,7 +116,10 @@
 /* -------------------------------------------------------------------------- */
 /* Input / UI                                                                  */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_UI_LOOP_DELAY_MS          30U
+#define CEEPEW_UI_LOOP_DELAY_MS          15U   /* ~60 Hz render cap; worst-case
+                                                   * full-frame I2C push ~6 ms,
+                                                   * leaves ~9 ms of slack per
+                                                   * tick for BLE/session on C1. */
 #define CEEPEW_BUTTON_DEBOUNCE_MS        25U
 #define CEEPEW_DIAG_HOLD_MS              2000U
 #define CEEPEW_DIAG_PAGES                6U
@@ -102,6 +143,29 @@
 #define CEEPEW_RGB_ERROR_BLINK_MS        300U   /* Error/nonce_exhausted blink*/
 #define CEEPEW_RGB_REJECT_SEQUENCE_CT    3U     /* Red blinks on fingerprint reject */
 
+/* Pairing Supervisor Watchdog (Event-Driven Architecture)
+ *
+ * Per phase, the supervisor records T_enter and if the phase does not advance
+ * within CEEPEW_PHASE_TIMEOUT_MS, it forces a radio restart. */
+#define CEEPEW_PHASE_TIMEOUT_MS          10000U /* Default per-phase watchdog */
+#define CEEPEW_PHASE_TIMEOUT_CONNECT_MS  8000U  /* CONNECTING phase           */
+#define CEEPEW_PHASE_TIMEOUT_MTU_MS      5000U  /* MTU_NEGOTIATING phase      */
+#define CEEPEW_PHASE_TIMEOUT_DISC_MS     6000U  /* CHAR_DISCOVERING phase     */
+#define CEEPEW_PHASE_TIMEOUT_VERIFY_MS   15000U /* VERIFICATION phase         */
+#define CEEPEW_PHASE_TIMEOUT_GATT_MS     2000U  /* Hybrid-GATT: GATTC_OPEN → write must complete */
+#define CEEPEW_PHASE_TIMEOUT_OVERALL_MS  30000U /* Whole-pairing ceiling      */
+
+/* Pairing event queue depth — small because handlers drain quickly. */
+#define CEEPEW_PAIRING_EVENT_QUEUE_DEPTH 12U
+
+/* Pairing supervisor task parameters */
+#define CEEPEW_SUPERVISOR_PERIOD_MS      500U   /* 2 Hz watchdog tick         */
+#define CEEPEW_SUPERVISOR_PRIORITY       2U     /* Below UI/Session tasks     */
+#define CEEPEW_SUPERVISOR_STACK_BYTES    3072U  /* Local to transport_ble     */
+#define CEEPEW_RECONNECT_JITTER_MIN_MS   200U   /* Reconnect backoff floor    */
+#define CEEPEW_RECONNECT_JITTER_MAX_MS   800U   /* Reconnect backoff ceiling  */
+#define CEEPEW_MAX_RECONNECT_ATTEMPTS    5U     /* From spec: 5 attempts max  */
+
 /* -------------------------------------------------------------------------- */
 /* FEC (Hamming)                                                               */
 /* -------------------------------------------------------------------------- */
@@ -124,7 +188,11 @@
 /* ESL / Transport / Replay                                                    */
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_REPLAY_WINDOW_SIZE        64U
-#define CEEPEW_TIMESTAMP_SLACK_S         15U
+#define CEEPEW_TIMESTAMP_SLACK_S         45U   /* widened from 15 to tolerate raw-uptime skew
+                                                  * between two devices; WireGuard 64-bit replay
+                                                  * bitmap still catches exact replays within the
+                                                  * wider window. A future BLE time-sync
+                                                  * characteristic will replace this. */
 #define CEEPEW_ESPNOW_CHANNEL            1U
 #define CEEPEW_HOP_CHANNELS              9U
 #define CEEPEW_HOP_SHIFT                 6U
@@ -132,7 +200,7 @@
 #define CEEPEW_DOS_QUEUE_THRESHOLD       6U
 #define CEEPEW_COOKIE_ROTATE_S           120U
 #define CEEPEW_COOKIE_BYTES              16U
-#define CEEPEW_MAX_RECONNECT_ATTEMPTS    5U
+#define CEEPEW_RESPONDER_ACK_TIMEOUT_MS  5000U
 
 /* -------------------------------------------------------------------------- */
 /* Region Allocator                                                            */
@@ -161,6 +229,24 @@
 /* Pipeline                                                                    */
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_PIPELINE_MAX_STAGES       16U
+
+/* -------------------------------------------------------------------------- */
+/* Power Management                                                            */
+/* -------------------------------------------------------------------------- */
+/* WiFi modem power save (Tier 1): WIFI_PS_MIN_MODEM saves ~15 mA average
+ * while keeping ESP-NOW RX latency < 50 ms. Disabled during active chat
+ * (Phase 3) for minimum latency; enabled during discovery (Phase 1) and
+ * idle. */
+#define CEEPEW_WIFI_PS_DISCOVERY          WIFI_PS_MIN_MODEM
+#define CEEPEW_WIFI_PS_ACTIVE_CHAT        WIFI_PS_NONE
+
+/* BLE scan duty cycling: window/interval ratio controls average power.
+ * 30 ms scan / 300 ms interval = 10% duty cycle (saves ~40% BLE power).
+ * During active pairing (Phase 2), scan is 100% (WIFI_PS_NONE equivalent). */
+#define CEEPEW_BLE_SCAN_INTERVAL_DISC_MS  300U
+#define CEEPEW_BLE_SCAN_WINDOW_DISC_MS    30U
+#define CEEPEW_BLE_SCAN_INTERVAL_PAIR_MS  60U   /* Active pairing: fast scan */
+#define CEEPEW_BLE_SCAN_WINDOW_PAIR_MS    60U
 
 /* -------------------------------------------------------------------------- */
 /* Debug                                                                       */

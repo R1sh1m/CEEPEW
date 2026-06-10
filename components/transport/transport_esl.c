@@ -322,16 +322,26 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
      * - Allow for typical clock drift on ESP32 devices without NTP
      * - Prevent a 15-second replay window that an attacker could exploit
      * - Be short enough that replaying old messages becomes impractical
-     * 
-     * If devices have unsynchronized clocks (> ±15s apart), legitimate messages
-     * will be silently rejected. Users should ensure devices have synchronized
-     * system time (e.g., via factory calibration or device time adjustment APIs).
-     * 
+     *
+     * If devices have unsynchronized clocks (> ±45s apart by default), legitimate
+     * messages will be silently rejected. The transport layer can apply a
+     * peer_uptime_offset (set via session_set_peer_uptime_offset) to compensate
+     * for raw-uptime differences; without it, both devices' ESL headers carry
+     * their own boot uptime, which diverges as soon as one device reboots.
+     *
      * Silent fail (no error response) prevents timing-based clock inference attacks.
      */
     uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    uint32_t diff = (now_s > hdr.timestamp_s) ? (now_s - hdr.timestamp_s) : (hdr.timestamp_s - now_s);
-    if (diff > CEEPEW_TIMESTAMP_SLACK_S) {
+    /* Apply the peer's uptime offset so the local clock can be compared to
+     * the peer's local clock on equal terms. The offset is set by the BLE
+     * layer after a one-shot time-sync GATT read; if not set, the offset is
+     * 0 and the check is the same as before. */
+    int32_t peer_off_s = session_get_peer_uptime_offset();
+    int32_t peer_now_s = (int32_t)now_s + peer_off_s;
+    int32_t hdr_s      = (int32_t)hdr.timestamp_s;
+    int32_t diff = peer_now_s - hdr_s;
+    if (diff < 0) { diff = -diff; }
+    if ((uint32_t)diff > CEEPEW_TIMESTAMP_SLACK_S) {
         return CEEPEW_ERR_TRANSPORT;  /* Silent fail — prevents replay via timestamp spoofing */
     }
 
@@ -354,8 +364,11 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     }
     uint16_t ct_len = payload_len;
 
-    /* Ascon-128 output buffer: temp plaintext */
-    uint8_t pt_buf[CEEPEW_REGION_POOL_BYTES / 2];
+    /* Ascon-128 output buffer: temp plaintext. Sized to the actual maximum
+     * plaintext (CEEPEW_MAX_MSG_BYTES). Previously a 24 KB stack buffer —
+     * far larger than needed and silently smashed the 8 KB session task
+     * stack on the very first received frame. */
+    static uint8_t s_pt_buf[CEEPEW_MAX_MSG_BYTES];
     uint16_t pt_len = 0U;
 
     /* Copy Ascon key under mutex protection */
@@ -373,7 +386,7 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
         (uint16_t)sizeof(EslHeader_t),
         frame + ct_offset,          /* ciphertext */
         ct_len,
-        pt_buf,                     /* plaintext output */
+        s_pt_buf,                   /* plaintext output (static, sized to MAX_MSG_BYTES) */
         &pt_len
     );
     ceepew_secure_zero(ascon_key_copy, sizeof(ascon_key_copy));
@@ -382,11 +395,13 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     }
 
     /* ═ STEP 8: Copy plaintext back to frame and return ═ */
-    /* Plaintext now in pt_buf, copy it back to frame */
+    /* Plaintext now in s_pt_buf, copy it back to frame. The static buffer
+     * is bounded to CEEPEW_MAX_MSG_BYTES; an Ascon output that exceeds
+     * that is either a bug in the encryptor or a forged packet — reject. */
     if (pt_len > CEEPEW_MAX_MSG_BYTES) {
         return CEEPEW_ERR_BOUNDS;
     }
-    memmove(frame, pt_buf, pt_len);
+    memmove(frame, s_pt_buf, pt_len);
     *len = pt_len;
     return CEEPEW_OK;
 }

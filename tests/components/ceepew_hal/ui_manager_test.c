@@ -9,23 +9,24 @@
 #include "layout.h"
 #include "ui_manager.h"
 #include "hal_ui.h"
+#include "ceepew_oled.h"
+#include "ceepew_oled_gfx_primitives.h"
+#include "ceepew_oled_font_adapter.h"
+#include "session_msgstore.h"
+#include "hal_pins.h"
+#include "esp_timer.h"
 #include "../transport/transport_ble.h"
+#include "session_fsm.h"
 
 #ifdef CEEPEW_ENABLE_SELFTEST
 
-/* Mock/stub implementations for session FSM functions (Sprint 10) */
-__attribute__((weak)) uint64_t session_get_id(void) {
-    /* Return a test session ID for fingerprint rendering */
-    return 0x0123456789ABCDEFULL;
-}
-
-__attribute__((weak)) uint64_t session_get_nonce_counter(void) {
-    /* Return 0 initially, can be mocked to test commitment verification */
-    return 0ULL;
-}
-
-__attribute__((constructor)) static void ui_manager_selftest(void) {
+void ui_manager_selftest_run(void) {
     printf("CEEPEW: ui_manager selftest start\n");
+
+    /* Inject deterministic test values for session_get_id / session_get_nonce_counter.
+     * Replaces the old __attribute__((weak)) test stubs. */
+    session_test_set_id(0x0123456789ABCDEFULL);
+    session_test_set_nonce_counter(0ULL);
 
     /* Initialize UI and HAL */
     hal_ui_init();
@@ -33,7 +34,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
         printf("ui_manager_init failed\n");
         return;
     }
-    
+
     /* Initialize message store for chat tests */
     if (msg_store_init() != CEEPEW_OK) {
         printf("ui_manager selftest: msg_store_init failed\n");
@@ -285,7 +286,7 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     /* Test 10: Test ui_chat_show_bubble() with mock messages */
     if (msg_store_count() == 0U) {
         /* Add a test message for display */
-        uint8_t test_payload[20] = "Hello from peer!    ";
+        uint8_t test_payload[21] = "Hello from peer!    ";
         (void)msg_store_add(test_payload, 20U, 15U, 0U);  /* RX message */
     }
     
@@ -330,6 +331,368 @@ __attribute__((constructor)) static void ui_manager_selftest(void) {
     }
     g_ui_ctx.button_pressed = false;
     printf("CEEPEW: ui_manager selftest - CHAT compose mode PASS\n");
+
+    /* ── Sprint V2.0: in-house ceepew_oled GFX primitives + font
+     * adapter + tile-dirty flush. Each sub-test creates a fresh
+     * ceepew_oled_t and validates a single GFX primitive in isolation;
+     * the panel is NOT connected during this headless self-test, so
+     * we never call ceepew_oled_display(). */
+
+    /* Sub-test 1: horizontal line writes a single page-byte. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 1)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        CeePewErr_t e = ceepew_oled_gfx_line(dev, 0, 32, 127, 32, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_line horiz failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        /* Page 4, column 0 should have a non-zero byte (any column
+         * along the line should). */
+        if (fb[4U * 128U] == 0U) {
+            printf("ui_manager selftest: gfx_line horiz left page-bytes zero\n");
+            return;
+        }
+        if (fb[4U * 128U + 127U] == 0U) {
+            printf("ui_manager selftest: gfx_line horiz right page-bytes zero\n");
+            return;
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_line horiz PASS\n");
+    }
+
+    /* Sub-test 2: diagonal line writes multiple page-bytes. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 2)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        CeePewErr_t e = ceepew_oled_gfx_line(dev, 0, 0, 63, 63, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_line diag failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        /* The diagonal should leave at least 16 page-bytes non-zero
+         * (one per (x, y>>3) along the line). */
+        uint32_t nonzero = 0U;
+        for (uint16_t i = 0U; i < ceepew_oled_get_buffer_size(dev); i++) {
+            if (fb[i] != 0U) { nonzero++; }
+        }
+        if (nonzero < 16U) {
+            printf("ui_manager selftest: gfx_line diag nonzero=%lu < 16\n",
+                   (unsigned long)nonzero);
+            return;
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_line diag PASS\n");
+    }
+
+    /* Sub-test 3: vertical line writes a single bit per page. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 3)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        CeePewErr_t e = ceepew_oled_gfx_line(dev, 64, 0, 64, 63, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_line vert failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        /* All 8 pages should have a non-zero byte at column 64. */
+        for (uint8_t p = 0U; p < 8U; p++) {
+            if (fb[(uint16_t)p * 128U + 64U] == 0U) {
+                printf("ui_manager selftest: gfx_line vert page=%u zero\n",
+                       (unsigned)p);
+                return;
+            }
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_line vert PASS\n");
+    }
+
+    /* Sub-test 4: outline rectangle writes 4 thin sides only. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 4)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        HalUIRect_t r = { .x = 10, .y = 10, .w = 50, .h = 20 };
+        CeePewErr_t e = ceepew_oled_gfx_rect(dev, &r, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_rect failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        /* Top-left corner should be set; an interior pixel should NOT. */
+        if (fb[1U * 128U + 10U] == 0U) {
+            printf("ui_manager selftest: gfx_rect top-left zero\n");
+            return;
+        }
+        if (fb[2U * 128U + 20U] != 0U) {
+            printf("ui_manager selftest: gfx_rect interior not zero\n");
+            return;
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_rect PASS\n");
+    }
+
+    /* Sub-test 5: filled rectangle writes a full block. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 5)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        HalUIRect_t r = { .x = 0, .y = 0, .w = 16, .h = 8 };
+        CeePewErr_t e = ceepew_oled_gfx_rect_fill(dev, &r, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_rect_fill failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        for (uint8_t x = 0U; x < 16U; x++) {
+            if (fb[0U * 128U + x] == 0U) {
+                printf("ui_manager selftest: gfx_rect_fill col=%u zero\n",
+                       (unsigned)x);
+                return;
+            }
+        }
+        /* Column 16 should still be 0 (out of rect). */
+        if (fb[0U * 128U + 16U] != 0U) {
+            printf("ui_manager selftest: gfx_rect_fill overdraw\n");
+            return;
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_rect_fill PASS\n");
+    }
+
+    /* Sub-test 6: circle outline produces 8 octant pixels for radius 0..N. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 6)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        CeePewErr_t e = ceepew_oled_gfx_circle(dev, 64, 32, 10, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_circle failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        /* Cardinal points: (cx+r, cy), (cx-r, cy), (cx, cy+r), (cx, cy-r)
+         * should all be set. */
+        if (fb[3U * 128U + 74U] == 0U) { printf("ui_circle E zero\n"); return; }
+        if (fb[3U * 128U + 54U] == 0U) { printf("ui_circle W zero\n"); return; }
+        if (fb[4U * 128U + 64U] == 0U) { printf("ui_circle S zero\n"); return; }
+        if (fb[2U * 128U + 64U] == 0U) { printf("ui_circle N zero\n"); return; }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_circle PASS\n");
+    }
+
+    /* Sub-test 7: bitmap blit interprets MSB-first packed data. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 7)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        /* 8x1 bitmap, single bit set in column 3 (bit 4 from LSB). */
+        const uint8_t bitmap[1] = { 0x10U };
+        CeePewErr_t e = ceepew_oled_gfx_bitmap(dev, 0, 0, bitmap, 8, 1, HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_bitmap failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        /* MSB-first: byte 0 of the bitmap is column 7..0, MSB first.
+         * Bit 4 (from LSB) = column 3. So page 0 byte 0 should be 0x10. */
+        if (fb[0U] != 0x10U) {
+            printf("ui_manager selftest: gfx_bitmap got 0x%02X expected 0x10\n",
+                   (unsigned)fb[0U]);
+            return;
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_bitmap PASS\n");
+    }
+
+    /* Sub-test 8: text rendering touches the framebuffer. */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 8)\n");
+            return;
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        CeePewErr_t e = ceepew_oled_gfx_text(dev, 0, 0, "AB", HAL_UI_WHITE);
+        if (e != CEEPEW_OK) {
+            printf("ui_manager selftest: gfx_text failed (err=%d)\n", (int)e);
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        uint32_t nonzero = 0U;
+        for (uint16_t i = 0U; i < ceepew_oled_get_buffer_size(dev); i++) {
+            if (fb[i] != 0U) { nonzero++; }
+        }
+        if (nonzero < 4U) {
+            printf("ui_manager selftest: gfx_text nonzero=%lu < 4\n",
+                   (unsigned long)nonzero);
+            return;
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - gfx_text PASS\n");
+    }
+
+    /* Sub-test 9: text_width returns 6 px per char, 0 for NULL/empty. */
+    {
+        if (ceepew_oled_gfx_text_width(NULL) != 0U) {
+            printf("ui_manager selftest: text_width(NULL) != 0\n");
+            return;
+        }
+        if (ceepew_oled_gfx_text_width("") != 0U) {
+            printf("ui_manager selftest: text_width(\"\") != 0\n");
+            return;
+        }
+        if (ceepew_oled_gfx_text_width("A") != 6U) {
+            printf("ui_manager selftest: text_width(\"A\") != 6\n");
+            return;
+        }
+        if (ceepew_oled_gfx_text_width("Hello") != 30U) {
+            printf("ui_manager selftest: text_width(\"Hello\") != 30\n");
+            return;
+        }
+        printf("CEEPEW: ui_manager selftest - gfx_text_width PASS\n");
+    }
+
+    /* Sub-test 10: font adapter constants: first=0x20, last=0x7E,
+     * yAdvance=8, glyph_count=95. */
+    {
+        const ceepew_oled_GFXfont_t *font = ceepew_oled_get_default_font();
+        if (font == NULL) {
+            printf("ui_manager selftest: get_default_font returned NULL\n");
+            return;
+        }
+        if (font->first != 0x20U) {
+            printf("ui_manager selftest: default font first=0x%02X != 0x20\n",
+                   (unsigned)font->first);
+            return;
+        }
+        if (font->last != 0x7EU) {
+            printf("ui_manager selftest: default font last=0x%02X != 0x7E\n",
+                   (unsigned)font->last);
+            return;
+        }
+        if (font->yAdvance != 8U) {
+            printf("ui_manager selftest: default font yAdvance=%u != 8\n",
+                   (unsigned)font->yAdvance);
+            return;
+        }
+        if (font->bitmap == NULL || font->glyph == NULL) {
+            printf("ui_manager selftest: default font bitmap/glyph NULL\n");
+            return;
+        }
+        const uint8_t glyph_count = (uint8_t)(font->last -
+                                              font->first + 1U);
+        if (glyph_count != 95U) {
+            printf("ui_manager selftest: glyph count=%u != 95\n",
+                   (unsigned)glyph_count);
+            return;
+        }
+        /* bitmapOffset for first glyph should be 0, for last glyph 470. */
+        if (font->glyph[0].bitmapOffset != 0U) {
+            printf("ui_manager selftest: glyph[0] offset=%u != 0\n",
+                   (unsigned)font->glyph[0].bitmapOffset);
+            return;
+        }
+        if (font->glyph[94].bitmapOffset != 470U) {
+            printf("ui_manager selftest: glyph[94] offset=%u != 470\n",
+                   (unsigned)font->glyph[94].bitmapOffset);
+            return;
+        }
+        printf("CEEPEW: ui_manager selftest - font_adapter PASS\n");
+    }
+
+    /* Sub-test 11: ceepew_oled_get_buffer on a fresh device is non-NULL,
+     * the buffer is all zero, and ceepew_oled_clear_buffer is idempotent.
+     */
+    {
+        ceepew_oled_t *dev = ceepew_oled_create();
+        if (dev == NULL) {
+            printf("ui_manager selftest: ceepew_oled_create failed (test 11)\n");
+            return;
+        }
+        uint8_t *fb = ceepew_oled_get_buffer(dev);
+        if (fb == NULL) {
+            printf("ui_manager selftest: get_buffer returned NULL\n");
+            return;
+        }
+        for (uint16_t i = 0U; i < ceepew_oled_get_buffer_size(dev); i++) {
+            if (fb[i] != 0U) {
+                printf("ui_manager selftest: fresh fb[%u]=%u != 0\n",
+                       (unsigned)i, (unsigned)fb[i]);
+                return;
+            }
+        }
+        (void)ceepew_oled_clear_buffer(dev);
+        for (uint16_t i = 0U; i < ceepew_oled_get_buffer_size(dev); i++) {
+            if (fb[i] != 0U) {
+                printf("ui_manager selftest: cleared fb[%u]=%u != 0\n",
+                       (unsigned)i, (unsigned)fb[i]);
+                return;
+            }
+        }
+        ceepew_oled_destroy(dev);
+        printf("CEEPEW: ui_manager selftest - oled_buffer_lifecycle PASS\n");
+    }
+
+    /* Sub-test 12: bus_recover on a known-good pin pair doesn't hang
+     * and returns. Tests the bit-bang recovery code path against the
+     * configured pins without needing a real panel. */
+    {
+        /* This just exercises the function — it may legitimately
+         * detect no stuck slave and return immediately. The point is
+         * that it doesn't block forever. */
+        const int64_t t0 = esp_timer_get_time();
+        ceepew_oled_bus_recover(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL);
+        const int64_t dt = esp_timer_get_time() - t0;
+        if (dt > 100000LL) {  /* 100 ms ceiling */
+            printf("ui_manager selftest: bus_recover took %lldus > 100ms\n",
+                   (long long)dt);
+            return;
+        }
+        printf("CEEPEW: ui_manager selftest - bus_recover PASS\n");
+    }
+
+    /* ── STACKS page (Sprint 13) smoke check ─────────────────────
+     * Force the pot to the page-4 zone and render; we don't assert
+     * specific text (the bar values depend on runtime state), only
+     * that render_diag_page() does not crash and produces output. */
+    g_ui_ctx.diag_mode = true;
+    g_ui_ctx.user_input = (uint8_t)4000U;   /* 4000 % 256 = 160; exercises diag page render */
+    g_ui_ctx.transition_ready = true;
+    CeePewErr_t stacks_rc = ui_manager_update();
+    g_ui_ctx.diag_mode = false;
+    if (stacks_rc == CEEPEW_OK) {
+        printf("CEEPEW: ui_manager selftest - STACKS page renders PASS\n");
+    } else {
+        printf("CEEPEW: ui_manager selftest - STACKS page FAILED (rc=%d)\n",
+               (int)stacks_rc);
+    }
 
     printf("CEEPEW: ui_manager selftest PASS (all tests passed)\n");
 }

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "ESP-IDF": {
+      "source": "synqing/k1.hardware",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/ESP-IDF/SKILL.md",
+      "computedHash": "79774fae895fe9b03fd590d30ea59dd5ede0f1fcebf495a33471877e21910f7a"
+    }
+  }
+}

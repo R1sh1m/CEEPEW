@@ -1,5 +1,10 @@
-/* main/test_hop.c
+/* tests/main/test_hop.c
  * Unit test for transport_hop permutation determinism.
+ *
+ * Invoked from tests/main/integration_test_e2e.c:integration_tests_run_all()
+ * via the test_hop_determinism() entry point. No constructor — the
+ * diagnostic harness drives the call deterministically after hardware
+ * initialization.
  */
 
 #include "ceepew_assert.h"
@@ -14,7 +19,7 @@ void test_hop_determinism(void){
     CryptoCtx_t ctx = {0};
     /* Fixed key */
     for (uint8_t i = 0; i < CEEPEW_SESSION_KEY_BYTES; i++) { ctx.ascon_key[i] = (uint8_t)i; }
-    
+
     uint64_t nonce_counter = (uint64_t)(12345ULL << CEEPEW_HOP_SHIFT); /* pick a nonce that yields non-zero hop_idx */
 
     uint8_t ch1 = 0U;
@@ -38,9 +43,4 @@ void test_hop_determinism(void){
     } else {
         ESP_LOGE(TAG, "[FAIL] channel mismatch: %u vs %u", (unsigned)ch1, (unsigned)ch2);
     }
-}
-
-/* Optionally call test on startup - keep non-intrusive: user can invoke via integration tests. */
-__attribute__((constructor)) static void run_test_on_startup(void){
-    test_hop_determinism();
 }

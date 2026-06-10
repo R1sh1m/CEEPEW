@@ -21,6 +21,8 @@ typedef enum {
     RGB_GREEN_PULSE,        /* Smooth PWM breathing green */
     RGB_AMBER_PULSE,        /* Smooth PWM breathing amber */
     RGB_CYAN_PULSE,         /* Smooth PWM breathing cyan  */
+    RGB_YELLOW_RED_BLINK,   /* Alternating yellow/red blink — supervisor recovery indicator */
+    RGB_CYAN_BLINK,         /* Steady cyan blink — GATT identity exchange in progress */
     RGB_RAINBOW_CYCLE,
     RGB_HEARTBEAT,
     RGB_PATTERN_COUNT

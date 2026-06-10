@@ -10,8 +10,9 @@
 
 #include <string.h>
 
-static uint8_t s_nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
-static uint8_t s_nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+/* Buffers are now stack-local in encrypt/decrypt (M6: thread-safety fix).
+ * Each is CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES = 192 bytes.
+ * Stack budget: session task has 8 KB, these fit comfortably. */
 
 static CeePewErr_t hmac_sha256(const uint8_t *key,
                                uint16_t key_len,
@@ -86,8 +87,15 @@ static CeePewErr_t box_derive_shared_secret(const CryptoCtx_t *ctx,
                                             const uint8_t peer_public_key[32U],
                                             uint8_t shared_secret[32U])
 {
+    /* Standard X25519 ECDH: shared_secret = X25519(local_priv, peer_pub).
+     * Both peers derive the SAME shared secret because:
+     *   Peer A: X25519(privA, pubB) = privA * pubB
+     *   Peer B: X25519(privB, pubA) = privB * pubA = privA * pubB (ECDH).
+     * The local private key (box_privkey) is unique per peer and generated
+     * from CSPRNG during session_phase2_derive_key(). The peer's public key
+     * (peer_public_key) is received over BLE during the sign_pk exchange. */
     uint8_t scalar[32U];
-    memcpy(scalar, ctx->box_seed, sizeof(scalar));
+    memcpy(scalar, ctx->box_privkey, sizeof(scalar));
     curve25519_clamp(scalar);
     int rc = curve25519_scalarmult(shared_secret, scalar, peer_public_key);
     ceepew_secure_zero(scalar, (uint32_t)sizeof(scalar));
@@ -140,13 +148,15 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
         return err;
     }
 
-    memset(s_nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
+    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    memset(nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
     if (msg_len > 0U) {
-        memcpy(s_nacl_pt_buf + CRYPTO_BOX_ZEROBYTES, msg, msg_len);
+        memcpy(nacl_pt_buf + CRYPTO_BOX_ZEROBYTES, msg, msg_len);
     }
     uint16_t work_len = (uint16_t)(CRYPTO_BOX_ZEROBYTES + msg_len);
     uint16_t out_work_len = work_len;
-    err = crypto_stream_process(&stream, s_nacl_pt_buf, work_len, s_nacl_ct_buf, &out_work_len);
+    err = crypto_stream_process(&stream, nacl_pt_buf, work_len, nacl_ct_buf, &out_work_len);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
         ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
@@ -155,9 +165,9 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     }
 
     uint8_t mac_key[32U];
-    memcpy(mac_key, s_nacl_ct_buf, 32U);
+    memcpy(mac_key, nacl_ct_buf, 32U);
     uint8_t mac[32U];
-    err = hmac_sha256(mac_key, 32U, s_nacl_ct_buf + CRYPTO_BOX_ZEROBYTES, msg_len, mac);
+    err = hmac_sha256(mac_key, 32U, nacl_ct_buf + CRYPTO_BOX_ZEROBYTES, msg_len, mac);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
         ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
@@ -167,9 +177,9 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
         return err;
     }
 
-    memcpy(s_nacl_ct_buf + CRYPTO_BOX_BOXZEROBYTES, mac, CRYPTO_BOX_BOXZEROBYTES);
-    memset(s_nacl_ct_buf, 0, CRYPTO_BOX_BOXZEROBYTES);
-    memcpy(out, s_nacl_ct_buf + CRYPTO_BOX_BOXZEROBYTES,
+    memcpy(nacl_ct_buf + CRYPTO_BOX_BOXZEROBYTES, mac, CRYPTO_BOX_BOXZEROBYTES);
+    memset(nacl_ct_buf, 0, CRYPTO_BOX_BOXZEROBYTES);
+    memcpy(out, nacl_ct_buf + CRYPTO_BOX_BOXZEROBYTES,
            (size_t)msg_len + CRYPTO_BOX_BOXZEROBYTES);
     *out_len = (uint16_t)(msg_len + CRYPTO_BOX_BOXZEROBYTES);
 
@@ -179,8 +189,8 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
     ceepew_secure_zero(mac, (uint32_t)sizeof(mac));
     ceepew_secure_zero(nonce, (uint32_t)sizeof(nonce));
-    ceepew_secure_zero(s_nacl_pt_buf, (uint32_t)sizeof(s_nacl_pt_buf));
-    ceepew_secure_zero(s_nacl_ct_buf, (uint32_t)sizeof(s_nacl_ct_buf));
+    ceepew_secure_zero(nacl_pt_buf, (uint32_t)sizeof(nacl_pt_buf));
+    ceepew_secure_zero(nacl_ct_buf, (uint32_t)sizeof(nacl_ct_buf));
 
     return CEEPEW_OK;
 }
@@ -226,10 +236,12 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-    memset(s_nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
+    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    memset(nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
     uint16_t work_len = CRYPTO_BOX_ZEROBYTES;
     uint16_t out_work_len = work_len;
-    err = crypto_stream_process(&stream, s_nacl_pt_buf, work_len, s_nacl_ct_buf, &out_work_len);
+    err = crypto_stream_process(&stream, nacl_pt_buf, work_len, nacl_ct_buf, &out_work_len);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
         ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
@@ -238,7 +250,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     }
 
     uint8_t mac_key[32U];
-    memcpy(mac_key, s_nacl_ct_buf, 32U);
+    memcpy(mac_key, nacl_ct_buf, 32U);
     uint8_t calc_mac[32U];
     err = hmac_sha256(mac_key, 32U, in + CRYPTO_BOX_BOXZEROBYTES, msg_len, calc_mac);
     if (err != CEEPEW_OK) {
@@ -270,7 +282,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     }
     work_len = CRYPTO_BOX_ZEROBYTES;
     out_work_len = work_len;
-    err = crypto_stream_process(&stream, s_nacl_pt_buf, work_len, s_nacl_ct_buf, &out_work_len);
+    err = crypto_stream_process(&stream, nacl_pt_buf, work_len, nacl_ct_buf, &out_work_len);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
         ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
@@ -294,7 +306,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
     ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
     ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));
-    ceepew_secure_zero(s_nacl_pt_buf, (uint32_t)sizeof(s_nacl_pt_buf));
-    ceepew_secure_zero(s_nacl_ct_buf, (uint32_t)sizeof(s_nacl_ct_buf));
+    ceepew_secure_zero(nacl_pt_buf, (uint32_t)sizeof(nacl_pt_buf));
+    ceepew_secure_zero(nacl_ct_buf, (uint32_t)sizeof(nacl_ct_buf));
     return CEEPEW_OK;
 }

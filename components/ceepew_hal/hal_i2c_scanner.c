@@ -39,8 +39,8 @@ CeePewErr_t hal_i2c_scanner_scan_bus(void)
         .i2c_port              = CEEPEW_I2C_PORT,
         .sda_io_num            = CEEPEW_PIN_I2C_SDA,
         .scl_io_num            = CEEPEW_PIN_I2C_SCL,
-        .clk_source            = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt     = 7U,
+        .clk_source            = I2C_CLK_SRC_APB,
+        .glitch_ignore_cnt     = 0U,
         .intr_priority         = 0,
         .trans_queue_depth     = 0U,  /* synchronous mode */
         .flags = {
@@ -62,22 +62,35 @@ CeePewErr_t hal_i2c_scanner_scan_bus(void)
 
     uint8_t device_count = 0U;
 
-    /* Scan all addresses in valid range */
-    /* Loop bound: I2C_SCAN_ADDR_MAX - I2C_SCAN_ADDR_MIN + 1 = 0x75 = 117 iterations */
+    /* Probe only the two SSD1306 candidate addresses by default. The
+     * full 0x03-0x77 sweep is retained under CEEPEW_DEBUG_SERIAL for
+     * wiring diagnostics; it adds ~150-200 ms of boot latency. */
+#ifdef CEEPEW_DEBUG_SERIAL
     for (uint8_t addr = I2C_SCAN_ADDR_MIN; addr <= I2C_SCAN_ADDR_MAX; addr++) {
         esp_err_t probe_result = i2c_master_probe(bus, addr, I2C_SCAN_PROBE_TIMEOUT_MS);
         if (probe_result == ESP_OK) {
             ESP_LOGI(TAG, "Device found at 0x%02X", (unsigned int)addr);
             device_count++;
         }
-        /* Silently skip addresses that don't respond */
     }
+#else
+    static const uint8_t oled_addrs[] = { 0x3CU, 0x3DU };
+    for (uint8_t i = 0U; i < (uint8_t)(sizeof(oled_addrs) / sizeof(oled_addrs[0U])); i++) {
+        if (i2c_master_probe(bus, oled_addrs[i], I2C_SCAN_PROBE_TIMEOUT_MS) == ESP_OK) {
+            ESP_LOGI(TAG, "Device found at 0x%02X", (unsigned int)oled_addrs[i]);
+            device_count++;
+        }
+    }
+#endif
 
-    /* Clean up bus handle */
+    /* Clean up bus handle, then reset pins for next I2C user */
     esp_err_t delete_result = i2c_del_master_bus(bus);
     if (delete_result != ESP_OK) {
         ESP_LOGW(TAG, "Warning: i2c_del_master_bus returned 0x%X", (unsigned int)delete_result);
     }
+    gpio_reset_pin(CEEPEW_PIN_I2C_SDA);
+    gpio_reset_pin(CEEPEW_PIN_I2C_SCL);
+    vTaskDelay(pdMS_TO_TICKS(10U));
 
     ESP_LOGI(TAG, "Scan complete. %u device(s) discovered.", (unsigned int)device_count);
 

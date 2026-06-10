@@ -8,25 +8,18 @@ idf_component_register(
         "session_send.c"
         "task_ui.c"
         "task_session.c"
-        "integration_test_e2e.c"
-        "test_pipeline_memory.c"
-        "test_replay.c"
-        "test_replay_comprehensive.c"
-        "test_arq_backoff.c"
-        "test_power.c"
-        "test_hop.c"
-        "test_transport_hop.c"
-        "integration_test_pairing_ui.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         ceepew_hal
+        ceepew_oled
         crypto
         ecc
         compress
         transport
         mem
         tools
+        tests
         esp_system
         esp_wifi
         esp_event

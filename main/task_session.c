@@ -16,9 +16,9 @@
     #include "task_session.h"
     #include "task_ui.h"
     #include "session_fsm.h"
-    #include "session_msgstore.h"
-    #include "session_memory.h"
-    #include "ceepew_security_utils.h"
+#include "session_msgstore.h"
+#include "session_memory.h"
+#include "ceepew_security_utils.h"
     #include "crypto_ctx.h"
     #include "crypto_box_wrap.h"
     #include "compress_huffman.h"
@@ -52,6 +52,30 @@
 
     /* UI event queue: session task posts UI events here */
     QueueHandle_t g_ui_event_queue = NULL;
+
+    /* UI context mutex (Phase 2.C1) — guards g_ui_ctx access between Core 0
+     * (UI task writes) and Core 1 (session task reads). Recursive so the
+     * session task can take it multiple times in nested call paths. */
+    SemaphoreHandle_t g_ui_ctx_lock = NULL;
+
+    void session_ui_ctx_lock(void) {
+        if (g_ui_ctx_lock != NULL) {
+            (void)xSemaphoreTakeRecursive(g_ui_ctx_lock, portMAX_DELAY);
+        }
+    }
+
+    void session_ui_ctx_unlock(void) {
+        if (g_ui_ctx_lock != NULL) {
+            (void)xSemaphoreGiveRecursive(g_ui_ctx_lock);
+        }
+    }
+
+    void session_ui_get_state_snapshot(UIState_t *out_state) {
+        CEEPEW_ASSERT_VOID(out_state != NULL);
+        session_ui_ctx_lock();
+        *out_state = g_ui_ctx.current_state;
+        session_ui_ctx_unlock();
+    }
 
     /* -------------------------------------------------------------------------- */
     /* Session Task State                                                         */
@@ -88,6 +112,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
     static uint32_t s_phase2_jitter_target_ms = 0U;
     static uint32_t s_phase2_jitter_start_ms = 0U;
 
+    static void task_session_reset_pairing_static_state(void);
+
     static const char *task_session_ble_state_name(BleState_t state){
         switch (state) {
             case BLE_IDLE: return "idle";
@@ -107,13 +133,23 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
     static CeePewErr_t task_session_build_session_code(uint8_t session_code[32U]){
         CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
-        CEEPEW_ASSERT(g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY, CEEPEW_ERR_PARAM);
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+        CEEPEW_ASSERT(ui_state >= UI_STATE_CODE_ENTRY, CEEPEW_ERR_PARAM);
+
+        /* Snapshot code_digits under the same lock as the state — they must
+         * be read consistently together (the user can be editing one of them
+         * on Core 0 while we sample on Core 1). */
+        session_ui_ctx_lock();
+        uint8_t digits[4];
+        memcpy(digits, g_ui_ctx.code_digits, 4U);
+        session_ui_ctx_unlock();
 
         /* Expand the 4-digit UI entry into the 32-byte session code expected by
         * the session FSM by repeating the user-selected digits across the buffer. */
         for (uint8_t i = 0U; i < 32U; i++) {
             /* Expand the 4-character UI entry (ASCII bytes) into 32-byte session code */
-            uint8_t ch = g_ui_ctx.code_digits[i % 4U];
+            uint8_t ch = digits[i % 4U];
             /* If stored value is not printable, fallback to '0'+(val%10) */
             if (ch < 32U) { ch = (uint8_t)('0' + (ch % 10U)); }
             session_code[i] = ch;
@@ -130,12 +166,46 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         uint8_t    phase     = session_get_phase();
         BleState_t ble_state = transport_ble_get_state();
         const BlePeerRecord_t *peer = transport_ble_get_peer_cached();
-        if (g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS ||
-            g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
+        /* Phase 2.C1: snapshot current_state under the UI mutex once at the
+         * top of this function. The original 7 read sites below all hit the
+         * same logical value within a single pairing-flow iteration. */
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+        if (ui_state == UI_STATE_PAIRING_SUCCESS ||
+            ui_state == UI_STATE_PAIRING_FAILED) {
             return CEEPEW_OK;
         }
         /* Nothing to do once active session is established */
         if (phase == 3U && session_is_active()) {return CEEPEW_OK;}
+
+        /* BLE link-drop detection during the pairing flow (GATTS sign_pk
+         * phase). If the user is in code entry / countdown / confirm and the
+         * BLE link has dropped to IDLE (no GATTC, no GATTS, not connecting),
+         * force a UI revert to PAIRING_FAILED. */
+        bool in_pairing_screen = (ui_state == UI_STATE_CODE_ENTRY ||
+                                  ui_state == UI_STATE_COUNTDOWN ||
+                                  ui_state == UI_STATE_CONFIRM);
+        if (in_pairing_screen &&
+            ble_state == BLE_IDLE &&
+            !g_ble_ctx.gattc_connected &&
+            !g_ble_ctx.gatts_connected &&
+            !g_ble_ctx.connecting &&
+            peer == NULL) {
+            ESP_LOGW(TAG, "BLE link dropped during pairing flow — reverting UI to PAIRING_FAILED");
+            ESP_LOGW(TAG, "  state=%s adv=%u scan=%u gattc=%u gatts=%u connect=%u committed=%u verified=%u",
+                     task_session_ble_state_name(ble_state),
+                     g_ble_ctx.is_advertising, g_ble_ctx.is_scanning,
+                     g_ble_ctx.gattc_connected, g_ble_ctx.gatts_connected,
+                     g_ble_ctx.connecting,
+                     g_ble_ctx.commitment_verified ? 1U : 0U,
+                     g_ble_ctx.handoff_ready ? 1U : 0U);
+            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+            (void)session_reset_to_discovery();
+            task_session_reset_pairing_static_state();
+            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+            g_ui_ctx.transition_ready = true;
+            return CEEPEW_OK;
+        }
 
         /* Reset phase-latched flags whenever we drop below their stage. */
         if (phase < 1U) {
@@ -157,8 +227,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         }
 
         /* ── STEP 2: Determine initiator / responder role ─────────────────────
-        * Lower MAC = initiator (opens GATT connection).
-        * Higher MAC = responder (listens, never calls connect_to_peer).          */
+        * Lower MAC = initiator (opens the brief GATT connection for sign_pk).
+        * Higher MAC = responder (waits for GATTS connect).                      */
         bool is_initiator = false;
         if (peer != NULL) {
             uint8_t self_mac[CEEPEW_DEVICE_ID_BYTES] = {0U};
@@ -169,25 +239,25 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             ceepew_secure_zero(self_mac, sizeof(self_mac));
         }
 
-        /* ── STEP 3: Initiator connects during code-entry ─────────────────────
-        * Only the initiator calls connect_to_peer. Responder stays passive.      */
-        if (phase == 1U && is_initiator && peer != NULL && !g_ble_ctx.connecting &&
-            !g_ble_ctx.gattc_connected &&
-            (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY ||
-             g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
-             g_ui_ctx.current_state == UI_STATE_PAIRING)) {
-            CeePewErr_t err = transport_ble_connect_to_peer(peer->peer_mac);
-            if (err != CEEPEW_OK) { return err; }
-            /* Connection completes asynchronously; yield now */
-            return CEEPEW_OK;
-        }
+        /*
+         * ── STEP 3: NO GATT CONNECTION FOR COMMITMENT ────────────────────────
+         *
+         * Commitments are exchanged via BLE scan-response beacons (step 4).
+         * A GATT connection is NOT initiated during commitment exchange —
+         * this eliminates BLE+WiFi coexistence failures, MTU timeouts,
+         * reconnect races, and the "peer vanished" false-positive that
+         * plagued the previous design.
+         *
+         * The GATT server remains registered (for future use) and the
+         * 0xFFF3 sign_pk characteristic accepts writes. After beacon match,
+         * the lower-MAC device opens a brief GATT connection to deliver
+         * its sign_pk (step 5).
+         */
 
-        /* ── STEP 4: Both devices — initiate phase 2 when user confirms code ──
-        * Runs exactly once per pairing when the UI transitions to COUNTDOWN
-        * or PAIRING. Both states represent user confirmation of the code.      */
+        /* ── STEP 4: Phase 2 initiate + commitment beacon broadcast ──────── */
         if (phase == 1U && peer != NULL &&
-            (g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
-             g_ui_ctx.current_state == UI_STATE_PAIRING)) {
+            (ui_state == UI_STATE_COUNTDOWN ||
+             ui_state == UI_STATE_PAIRING)) {
 
             uint8_t session_code[32U];
             CeePewErr_t err = task_session_build_session_code(session_code);
@@ -197,159 +267,196 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             ceepew_secure_zero(session_code, (uint32_t)sizeof(session_code));
             if (err != CEEPEW_OK) { return err; }
 
-            /* Pre-populate commitment_digest before checking any buffered peer
-             * commitment so the responder compares against a real local value. */
+            /* Pre-populate commitment_digest so transport layer has a local
+             * value to compare any received beacon against. */
             uint8_t commitment[CEEPEW_COMMITMENT_BYTES];
             err = session_get_commitment(commitment);
             if (err == CEEPEW_OK) {
-                /* Store locally and mark local commitment length for BLE layer */
                 memcpy(g_ble_ctx.commitment_digest, commitment, CEEPEW_COMMITMENT_BYTES);
                 g_ble_ctx.local_commitment_len = CEEPEW_COMMITMENT_BYTES;
             }
             ceepew_secure_zero(commitment, sizeof(commitment));
             if (err != CEEPEW_OK) { return err; }
 
-            /* FIX E: Responder symmetry — Both initiator and responder should call
-             * transport_ble_exchange_commitment() to ensure the commitment is ready
-             * and will be sent/retried if needed. Previously only initiator called
-             * this explicitly; responder relied on receiving initiator's write.
-             * Now both sides prepare their commitment for transmission. */
-            if (!is_initiator) {
-                /* Responder: prepare to send own commitment back to initiator */
-                uint8_t resp_commitment[CEEPEW_COMMITMENT_BYTES];
-                memcpy(resp_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
-                err = transport_ble_exchange_commitment(resp_commitment, CEEPEW_COMMITMENT_BYTES);
-                ceepew_secure_zero(resp_commitment, sizeof(resp_commitment));
-                if (err != CEEPEW_OK) {
-                    ESP_LOGW(TAG, "Responder exchange_commitment setup failed: %d", (int)err);
-                    return err;
+            /*
+             * Both devices broadcast their truncated commitment in the
+             * SCAN_RSP manufacturer-specific AD. The peer will read it on
+             * the next scan result via transport_ble_verify_pending_commitment.
+             */
+            uint8_t adv_commit[CEEPEW_COMMITMENT_ADV_BYTES];
+            memcpy(adv_commit, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_ADV_BYTES);
+            CeePewErr_t beacon_err = transport_ble_set_commitment_beacon(
+                                        adv_commit, CEEPEW_COMMITMENT_ADV_BYTES);
+            ceepew_secure_zero(adv_commit, sizeof(adv_commit));
+            if (beacon_err != CEEPEW_OK) {
+                /* Non-fatal: the retry logic in step 4b will re-attempt */
+                ESP_LOGW(TAG, "Commitment beacon set failed (%d) — will retry", (int)beacon_err);
+            }
+
+            s_ble_commitment_exchanged = true;
+
+            /* Handle any peer commitment that arrived before ours was ready */
+            (void)transport_ble_verify_pending_commitment();
+
+            phase     = session_get_phase();  /* now == 2 */
+            ble_state = transport_ble_get_state();
+            ESP_LOGI(TAG, "Phase 2 ready — commitment beacon broadcast (role=%s)",
+                     is_initiator ? "initiator" : "responder");
+            return CEEPEW_OK;
+        }
+
+        /* ── STEP 4b: Retry commitment beacon if still unconfirmed ──────── */
+        phase     = session_get_phase();
+        ble_state = transport_ble_get_state();
+
+        if (phase == 2U && !g_ble_ctx.commitment_beacon_active &&
+            g_ble_ctx.local_commitment_len > 0U) {
+            uint8_t adv_commit[CEEPEW_COMMITMENT_ADV_BYTES];
+            memcpy(adv_commit, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_ADV_BYTES);
+            CeePewErr_t beacon_err = transport_ble_set_commitment_beacon(
+                                        adv_commit, CEEPEW_COMMITMENT_ADV_BYTES);
+            ceepew_secure_zero(adv_commit, sizeof(adv_commit));
+            if (beacon_err != CEEPEW_OK) {
+                ESP_LOGW(TAG, "Commitment beacon retry failed (%d)", (int)beacon_err);
+            }
+        }
+
+        /* ── STEP 5: After beacon match — open brief GATT for sign_pk ────── */
+        phase     = session_get_phase();
+        ble_state = transport_ble_get_state();
+
+        /*
+         * Beacon match means handoff_ready == true (set by
+         * transport_ble_verify_commitment_unlocked). If sign_pk has not
+         * been received yet, the initiator opens a brief GATT connection
+         * to write its sign_pk; the responder waits for the GATTS write.
+         *
+         * After CEEPEW_MAX_RECONNECT_ATTEMPTS sign_pk GATT failures we
+         * give up and proceed to key derivation without sign_pk. The
+         * fingerprint screen will be empty but the chat flow still works.
+         *
+         * Hybrid-GATT hardening (Phase 7): we additionally require
+         *   (a) PAIRING_PHASE_GATT_IDENTITY (explicit state, not just phase==2)
+         *   (b) commitment_verified (redundant with handoff_ready but explicit)
+         *   (c) peer_gatt_ready (peer's beacon has bit-15 set — see Item 3)
+         * before opening the GATTC connection. (c) is set asynchronously
+         * by the beacon decoder when it sees the peer's re-broadcast
+         * beacon with the GATT-ready flag flipped on. Until that
+         * happens, the gate stays closed and the supervisor's 2s
+         * watchdog fires — designed to fail-closed.
+         */
+        if (phase == 2U && transport_ble_handoff_ready() &&
+            !g_ble_ctx.sign_pk_received &&
+            g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS)
+        {
+            if (is_initiator && !g_ble_ctx.connecting &&
+                !g_ble_ctx.gattc_connected && peer != NULL &&
+                transport_ble_get_phase() == PAIRING_PHASE_GATT_IDENTITY &&
+                g_ble_ctx.commitment_verified &&
+                g_ble_ctx.peer_gatt_ready)
+            {
+                ESP_LOGI(TAG, "Beacon match — opening brief GATT for sign_pk exchange");
+                CeePewErr_t conn_err = transport_ble_connect_to_peer(peer->peer_mac);
+                if (conn_err != CEEPEW_OK && conn_err != CEEPEW_ERR_BUSY) {
+                    ESP_LOGW(TAG, "sign_pk GATT connect failed: %d (will retry)", (int)conn_err);
+                    g_ble_ctx.reconnect_attempts++;
                 }
             }
 
-            /* F-2 fix: if the responder already buffered the initiator's
-             * commitment, verify it only after the local commitment is ready. */
-            err = transport_ble_verify_pending_commitment();
-            if (err != CEEPEW_OK) { return err; }
-
-            /* Do NOT send the commitment this tick — yield so the responder also
-            * has a full 1000 ms tick to call session_phase2_initiate() and
-            * populate its own commitment_digest before our write arrives.         */
-            phase     = session_get_phase();   /* now == 2 */
-            ble_state = transport_ble_get_state();
-            ESP_LOGI(TAG, "Phase 2 ready (role=%s)", is_initiator ? "initiator" : "responder");
-            return CEEPEW_OK;                  /* deliberate one-tick delay */
-        }
-
-        /* ── STEP 5: Initiator sends commitment on the tick AFTER phase 2 init ─
-        * By now the responder has also had a full tick to set commitment_digest.  */
-        phase     = session_get_phase();
-        ble_state = transport_ble_get_state();
-
-        if (phase == 2U && is_initiator && !s_ble_commitment_exchanged &&
-            (ble_state == BLE_CONNECTED || g_ble_ctx.gattc_connected)) {
-
-            /* commitment_digest was set in step 4 on the previous tick.
-            * Pass a local copy to avoid aliasing UB in exchange_commitment().     */
-            uint8_t local_commitment[CEEPEW_COMMITMENT_BYTES];
-            memcpy(local_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
-
-            CeePewErr_t err = transport_ble_exchange_commitment(local_commitment, CEEPEW_COMMITMENT_BYTES);
-            ceepew_secure_zero(local_commitment, sizeof(local_commitment));
-            if (err != CEEPEW_OK) { return err; }
-
-            s_ble_commitment_exchanged = true;
-            ESP_LOGI(TAG, "Commitment written to peer via GATT");
-        }
-
-        /* ── STEP 6: Both devices derive session key once verification is done ─
-        * Initiator: BLE_DONE set by gattc_event_handler on write ACK.
-        * Responder: BLE_DONE set by transport_ble_verify_commitment() in GATTS.  */
-        phase     = session_get_phase();
-        ble_state = transport_ble_get_state();
-
-        /* [FIX-4] Check peer verification result with timeout watchdog.
-         * If mismatch detected or timeout exceeded, both devices fail over. */
-        CeePewErr_t verify_check = transport_ble_check_verification_result();
-        if (verify_check == CEEPEW_ERR_AUTH_FAIL) {
-            /* Peer verification failed (mismatch) — both devices show error */
-            ESP_LOGW(TAG, "Peer verification mismatch detected");
-            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
-            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-            g_ui_ctx.transition_ready = true;
-            return CEEPEW_OK;
-        } else if (verify_check == CEEPEW_ERR_HW) {
-            /* Verification timeout exceeded — fail over and recover */
-            ESP_LOGW(TAG, "Verification timeout — peer did not respond");
-            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
-            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-            g_ui_ctx.transition_ready = true;
-            return CEEPEW_OK;
-        }
-
-        /* Allow deriving if local handoff is ready OR if peer signalled readiness.
-         * This is tolerant of small timing asymmetries where one side's handoff
-         * becomes ready slightly earlier than the other. transport_ble_peer_ready_for_chat()
-         * reflects remote readiness observed by the transport layer. */
-        if (phase == 2U && (transport_ble_handoff_ready() || transport_ble_peer_ready_for_chat())) {
-
-            /* Stronger gating: initiator must have exchanged commitment locally before deriving */
-            if (is_initiator && !s_ble_commitment_exchanged) {
-                /* wait another tick so write/ACK can propagate */
-                return CEEPEW_OK;
+            /* M3: Responder reverse GATTC — after receiving the initiator's
+             * sign_pk via GATTS, open a GATTC back to write our sign_pk. */
+            if (!is_initiator && g_ble_ctx.reverse_gattc_pending &&
+                !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected &&
+                !g_ble_ctx.initiator_sign_pk_sent &&
+                g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS)
+            {
+                if (g_ble_ctx.peer_mac[0] != 0U) {
+                    ESP_LOGI(TAG, "Responder: opening reverse GATTC for sign_pk exchange");
+                    CeePewErr_t conn_err = transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
+                    if (conn_err != CEEPEW_OK && conn_err != CEEPEW_ERR_BUSY) {
+                        ESP_LOGW(TAG, "reverse GATT connect failed: %d (will retry)", (int)conn_err);
+                        g_ble_ctx.reconnect_attempts++;
+                        g_ble_ctx.reverse_gattc_pending = false;
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Responder: no peer addr for reverse GATTC");
+                    g_ble_ctx.reverse_gattc_pending = false;
+                }
             }
 
-            /* Jittered backoff to tolerate asymmetric timing: pick a small randomized
-             * delay (50-500 ms) on the first eligible tick to reduce the chance both
-             * devices attempt derive at exactly the same instant. The seed uses the
-             * current time XORed with portions of local and peer MACs for variability.
-             */
+            return CEEPEW_OK;
+        }
+
+        /* ── STEP 6: Key derivation gate (commitment matched + sign_pk ok) ── */
+        phase     = session_get_phase();
+        ble_state = transport_ble_get_state();
+
+        if (phase == 2U && transport_ble_handoff_ready()) {
+
+            /* Jittered backoff to reduce simultaneous-derive timing collision. */
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
             if (s_phase2_jitter_target_ms == 0U) {
                 uint8_t local_dev[CEEPEW_DEVICE_ID_BYTES];
                 (void)session_get_device_id(local_dev);
-                const BlePeerRecord_t *peer_rec = transport_ble_get_peer_cached();
                 uint32_t seed = now_ms ^ ((uint32_t)local_dev[5] << 8);
-                if (peer_rec != NULL) { seed ^= ((uint32_t)peer_rec->peer_mac[5] << 16) | (uint32_t)peer_rec->peer_mac[4]; }
+                if (peer != NULL) {
+                    seed ^= ((uint32_t)peer->peer_mac[5] << 16) |
+                            (uint32_t)peer->peer_mac[4];
+                }
                 /* jitter in [50, 500) ms */
                 s_phase2_jitter_target_ms = 50U + (uint32_t)(seed % 450U);
-                s_phase2_jitter_start_ms = now_ms;
+                s_phase2_jitter_start_ms  = now_ms;
                 ceepew_secure_zero(local_dev, sizeof(local_dev));
-                ESP_LOGI(TAG, "phase2: jitter target %u ms", (unsigned)s_phase2_jitter_target_ms);
+                ESP_LOGI(TAG, "phase2: jitter target %u ms",
+                         (unsigned)s_phase2_jitter_target_ms);
             }
-
             if ((now_ms - s_phase2_jitter_start_ms) < s_phase2_jitter_target_ms) {
-                /* wait for jitter timer to expire */
                 return CEEPEW_OK;
             }
-
-            /* reset jitter state before deriving */
             s_phase2_jitter_target_ms = 0U;
+
+            /* If sign_pk is still missing after retries, log a warning and
+             * proceed. The fingerprint screen will display an empty value
+             * and the first chat frame's signature will be unverifiable
+             * until the peer's sign_pk is delivered via a later frame. */
+            if (!g_ble_ctx.sign_pk_received) {
+                ESP_LOGW(TAG,
+                         "sign_pk exchange gave up (attempts=%u) — proceeding without it",
+                         (unsigned)g_ble_ctx.reconnect_attempts);
+            }
+
+            /* Set the role BEFORE derivation so the nonce counter starts at
+             * the correct parity (initiator: 0/even, responder: 1/odd).
+             * Both peers compute the same role from the same MAC ordering. */
+            (void)session_set_role(is_initiator);
 
             CeePewErr_t err = session_phase2_derive_key();
             if (err != CEEPEW_OK) { return err; }
 
-            /* Show a dedicated pairing success banner before moving on. */
-            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_SUCCESS;
-            (void)ui_manager_transition_to(UI_STATE_PAIRING_SUCCESS);
+            g_ble_ctx.accumulated_conn_ms = 0U;
+            s_ble_commitment_exchanged    = false;
+
+            /* BLE is no longer needed for pairing — disconnect any stale link */
+            (void)transport_ble_disconnect();
+
+            /* Post-derive sync barrier: do NOT advance the UI to
+             * PAIRING_SUCCESS until an encrypted MSG_TYPE_KEY_ACK
+             * round-trip has been verified. This prevents state desync
+             * where one device shows "✓ SECURE" while the other is
+             * still in PAIRING because key derivation completed locally
+             * but the peer never confirmed. The actual ACK exchange is
+             * driven by task_session_drive_post_derive_sync() on the
+             * session task's main loop. */
+            ESP_LOGI(TAG, "Session key derived — entering post-derive sync (role=%s)",
+                     is_initiator ? "initiator" : "responder");
+
+            (void)ui_manager_transition_to(UI_STATE_KEYDER);
             g_ui_ctx.transition_ready = true;
 
-            (void)transport_ble_disconnect();
-            /* Reset BLE-connected accumulation on successful handoff to Phase 3 */
-            g_ble_ctx.accumulated_conn_ms = 0U;
-            s_ble_commitment_exchanged = false;
-            ESP_LOGI(TAG, "Session key derived — pairing complete");
-            /* Notify the UI task that the session is now active so it can
-            * immediately transition out of the countdown/discovery screens.
-            * This is the reliable signal for BOTH devices (initiator and responder)
-            * to enter the secure-chat flow simultaneously.                          */
-            if (g_ui_event_queue != NULL) {
-                UIEvent_t established_event;
-                memset(&established_event, 0U, sizeof(established_event));
-                established_event.type = UI_EVENT_SESSION_ESTABLISHED;
-                /* Non-blocking: if queue is full, the UI will catch it via session_is_active() */
-                (void)xQueueSend(g_ui_event_queue, &established_event, 0U);
-                ESP_LOGI("task_session", "UI_EVENT_SESSION_ESTABLISHED enqueued");
-            }
+            /* Stay in phase 3 (keys derived) but with sync_barrier_cleared
+             * still false; the UI remains on KEYDER until the sync ACK is
+             * verified. session_is_active() will return true (keys exist)
+             * but the post-derive sync is what gates the UI. */
         }
 
         return CEEPEW_OK;
@@ -416,6 +523,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             case RGB_GREEN_PULSE: return "green_pulse";
             case RGB_AMBER_PULSE: return "amber_pulse";
             case RGB_CYAN_PULSE: return "cyan_pulse";
+            case RGB_YELLOW_RED_BLINK: return "yellow_red_blink";
             case RGB_RAINBOW_CYCLE: return "rainbow";
             case RGB_HEARTBEAT: return "heartbeat";
             default: return "unknown";
@@ -454,6 +562,16 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         }
     }
 
+    /* Reset task-local static state after pairing failure.
+     * Ensures consistency with FSM phase after session_reset_to_discovery(). */
+    static void task_session_reset_pairing_static_state(void)
+    {
+        s_ble_peer_latched = false;
+        s_ble_commitment_exchanged = false;
+        s_phase2_jitter_target_ms = 0U;
+        s_phase2_jitter_start_ms = 0U;
+    }
+
     CeePewErr_t task_session_sync_visual_state(void)
     {
         uint8_t phase = session_get_phase();
@@ -466,10 +584,14 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         int8_t ble_rssi = g_ble_ctx.peer_rssi;
         bool scan_active = (ble_state == BLE_SCANNING || ble_state == BLE_ADVERTISING_AND_SCANNING);
 
+        /* Phase 2.C1: snapshot current_state once for the two read sites below. */
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+
         /* Phase 3 (ACTIVE) — once the session is live, nudge any pre-chat UI
          * into the secure-chat derivation path without disturbing later states. */
         if (phase == 3U && active) {
-            UIState_t current = g_ui_ctx.current_state;
+            UIState_t current = ui_state;
             bool pre_chat = (current == UI_STATE_DISCOVERY   ||
                              current == UI_STATE_COUNTDOWN   ||
                              current == UI_STATE_CODE_ENTRY  ||
@@ -484,7 +606,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             }
         }
 
-        UIState_t ui_state = g_ui_ctx.current_state;
+        /* (ui_state already snapshotted above for the pre-chat check.) */
         RgbPattern_t pattern = task_session_map_pattern(ui_state, active);
 
         /* Track discovery scan start time so we can enforce a safe timeout */
@@ -618,86 +740,128 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             return CEEPEW_OK;
         }
 
-        static uint8_t s_work_frame[CEEPEW_PACKET_MAX_BYTES];
-        static uint8_t s_fec_out[CEEPEW_FEC_BUF_MAX];
-        static uint8_t s_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
-        static uint8_t s_ascon_ct[CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES];
-        static uint8_t s_plain[CEEPEW_MAX_MSG_BYTES];
-        static uint8_t s_nonce[24U];
-        static uint8_t s_peer_pk[32U];
-        static uint8_t s_ascon_key[16U];
-        static uint8_t s_sig[64U];
+        uint8_t local_work_frame[CEEPEW_PACKET_MAX_BYTES];
+        uint8_t local_fec_out[CEEPEW_FEC_BUF_MAX];
+        uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
+        uint8_t local_ascon_ct[CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES];
+        uint8_t local_plain[CEEPEW_MAX_MSG_BYTES];
+        uint8_t local_nonce[24U];
+        uint8_t local_sign_pk[32U];
+        uint8_t local_box_pk[32U];
+        uint8_t local_ascon_key[16U];
+        uint8_t local_sig[64U];
 
         CeePewErr_t err = CEEPEW_OK;
         uint16_t work_len = frame->payload_len;
-        memcpy(s_work_frame, frame->payload, frame->payload_len);
+        memcpy(local_work_frame, frame->payload, frame->payload_len);
 
-        err = transport_esl_process_incoming(s_work_frame, &work_len, frame->src_mac, 0U);
+        err = transport_esl_process_incoming(local_work_frame, &work_len, frame->src_mac, 0U);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         bool corrected = false;
-        uint16_t fec_out_len = (uint16_t)sizeof(s_fec_out);
-        err = ecc_hamming_decode(s_work_frame, work_len, s_fec_out, &fec_out_len, &corrected);
+        uint16_t fec_out_len = (uint16_t)sizeof(local_fec_out);
+        err = ecc_hamming_decode(local_work_frame, work_len, local_fec_out, &fec_out_len, &corrected);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         if (fec_out_len < 64U) { return CEEPEW_OK; }
         uint16_t box_ct_len = (uint16_t)(fec_out_len - 64U);
         uint16_t sig_off = box_ct_len;
-        memcpy(s_box_ct, s_fec_out, box_ct_len);
-        memcpy(s_sig, s_fec_out + sig_off, 64U);
+        memcpy(local_box_ct, local_fec_out, box_ct_len);
+        memcpy(local_sig, local_fec_out + sig_off, 64U);
 
         uint64_t rx_nonce_counter = 0ULL;
         err = transport_esl_get_last_nonce_counter(&rx_nonce_counter);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
-        err = session_get_nonce(s_nonce);
+        err = session_get_nonce(local_nonce);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
         for (uint8_t i = 0U; i < 8U; i++) {
-            s_nonce[8U + i] = (uint8_t)((rx_nonce_counter >> (i * 8U)) & 0xFFU);
+            local_nonce[8U + i] = (uint8_t)((rx_nonce_counter >> (i * 8U)) & 0xFFU);
         }
-        err = session_get_peer_public_key(s_peer_pk);
+
+        /* Use the peer's X25519 public key for crypto_box ECDH decryption */
+        if (!session_peer_box_pubkey_valid()) { return CEEPEW_OK; }
+        err = session_get_local_box_pubkey(local_box_pk);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
-        err = crypto_box_decrypt(&g_crypto_ctx, s_nonce, s_peer_pk,
-                                s_box_ct, box_ct_len, s_ascon_ct, &box_ct_len);
+        /* The peer's X25519 pubkey is in g_crypto_ctx.peer_box_pubkey;
+         * pass it directly to crypto_box_decrypt via the context. */
+        err = crypto_box_decrypt(&g_crypto_ctx, local_nonce, g_crypto_ctx.peer_box_pubkey,
+                                local_box_ct, box_ct_len, local_ascon_ct, &box_ct_len);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         uint8_t ascon_nonce[16U];
-        memcpy(ascon_nonce, s_nonce, sizeof(ascon_nonce));
-        err = session_get_session_key(s_ascon_key);
+        memcpy(ascon_nonce, local_nonce, sizeof(ascon_nonce));
+        err = session_get_session_key(local_ascon_key);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
-        uint16_t plain_len = (uint16_t)sizeof(s_plain);
-        err = crypto_ascon_aead_decrypt(s_ascon_key, ascon_nonce, NULL, 0U,
-                                        s_ascon_ct, box_ct_len, s_plain, &plain_len);
+        uint16_t plain_len = (uint16_t)sizeof(local_plain);
+        err = crypto_ascon_aead_decrypt(local_ascon_key, ascon_nonce, NULL, 0U,
+                                        local_ascon_ct, box_ct_len, local_plain, &plain_len);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
-        err = crypto_eddsa_verify(s_peer_pk, s_box_ct, box_ct_len, s_sig);
+        /* Use the peer's Ed25519 sign_pk for signature verification */
+        err = session_get_peer_public_key(local_sign_pk);
+        if (err != CEEPEW_OK) { return CEEPEW_OK; }
+        err = crypto_eddsa_verify(local_sign_pk, local_box_ct, box_ct_len, local_sig);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         uint8_t local_device_id[CEEPEW_DEVICE_ID_BYTES];
         uint8_t fingerprint[CEEPEW_FINGERPRINT_BYTES];
         err = session_get_device_id(local_device_id);
         if (err == CEEPEW_OK) {
-            err = session_compute_fingerprint(s_peer_pk, local_device_id, fingerprint);
+            err = session_compute_fingerprint(local_sign_pk, local_device_id, fingerprint);
             if (err == CEEPEW_OK) {
+                /* Phase 2.C1: snapshot current_state once before the multi-field
+                 * write group below. The fingerprint/peer_mac/transition trio
+                 * is treated as one logical UI update. */
+                UIState_t ui_state;
+                session_ui_get_state_snapshot(&ui_state);
+                session_ui_ctx_lock();
                 memcpy(g_ui_ctx.fingerprint, fingerprint, CEEPEW_FINGERPRINT_BYTES);
                 memcpy(g_ui_ctx.peer_mac, frame->src_mac, CEEPEW_DEVICE_ID_BYTES);
                 g_ui_ctx.fingerprint_confirmed = false;
-                if (g_ui_ctx.current_state != UI_STATE_CHAT &&
-                    g_ui_ctx.current_state != UI_STATE_FINGERPRINT_CONFIRM) {
-                    (void)ui_manager_transition_to(UI_STATE_FINGERPRINT);
+                if (ui_state != UI_STATE_CHAT &&
+                    ui_state != UI_STATE_FINGERPRINT_CONFIRM) {
                     g_ui_ctx.transition_ready = true;
+                }
+                session_ui_ctx_unlock();
+                if (ui_state != UI_STATE_CHAT &&
+                    ui_state != UI_STATE_FINGERPRINT_CONFIRM) {
+                    (void)ui_manager_transition_to(UI_STATE_FINGERPRINT);
                 }
             }
         }
         ceepew_secure_zero(local_device_id, sizeof(local_device_id));
         ceepew_secure_zero(fingerprint, sizeof(fingerprint));
 
-        uint16_t decoded_len = (uint16_t)sizeof(s_work_frame);
-        err = compress_huffman_decompress(s_plain, plain_len, s_work_frame, &decoded_len,
-                                        (uint16_t)sizeof(s_work_frame));
+        uint16_t decoded_len = (uint16_t)sizeof(local_work_frame);
+        err = compress_huffman_decompress(local_plain, plain_len, local_work_frame, &decoded_len,
+                                        (uint16_t)sizeof(local_work_frame));
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
-        err = msg_store_add(s_box_ct, box_ct_len, decoded_len, 0U);
+        /* Post-derive sync routing (Bug 3 fix). A successful round-trip
+         * decryption of a 1-byte sync payload is the proof that crypto_box
+         * works in both directions with the converged keys. Route to the
+         * sync handler instead of the message store. */
+        if (decoded_len == 1U &&
+            (local_work_frame[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
+             local_work_frame[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
+            CeePewErr_t sync_err = session_handle_key_sync_byte(local_work_frame[0]);
+            if (sync_err == CEEPEW_ERR_NEED_TX) {
+                /* Responder received HELLO — send the ACK back using X25519 key. */
+                uint8_t ack_plain[1] = { CEEPEW_KEY_SYNC_ACK_BYTE };
+                uint8_t peer_mac[6];
+                if (g_crypto_ctx.peer_box_pubkey_valid) {
+                    memcpy(peer_mac, frame->src_mac, 6U);
+                    (void)session_send_message(ack_plain, 1U, peer_mac,
+                                               g_crypto_ctx.peer_box_pubkey);
+                }
+            }
+            ceepew_secure_zero(local_work_frame, sizeof(local_work_frame));
+            (void)session_update_last_message_time();
+            return CEEPEW_OK;
+        }
+
+        err = msg_store_add(local_box_ct, box_ct_len, decoded_len, 0U);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
 
         UIEvent_t ui_event;
@@ -746,6 +910,15 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         if (g_ui_event_queue == NULL) {
             g_ui_event_queue = xQueueCreate(CEEPEW_UI_EVENT_QUEUE_DEPTH, sizeof(UIEvent_t));
             CEEPEW_ASSERT_VOID(g_ui_event_queue != NULL);
+        }
+
+        /* Create UI context mutex (Phase 2.C1) — guards g_ui_ctx access
+         * between the UI task on Core 0 (writes) and the session task on
+         * Core 1 (reads). Recursive to allow nested take/release within
+         * a single function body. */
+        if (g_ui_ctx_lock == NULL) {
+            g_ui_ctx_lock = xSemaphoreCreateRecursiveMutex();
+            CEEPEW_ASSERT_VOID(g_ui_ctx_lock != NULL);
         }
 
         /* Initialize statistics */
@@ -812,6 +985,13 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                 /* Queue receive timeout (1000ms) — this is normal, no error */
                 s_stats.queue_timeouts++;
 
+                /* Phase 2.C1: snapshot current_state once for the periodic
+                 * maintenance path. The reads at lines below (KEYDER check,
+                 * pair_err handler) all observe the same logical value within
+                 * this 1s tick. */
+                UIState_t ui_state;
+                session_ui_get_state_snapshot(&ui_state);
+                
                 /* Discovery timeout fallback: if we've been scanning for too long, clear RGB to avoid stuck-on LEDs */
                 {
                     uint64_t now_ms_local = (uint64_t)(esp_timer_get_time() / 1000LL);
@@ -850,38 +1030,50 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                             continue;
                         }
                     }
+
+                    /* Post-derive sync barrier (Bug 3 fix). Until the encrypted
+                     * HELLO/ACK round-trip completes, the UI must remain on
+                     * KEYDER. The drive function returns ERR_TIMEOUT once
+                     * the deadline elapses; we then transition to FAILED. */
+                    if (!session_sync_barrier_cleared()) {
+                        uint64_t now_ms_local = (uint64_t)(esp_timer_get_time() / 1000LL);
+                        CeePewErr_t sync_err = session_drive_post_derive_sync(now_ms_local);
+                        if (sync_err == CEEPEW_ERR_TIMEOUT) {
+                            CEEPEW_LOG(TAG, "Post-derive sync timed out after %u ms — failing pairing",
+                                       (unsigned)CEEPEW_KEY_SYNC_TIMEOUT_MS);
+                            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
+                            (void)session_reset_to_discovery();
+                            task_session_reset_pairing_static_state();
+                            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                            g_ui_ctx.transition_ready = true;
+                            continue;
+                        }
+                    } else if (ui_state == UI_STATE_KEYDER) {
+                        /* Barrier just cleared — promote UI to PAIRING_SUCCESS */
+                        CEEPEW_LOG(TAG, "Post-derive sync cleared — promoting to PAIRING_SUCCESS");
+                        g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_SUCCESS;
+                        (void)ui_manager_transition_to(UI_STATE_PAIRING_SUCCESS);
+                        g_ui_ctx.transition_ready = true;
+                    }
                 }
 
-                /* Re-check deferred peer commitment on the normal session tick so
-                 * late GATTS writes are consumed even if they arrive after Step 4.
-                 * This must run during Phase 2 before session_is_active() becomes true.
-                 *
-                 * FIX D: Add stricter guards to prevent verification from running
-                 * while responder's session_fsm is still initializing Phase 2.
-                 * Only verify if:
-                 * - Phase 2 active
-                 * - Peer commitment buffered
-                 * - Commitment write not pending (local already loaded and ready)
-                 * - State is BLE_PAIRING (not transitioning) */
-                if (session_get_phase() == 2U &&
-                    g_ble_ctx.peer_commitment_pending &&
-                    g_ble_ctx.state == BLE_PAIRING &&
-                    !g_ble_ctx.commitment_write_pending) {
+                /* Phase 2 periodic: verify any buffered peer commitment.
+                 * The beacon path populates pending_peer_commitment from
+                 * SCAN_RESULT_EVT; this tick drains it once both sides have
+                 * a local commitment ready. */
+                if (session_get_phase() == 2U && g_ble_ctx.peer_commitment_pending) {
                     CeePewErr_t verify_err = transport_ble_verify_pending_commitment();
                     if (verify_err != CEEPEW_OK) {
                         CEEPEW_LOG(TAG, "Periodic commitment re-check failed: %d",
-                                (int)verify_err);
+                                   (int)verify_err);
                     }
-                }
-                if (session_get_phase() == 2U && g_ble_ctx.commitment_write_pending) {
-                    (void)transport_ble_retry_commitment_if_needed();
                 }
 
                 CeePewErr_t pair_err = task_session_drive_ble_pairing();
                 if (pair_err != CEEPEW_OK) {
                     CEEPEW_LOG(TAG, "BLE pairing driver returned %d", (int)pair_err);
-                    if (g_ui_ctx.current_state != UI_STATE_PAIRING_FAILED &&
-                        g_ui_ctx.current_state != UI_STATE_PAIRING_SUCCESS) {
+                    if (ui_state != UI_STATE_PAIRING_FAILED &&
+                        ui_state != UI_STATE_PAIRING_SUCCESS) {
                         if (pair_err == CEEPEW_ERR_BUSY) {
                             /* [FIX-1] A write retry is pending — not a permanent failure */
                             CEEPEW_LOG(TAG, "BLE pairing driver busy (write retry pending)");
@@ -895,6 +1087,8 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
                             } else {
                                 g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
                             }
+                            (void)session_reset_to_discovery();
+                            task_session_reset_pairing_static_state();
                             (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
                             g_ui_ctx.transition_ready = true;
                         }

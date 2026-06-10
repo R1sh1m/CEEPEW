@@ -114,6 +114,11 @@ static const RgbStep_t s_steps_cyan_pulse[] = {    {0U, 1U, 1U, UINT32_MAX}};
 
 static const RgbStep_t s_steps_rainbow_cycle[] = {    {1U, 0U, 0U, 250U},    {0U, 1U, 0U, 250U},    {0U, 0U, 1U, 250U}};
 static const RgbStep_t s_steps_heartbeat[] = {    {1U, 0U, 0U, 140U},    {0U, 0U, 0U, 120U},    {1U, 0U, 0U, 140U},    {0U, 0U, 0U, 700U}};
+/* Supervisor recovery indicator — alternating yellow then red, 250ms each, looping.
+ * Distinct from RGB_RED_BLINK (pure red) and RGB_AMBER_PULSE (PWM yellow)
+ * so the user can tell at a glance that the radio is being reset. */
+static const RgbStep_t s_steps_yellow_red_blink[] = {    {1U, 1U, 0U, 250U},    {1U, 0U, 0U, 250U}};
+static const RgbStep_t s_steps_cyan_blink[] = {         {0U, 1U, 1U, 250U},    {0U, 0U, 0U, 250U}};
 
 static const RgbPatternDef_t s_patterns[RGB_PATTERN_COUNT] = {
     {s_steps_off, 1U, false},
@@ -132,6 +137,8 @@ static const RgbPatternDef_t s_patterns[RGB_PATTERN_COUNT] = {
     {s_steps_green_pulse, 1U, false},   /* PWM mode: smooth green breathe */
     {s_steps_amber_pulse, 1U, false},   /* PWM mode: smooth amber breathe */
     {s_steps_cyan_pulse, 1U, false},    /* PWM mode: smooth cyan breathe  */
+    {s_steps_yellow_red_blink, 2U, true},  /* Supervisor recovery: yellow↔red blink */
+    {s_steps_cyan_blink, 2U, true},        /* GATT identity exchange: cyan↔off blink */
     {s_steps_rainbow_cycle, 3U, true},
     {s_steps_heartbeat, 4U, true}
 };

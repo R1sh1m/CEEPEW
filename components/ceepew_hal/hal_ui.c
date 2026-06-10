@@ -3,23 +3,25 @@
  * UI rendering implementation: pixel/line/shape drawing,
  * font rendering, framebuffer management.
  *
- * Backing store: the vendored ssd1306 (nopnop2002/esp-idf-ssd1306) library
- * owns a static SSD1306_t whose internal _page[8]._segs[128] buffer is
- * the display framebuffer. This module writes directly into that buffer
- * and calls a no-malloc custom flush (hal_ui_flush_pages) to push all 8
- * pages over I2C in page-addressing mode. The upstream's malloc-based
- * ssd1306_show_buffer() is intentionally NOT used.
+ * Backing store: the in-house ceepew_oled component (see
+ * components/ceepew_oled/) owns a 1024-byte framebuffer in the device
+ * struct. This module writes directly into that buffer and calls
+ * ceepew_oled_display() / ceepew_oled_display_sh1106() to push it
+ * to the panel over I2C.
+ *
+ * The 5×7 monospace font is in ui_manager.c (s_font5x7[95][5]); we
+ * read from it via extern.
  */
 
 #include "hal_ui.h"
-#include "ssd1306.h"
+#include "ceepew_oled.h"
+#include "ceepew_oled_gfx_primitives.h"
 #include "hal_pins.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/i2c_master.h"
-#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdbool.h>
@@ -27,315 +29,204 @@
 #include <string.h>
 #include <stdio.h>
 
-/* The vendored ssd1306.h doesn't include these by default; we use them
- * only in the hal_ui-level I2C bring-up path. */
-#include "esp_err.h"
-
-/* Forward decls from the vendored I2C transport so we can reuse the
- * same field layout without re-typing the SSD1306_t members. The struct
- * itself is fully visible in ssd1306.h. */
-
 /* ── Module state ─────────────────────────────────────────────────── */
-static SSD1306_t s_dev;             /* vendored display handle           */
-static bool      s_ui_initialised;  /* hal_ui_init completed successfully */
-static bool      s_sh1106_mode;     /* SH1106 needs +2 col offset         */
-static uint32_t  s_last_flush_diag_ms;
-static bool      s_nonzero_flush_seen;
+static ceepew_oled_t *s_oled;       /* the panel device handle           */
+static bool           s_ui_initialised;  /* hal_ui_init completed    */
+static bool           s_sh1106_mode;     /* SH1106 +2 col offset    */
+static bool           s_framebuffer_dirty; /* fast-path: anything dirty? */
+static uint32_t       s_last_flush_diag_ms;
+static bool           s_nonzero_flush_seen;
+
+/* We keep a pointer to the panel's framebuffer locally. The pointer is
+ * constant for the lifetime of the panel (ceepew_oled_get_buffer
+ * returns the same address), so caching it here is safe. */
+static uint8_t       *s_fb;
+
+/* Tile-dirty bitmap: 16 column-tiles (128/8) x 1 byte per tile-row
+ * (8 rows packed into a single byte per column-tile). When any pixel
+ * in a tile is touched, the corresponding bit is set. The 16-byte
+ * bitmap is walked by hal_ui_flush to push only the dirty tiles. The
+ * fast-path "anything dirty" check is `s_framebuffer_dirty`, which
+ * is set whenever any bit in the bitmap transitions 0->1. */
+#define HAL_UI_NUM_TILE_COLS 16U
+static uint8_t        s_tile_dirty[HAL_UI_NUM_TILE_COLS];
 
 static const char *TAG = "hal_ui";
 
-/* Reuse the full printable ASCII font from ui_manager.c so all UI text paths
- * render the same glyphs. The table is stored as 5 columns per character. */
+/* Reuse the full printable ASCII font from ui_manager.c so all UI text
+ * paths render the same glyphs. The table is stored as 5 columns per
+ * character. */
 extern const uint8_t s_font5x7[95][5];
 
-/* ── I2C bring-up helpers (preserved from the previous hal_oled.c) ── */
+/* ── Forward declarations ─────────────────────────────────────────── */
+static CeePewErr_t ssd1306_bringup(void);
+static CeePewErr_t ssd1306_display_push(void);
+static CeePewErr_t ssd1306_display_push_tiled(void);
+static CeePewErr_t hal_ui_benchmark_flush(uint32_t iterations);
 
-static CeePewErr_t ssd1306_flush_pages_no_malloc(SSD1306_t *dev, uint8_t col_offset);
-static void        oled_bus_recover(gpio_num_t sda_pin, gpio_num_t scl_pin);
-static esp_err_t   oled_probe_with_retry(i2c_master_bus_handle_t bus, uint8_t addr);
+/* ── Tile-dirty helpers ───────────────────────────────────────────── */
 
-/* I2C transaction timeout in FreeRTOS ticks. 200 = 200 ms at the project's
- * 1 kHz tick rate. Generous on purpose; we want flushes to succeed even
- * when BLE has the radio busy. */
-#define I2C_FLUSH_TIMEOUT_TICKS  200U
-#define OLED_PROBE_ATTEMPTS       3U
-#define OLED_PROBE_RETRY_MS       50U
-
-static esp_err_t oled_probe_with_retry(i2c_master_bus_handle_t bus, uint8_t addr)
+static inline void hal_ui_mark_tile_dirty(uint8_t x, uint8_t y)
 {
-    for (uint8_t attempt = 0U; attempt < OLED_PROBE_ATTEMPTS; attempt++) {
-        esp_err_t rc = i2c_master_probe(bus, addr, I2C_FLUSH_TIMEOUT_TICKS);
-        if (rc == ESP_OK) { return ESP_OK; }
-        ESP_LOGD(TAG, "probe 0x%02X attempt %u/%u failed (%d)",
-                 (unsigned)addr,
-                 (unsigned)(attempt + 1U),
-                 (unsigned)OLED_PROBE_ATTEMPTS,
-                 (int)rc);
-        if ((attempt + 1U) < OLED_PROBE_ATTEMPTS) {
-            vTaskDelay(pdMS_TO_TICKS(OLED_PROBE_RETRY_MS));
-        }
+    /* Each column-tile covers x in [tc*8, tc*8+7]. Each row bit
+     * covers y in [0..7]. */
+    const uint8_t tc = (uint8_t)(x >> 3U);
+    const uint8_t tr = (uint8_t)(y >> 3U);
+    const uint8_t mask = (uint8_t)(1U << tr);
+    if ((s_tile_dirty[tc] & mask) == 0U) {
+        s_tile_dirty[tc] = (uint8_t)(s_tile_dirty[tc] | mask);
+        s_framebuffer_dirty = true;
     }
-    return ESP_FAIL;
 }
 
-static void oled_bus_recover(gpio_num_t sda_pin, gpio_num_t scl_pin)
+static void hal_ui_clear_tile_dirty(void)
 {
-    const gpio_config_t od_cfg = {
-        .pin_bit_mask = (1ULL << (uint32_t)sda_pin) |
-                        (1ULL << (uint32_t)scl_pin),
-        .mode         = GPIO_MODE_OUTPUT_OD,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-
-    (void)gpio_config(&od_cfg);
-    (void)gpio_set_level(sda_pin, 1);
-    vTaskDelay(pdMS_TO_TICKS(1U));
-
-    for (uint8_t clk = 0U; clk < 9U; clk++) {
-        if (gpio_get_level(sda_pin) != 0) { break; }
-        (void)gpio_set_level(scl_pin, 0);
-        vTaskDelay(pdMS_TO_TICKS(1U));
-        (void)gpio_set_level(scl_pin, 1);
-        vTaskDelay(pdMS_TO_TICKS(1U));
-    }
-
-    (void)gpio_set_level(scl_pin, 1);
-    vTaskDelay(pdMS_TO_TICKS(1U));
-    (void)gpio_set_level(sda_pin, 0);
-    vTaskDelay(pdMS_TO_TICKS(1U));
-    (void)gpio_set_level(sda_pin, 1);
-    vTaskDelay(pdMS_TO_TICKS(10U));
+    (void)memset(s_tile_dirty, 0, sizeof(s_tile_dirty));
+    s_framebuffer_dirty = false;
 }
 
-/* Build an i2c_master_bus + i2c_master_dev pair for the given pins/addr/speed.
- * On success, returns ESP_OK and the bus+dev handles are written through the
- * out-params. On any failure, both are NULL and the bus is cleaned up.
- */
-static esp_err_t ssd1306_bus_bringup(gpio_num_t sda, gpio_num_t scl,
-                                     uint32_t speed_hz, uint8_t addr,
-                                     i2c_master_bus_handle_t *out_bus,
-                                     i2c_master_dev_handle_t *out_dev)
-{
-    *out_bus = NULL;
-    *out_dev = NULL;
+/* ── Boot bring-up ────────────────────────────────────────────────── */
 
-    const i2c_master_bus_config_t bus_cfg = {
-        .i2c_port              = CEEPEW_I2C_PORT,
-        .sda_io_num            = sda,
-        .scl_io_num            = scl,
-        .clk_source            = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt     = 7U,
-        .intr_priority         = 0,
-        /* Synchronous mode: no async queue, every i2c_master_transmit()
-         * blocks until the physical transfer completes. Prevents the async
-         * queue overflow that caused hangs in the prior driver. */
-        .trans_queue_depth     = 0U,
-        .flags = {
-            .enable_internal_pullup = 1U,
-            .allow_pd               = 0U,
-        },
+static CeePewErr_t ssd1306_bringup(void)
+{
+    /* Try the configured (pin-pair × speed × address) matrix first. */
+    const ceepew_oled_pins_t pins = {
+        .sda_primary       = CEEPEW_PIN_I2C_SDA,
+        .sda_fallback      = CEEPEW_PIN_I2C_SDA_FALLBACK,
+        .scl_primary       = CEEPEW_PIN_I2C_SCL,
+        .scl_fallback      = CEEPEW_PIN_I2C_SCL_FALLBACK,
+        .speed_primary_hz  = CEEPEW_I2C_FREQ_HZ,
+        .speed_fallback_hz = CEEPEW_I2C_FREQ_FALLBACK_HZ,
+        .addr_primary      = CEEPEW_OLED_I2C_ADDR,
+        .addr_fallback     = CEEPEW_OLED_I2C_ADDR_FB,
     };
 
     i2c_master_bus_handle_t bus = NULL;
-    esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
-    if (rc != ESP_OK) {
-        ESP_LOGW(TAG, "i2c_new_master_bus(SDA=%d,SCL=%d,@%luHz) failed: %d (%s)",
-                 (int)sda, (int)scl, (unsigned long)speed_hz,
-                 (int)rc, esp_err_to_name(rc));
-        return rc;
-    }
-    vTaskDelay(pdMS_TO_TICKS(10U));
-
-    if (oled_probe_with_retry(bus, addr) != ESP_OK) {
-        ESP_LOGW(TAG, "No ACK from 0x%02X on SDA=%d SCL=%d @%luHz after %u attempts",
-                 (unsigned)addr, (int)sda, (int)scl,
-                 (unsigned long)speed_hz,
-                 (unsigned)OLED_PROBE_ATTEMPTS);
-        (void)i2c_del_master_bus(bus);
-        return ESP_FAIL;
-    }
-
-    const i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = addr,
-        .scl_speed_hz    = speed_hz,
-    };
     i2c_master_dev_handle_t dev = NULL;
-    rc = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
+    uint8_t                 addr = 0U;
+    esp_err_t rc = ceepew_oled_multi_attempt(&pins, &bus, &dev, &addr);
     if (rc != ESP_OK) {
-        ESP_LOGW(TAG, "i2c_master_bus_add_device(0x%02X) failed: %d (%s)",
-                 (unsigned)addr, (int)rc, esp_err_to_name(rc));
-        (void)i2c_del_master_bus(bus);
-        return rc;
+        ESP_LOGE(TAG, "OLED not found on primary (26/27) or fallback (21/22) pins");
+        return CEEPEW_ERR_HW;
     }
 
-    *out_bus = bus;
-    *out_dev = dev;
-    return ESP_OK;
+    /* The ceepew_oled_t struct is in static storage inside
+     * ceepew_oled_create(), so this pointer is valid for the
+     * program's lifetime. The I2C bus and dev handle live for the
+     * session; we never delete them (matches the prior behaviour). */
+    s_oled = ceepew_oled_create();
+    if (s_oled == NULL) {
+        ESP_LOGE(TAG, "ceepew_oled_create returned NULL");
+        return CEEPEW_ERR_HW;
+    }
+    s_fb = ceepew_oled_get_buffer(s_oled);
+
+    rc = ceepew_oled_init_panel(s_oled, bus, dev, addr);
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "ceepew_oled_init_panel failed: %d (%s)",
+                 (int)rc, esp_err_to_name(rc));
+        return CEEPEW_ERR_HW;
+    }
+    return CEEPEW_OK;
 }
 
-/* Configure the SSD1306_t struct fields and run the upstream i2c_init()
- * to send the standard SSD1306 init command stream. */
-static esp_err_t ssd1306_panel_bringup(SSD1306_t *dev, uint8_t addr)
+static CeePewErr_t ssd1306_display_push(void)
 {
-    dev->_address = addr;
-    dev->_width   = 128;
-    dev->_height  = 64;
-    dev->_pages   = 8;
-    dev->_flip    = false;
-    dev->_i2c_num = CEEPEW_I2C_PORT;
-    /* _i2c_bus_handle and _i2c_dev_handle are set by the caller just before
-     * calling this function. */
-    return i2c_init(dev, dev->_width, dev->_height);
+    esp_err_t rc = ceepew_oled_display(s_oled);
+    if (rc != ESP_OK && !s_sh1106_mode) {
+        rc = ceepew_oled_display_sh1106(s_oled, 2U);
+        if (rc == ESP_OK) {
+            s_sh1106_mode = true;
+            ESP_LOGW(TAG, "Switched to SH1106 +2 column offset");
+        } else {
+            ESP_LOGE(TAG, "display push failed on both SSD1306 and SH1106 attempts");
+        }
+    }
+    if (rc == ESP_OK) {
+        hal_ui_clear_tile_dirty();
+    }
+    return (rc == ESP_OK) ? CEEPEW_OK : CEEPEW_ERR_HW;
 }
 
-/* Try the (pin-pair × speed × address) matrix in priority order. Returns
- * ESP_OK and populates the s_dev handles on success. SH1106 column-offset
- * detection is attempted after a successful init. */
-static esp_err_t ssd1306_multi_attempt(void)
+/* Tile-dirty push: walks the 16-byte bitmap and pushes only the tiles
+ * that have any pixel set, then clears the bitmap. If more than 8
+ * tiles are dirty, this is slower than a single full-frame push, so
+ * hal_ui_flush() falls back to ssd1306_display_push() in that case. */
+static CeePewErr_t ssd1306_display_push_tiled(void)
 {
-    const uint32_t speeds[2] = { CEEPEW_I2C_FREQ_HZ, CEEPEW_I2C_FREQ_FALLBACK_HZ };
-    const uint8_t  addrs[2]  = { CEEPEW_OLED_I2C_ADDR, CEEPEW_OLED_I2C_ADDR_FB };
-    const gpio_num_t sda_pins[2] = { CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SDA_FALLBACK };
-    const gpio_num_t scl_pins[2] = { CEEPEW_PIN_I2C_SCL, CEEPEW_PIN_I2C_SCL_FALLBACK };
-
-    for (uint8_t pi = 0U; pi < 2U; pi++) {
-        if (pi == 1U &&
-            sda_pins[1] == sda_pins[0] &&
-            scl_pins[1] == scl_pins[0]) {
-            continue;
-        }
-        if (!GPIO_IS_VALID_GPIO(sda_pins[pi]) || !GPIO_IS_VALID_GPIO(scl_pins[pi])) {
-            continue;
-        }
-
-        ESP_LOGI(TAG, "Trying I2C pins SDA=%d SCL=%d",
-                 (int)sda_pins[pi], (int)scl_pins[pi]);
-        oled_bus_recover(sda_pins[pi], scl_pins[pi]);
-
-        for (uint8_t si = 0U; si < 2U; si++) {
-            if (si == 1U && speeds[1] == speeds[0]) { continue; }
-            for (uint8_t ai = 0U; ai < 2U; ai++) {
-                i2c_master_bus_handle_t bus = NULL;
-                i2c_master_dev_handle_t dev = NULL;
-                esp_err_t rc = ssd1306_bus_bringup(sda_pins[pi], scl_pins[pi],
-                                                   speeds[si], addrs[ai],
-                                                   &bus, &dev);
-                if (rc != ESP_OK) { continue; }
-
-                s_dev._i2c_bus_handle = bus;
-                s_dev._i2c_dev_handle = dev;
-                rc = ssd1306_panel_bringup(&s_dev, addrs[ai]);
-                if (rc != ESP_OK) {
-                    (void)i2c_master_bus_rm_device(dev);
-                    (void)i2c_del_master_bus(bus);
-                    s_dev._i2c_bus_handle = NULL;
-                    s_dev._i2c_dev_handle = NULL;
-                    continue;
-                }
-
-                ESP_LOGI(TAG, "SSD1306 ready at 0x%02X (SDA=%d SCL=%d @%luHz)",
-                         (unsigned)addrs[ai], (int)sda_pins[pi], (int)scl_pins[pi],
-                         (unsigned long)speeds[si]);
-                return ESP_OK;
+    uint8_t tiles_pushed = 0U;
+    for (uint8_t tc = 0U; tc < HAL_UI_NUM_TILE_COLS; tc++) {
+        const uint8_t rows = s_tile_dirty[tc];
+        if (rows == 0U) { continue; }
+        for (uint8_t tr = 0U; tr < 8U; tr++) {
+            if ((rows & (uint8_t)(1U << tr)) == 0U) { continue; }
+            esp_err_t rc = ceepew_oled_push_tile(s_oled, tc, tr);
+            if (rc != ESP_OK) {
+                ESP_LOGE(TAG, "push_tile failed at tc=%u tr=%u: %d (%s)",
+                         (unsigned)tc, (unsigned)tr,
+                         (int)rc, esp_err_to_name(rc));
+                return CEEPEW_ERR_HW;
             }
+            tiles_pushed++;
         }
     }
-
-    return ESP_FAIL;
+    hal_ui_clear_tile_dirty();
+    ESP_LOGD(TAG, "tiled push: %u tile(s)", (unsigned)tiles_pushed);
+    return CEEPEW_OK;
 }
 
-/* Last-ditch: scan every valid GPIO pair for any 0x3C/0x3D ACK. Preserved
- * from the prior driver for hardware-debugging ergonomics. */
-static esp_err_t ssd1306_scan_all_pins(void)
+static CeePewErr_t hal_ui_benchmark_flush(uint32_t iterations)
 {
-    const gpio_num_t all_pins[] = {
-        GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, GPIO_NUM_15,
-        GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_21, GPIO_NUM_22,
-        GPIO_NUM_23, GPIO_NUM_25, GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_32, GPIO_NUM_33
-    };
-    const uint8_t addrs[2] = { CEEPEW_OLED_I2C_ADDR, CEEPEW_OLED_I2C_ADDR_FB };
-    const uint8_t num_pins = sizeof(all_pins) / sizeof(all_pins[0]);
+#ifdef CEEPEW_DEBUG_SERIAL
+    if (iterations == 0U) { return CEEPEW_OK; }
+    ESP_LOGI(TAG, "benchmark: %lu iterations", (unsigned long)iterations);
 
-    for (uint8_t sda_idx = 0U; sda_idx < num_pins; sda_idx++) {
-        for (uint8_t scl_idx = 0U; scl_idx < num_pins; scl_idx++) {
-            if (sda_idx == scl_idx ||
-                !GPIO_IS_VALID_GPIO(all_pins[sda_idx]) ||
-                !GPIO_IS_VALID_GPIO(all_pins[scl_idx])) {
-                continue;
-            }
-            oled_bus_recover(all_pins[sda_idx], all_pins[scl_idx]);
-            for (uint8_t ai = 0U; ai < 2U; ai++) {
-                i2c_master_bus_handle_t bus = NULL;
-                i2c_master_dev_handle_t dev = NULL;
-                esp_err_t rc = ssd1306_bus_bringup(all_pins[sda_idx], all_pins[scl_idx],
-                                                   CEEPEW_I2C_FREQ_HZ, addrs[ai],
-                                                   &bus, &dev);
-                if (rc != ESP_OK) { continue; }
+    /* Warm-up: one full push to amortise any first-call cost. */
+    (void)hal_ui_clear();
+    (void)hal_ui_flush();
 
-                s_dev._i2c_bus_handle = bus;
-                s_dev._i2c_dev_handle = dev;
-                rc = ssd1306_panel_bringup(&s_dev, addrs[ai]);
-                if (rc == ESP_OK) {
-                    ESP_LOGW(TAG, "*** FOUND SSD1306 at 0x%02X on SDA=%d SCL=%d ***",
-                             (unsigned)addrs[ai], (int)all_pins[sda_idx],
-                             (int)all_pins[scl_idx]);
-                    return ESP_OK;
-                }
-                (void)i2c_master_bus_rm_device(dev);
-                (void)i2c_del_master_bus(bus);
-                s_dev._i2c_bus_handle = NULL;
-                s_dev._i2c_dev_handle = NULL;
-            }
-        }
+    int64_t t_full_min = INT64_MAX;
+    int64_t t_full_sum = 0;
+    int64_t t_full_max = 0;
+    for (uint32_t i = 0U; i < iterations; i++) {
+        (void)hal_ui_clear();
+        const int64_t t0 = esp_timer_get_time();
+        (void)hal_ui_flush();
+        const int64_t t1 = esp_timer_get_time();
+        const int64_t dt = t1 - t0;
+        if (dt < t_full_min) { t_full_min = dt; }
+        if (dt > t_full_max) { t_full_max = dt; }
+        t_full_sum += dt;
     }
-    return ESP_FAIL;
-}
+    const int64_t t_full_avg = t_full_sum / (int64_t)iterations;
 
-/* Custom no-malloc flush. Writes all 8 pages of the upstream's internal
- * _page[]._segs[] buffer to the panel using i2c_master_transmit directly,
- * with the page-addressing command stream. SH1106 panels get a +2 column
- * start offset. */
-static CeePewErr_t ssd1306_flush_pages_no_malloc(SSD1306_t *dev, uint8_t col_offset)
-{
-    if (dev == NULL || dev->_i2c_dev_handle == NULL) { return CEEPEW_ERR_BUSY; }
-
-    for (uint8_t page = 0U; page < 8U; page++) {
-        const uint8_t col_low  = (uint8_t)(col_offset & 0x0FU);
-        const uint8_t col_high = (uint8_t)(0x10U | ((col_offset >> 4U) & 0x0FU));
-        const uint8_t page_cmd = (uint8_t)(0xB0U | page);
-
-        /* One transaction: command stream = [col_low, col_high, page_set]. */
-        const uint8_t cmd_stream[4] = {
-            0x00U,         /* CTRL_CMD = command stream */
-            col_low,
-            col_high,
-            page_cmd,
-        };
-        esp_err_t rc = i2c_master_transmit(dev->_i2c_dev_handle,
-                                           cmd_stream, sizeof(cmd_stream),
-                                           I2C_FLUSH_TIMEOUT_TICKS);
-        if (rc != ESP_OK) {
-            ESP_LOGE(TAG, "page %u cmd failed: %d (%s)",
-                     (unsigned)page, (int)rc, esp_err_to_name(rc));
-            return CEEPEW_ERR_HW;
-        }
-
-        /* Second transaction: data stream = [0x40] + 128 bytes from buffer. */
-        uint8_t data_stream[1U + 128U];
-        data_stream[0U] = 0x40U;
-        memcpy(&data_stream[1U], dev->_page[page]._segs, 128U);
-        rc = i2c_master_transmit(dev->_i2c_dev_handle,
-                                 data_stream, sizeof(data_stream),
-                                 I2C_FLUSH_TIMEOUT_TICKS);
-        if (rc != ESP_OK) {
-            ESP_LOGE(TAG, "page %u data failed: %d (%s)",
-                     (unsigned)page, (int)rc, esp_err_to_name(rc));
-            return CEEPEW_ERR_HW;
-        }
+    /* Single-pixel dirty: touches 1 tile, so the tile-dirty fast path
+     * engages. */
+    int64_t t_tile_min = INT64_MAX;
+    int64_t t_tile_sum = 0;
+    int64_t t_tile_max = 0;
+    for (uint32_t i = 0U; i < iterations; i++) {
+        (void)hal_ui_clear();
+        (void)hal_ui_pixel(64U, 32U, HAL_UI_WHITE);
+        const int64_t t0 = esp_timer_get_time();
+        (void)hal_ui_flush();
+        const int64_t t1 = esp_timer_get_time();
+        const int64_t dt = t1 - t0;
+        if (dt < t_tile_min) { t_tile_min = dt; }
+        if (dt > t_tile_max) { t_tile_max = dt; }
+        t_tile_sum += dt;
     }
+    const int64_t t_tile_avg = t_tile_sum / (int64_t)iterations;
+
+    ESP_LOGI(TAG,
+             "benchmark full-frame: min=%lldus avg=%lldus max=%lldus",
+             (long long)t_full_min, (long long)t_full_avg, (long long)t_full_max);
+    ESP_LOGI(TAG,
+             "benchmark tile-dirty: min=%lldus avg=%lldus max=%lldus",
+             (long long)t_tile_min, (long long)t_tile_avg, (long long)t_tile_max);
+#else
+    (void)iterations;
+#endif
     return CEEPEW_OK;
 }
 
@@ -347,45 +238,42 @@ CeePewErr_t hal_ui_init(void)
     CEEPEW_ASSERT(GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SDA) &&
                   GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SCL), CEEPEW_ERR_PINS);
 
-    ESP_LOGI(TAG, "hal_ui_init (vendored ssd1306 driver, I2C only)");
-    memset(&s_dev, 0, sizeof(s_dev));
-    s_sh1106_mode = false;
-    s_nonzero_flush_seen = false;
-    s_last_flush_diag_ms = 0U;
+    ESP_LOGI(TAG, "hal_ui_init (in-house ceepew_oled, I2C only)");
+    s_sh1106_mode        = false;
+    s_framebuffer_dirty   = true;   /* initial flush below is non-redundant */
+    s_nonzero_flush_seen  = false;
+    s_last_flush_diag_ms  = 0U;
 
-    esp_err_t rc = ssd1306_multi_attempt();
-    if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "Configured pins failed; scanning all GPIO pairs");
-        rc = ssd1306_scan_all_pins();
-    }
-    if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "No SSD1306 found anywhere; hal_ui_init failed");
-        return CEEPEW_ERR_HW;
+    CeePewErr_t err = ssd1306_bringup();
+    if (err != CEEPEW_OK) {
+        return err;
     }
 
-    /* Zero the internal page buffer so a first flush shows a clean screen
-     * even if the panel retained content from a prior power-on. */
-    for (uint8_t p = 0U; p < 8U; p++) {
-        memset(s_dev._page[p]._segs, 0, 128U);
-    }
+    /* Zero the framebuffer so a first flush shows a clean screen even
+     * if the panel retained content from a prior power-on. */
+    (void)memset(s_fb, 0, ceepew_oled_get_buffer_size(s_oled));
 
     s_ui_initialised = true;
 
-    CeePewErr_t flush_err = ssd1306_flush_pages_no_malloc(&s_dev, 0U);
+    CeePewErr_t flush_err = ssd1306_display_push();
     if (flush_err != CEEPEW_OK) {
         ESP_LOGE(TAG, "Initial flush failed");
         s_ui_initialised = false;
         return flush_err;
     }
+
+    /* Optional 32-iteration full-frame vs single-tile benchmark. Logged
+     * at LOG_INFO when CEEPEW_DEBUG_SERIAL is set, no-op otherwise. */
+    (void)hal_ui_benchmark_flush(32U);
     return CEEPEW_OK;
 }
 
 CeePewErr_t hal_ui_clear(void)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
-    for (uint8_t p = 0U; p < 8U; p++) {
-        memset(s_dev._page[p]._segs, 0, 128U);
-    }
+    (void)memset(s_fb, 0, ceepew_oled_get_buffer_size(s_oled));
+    hal_ui_clear_tile_dirty();
+    s_framebuffer_dirty = true;
     return CEEPEW_OK;
 }
 
@@ -393,59 +281,82 @@ CeePewErr_t hal_ui_flush(void)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
 
-    /* Diagnostic: count non-zero bytes (mirrors prior behavior) */
+    /* Skip the I2C push entirely if nothing changed since the last
+     * flush. Static screens (info, fingerprint-confirm, error, ...)
+     * hit this path every tick after the first draw, leaving the bus
+     * free for BLE. */
+    if (!s_framebuffer_dirty) {
+        return CEEPEW_OK;
+    }
+
+    /* Tile-dirty threshold: count the number of dirty (col,row) tiles
+     * and pick the faster path. Each tile is one page-byte slice
+     * (8 px tall x 8 px wide = 64 pixels). 1 tile ~4.8 ms (16 I2C
+     * transactions per page-byte area), full frame ~20 ms (2
+     * transactions for the whole 1024-byte framebuffer). 8 tiles is
+     * roughly the break-even point; above that, the full frame push
+     * is faster because it uses the panel's horizontal-addressing
+     * mode. */
+    uint8_t dirty_tiles = 0U;
+    for (uint8_t tc = 0U; tc < HAL_UI_NUM_TILE_COLS; tc++) {
+        uint8_t rows = s_tile_dirty[tc];
+        while (rows != 0U) {
+            dirty_tiles++;
+            rows = (uint8_t)(rows & (uint8_t)(rows - 1U));
+        }
+    }
+
+    /* Diagnostic: count non-zero bytes (only every 5s or first time). */
+    const size_t buf_size = ceepew_oled_get_buffer_size(s_oled);
     uint32_t nonzero_bytes = 0U;
     uint8_t  first_nonzero_idx = 0U;
     bool first_set = false;
-    for (uint8_t p = 0U; p < 8U; p++) {
-        for (uint16_t i = 0U; i < 128U; i++) {
-            if (s_dev._page[p]._segs[i] != 0U) {
-                nonzero_bytes++;
-                if (!first_set) {
-                    first_nonzero_idx = (uint8_t)((p << 4U) | (i & 0x0FU));
-                    first_set = true;
-                }
+    for (size_t i = 0U; i < buf_size; i++) {
+        if (s_fb[i] != 0U) {
+            nonzero_bytes++;
+            if (!first_set) {
+                first_nonzero_idx = (uint8_t)(i & 0xFFU);
+                first_set = true;
             }
         }
     }
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
     if ((!s_nonzero_flush_seen && (nonzero_bytes > 0U)) ||
         ((now_ms - s_last_flush_diag_ms) > 5000U)) {
-        ESP_LOGI(TAG, "flush diag: nonzero=%lu first_idx=0x%02X",
+        ESP_LOGI(TAG, "flush diag: nonzero=%lu first_idx=0x%02X tiles=%u",
                  (unsigned long)nonzero_bytes,
-                 (unsigned int)first_nonzero_idx);
+                 (unsigned int)first_nonzero_idx,
+                 (unsigned)dirty_tiles);
         s_last_flush_diag_ms = now_ms;
         if (nonzero_bytes > 0U) { s_nonzero_flush_seen = true; }
     }
 
-    /* Try SSD1306 (col offset 0) first; on failure retry with SH1106 +2
-     * offset and latch the mode. This mirrors the previous driver's
-     * auto-detection behavior. */
-    CeePewErr_t err = ssd1306_flush_pages_no_malloc(&s_dev, 0U);
-    if (err != CEEPEW_OK && !s_sh1106_mode) {
-        err = ssd1306_flush_pages_no_malloc(&s_dev, 2U);
+    if (dirty_tiles > 0U && dirty_tiles <= 8U) {
+        const CeePewErr_t err = ssd1306_display_push_tiled();
         if (err == CEEPEW_OK) {
-            s_sh1106_mode = true;
-            ESP_LOGW(TAG, "Switched to SH1106 +2 column offset");
-        } else {
-            ESP_LOGE(TAG, "hal_ui_flush failed on both SSD1306 and SH1106 attempts");
+            return CEEPEW_OK;
         }
+        /* Tile push failed: fall through to the full-frame path as a
+         * last-ditch attempt. */
+        ESP_LOGW(TAG, "tiled push failed, falling back to full frame");
     }
-    return err;
+    return ssd1306_display_push();
 }
 
-SSD1306_t *hal_ui_get_dev(void)
-{
-    return s_ui_initialised ? &s_dev : NULL;
-}
+/* ── Framebuffer write helper ─────────────────────────────────────── */
 
 static inline void fb_pixel(uint8_t x, uint8_t y, bool on)
 {
     if (x >= HAL_UI_WIDTH_PX || y >= HAL_UI_HEIGHT_PX) { return; }
+    /* Standard SSD1306 page layout: 8 pages x 128 columns, LSB-first
+     * vertical. The ceepew_oled framebuffer is the same layout, so
+     * the math is identical to the previous vendored-driver path. */
     const uint8_t  page = (uint8_t)(y >> 3);
     const uint8_t  bit  = (uint8_t)(1U << (y & 0x07U));
-    if (on) { s_dev._page[page]._segs[x] |= bit; }
-    else    { s_dev._page[page]._segs[x] = (uint8_t)(s_dev._page[page]._segs[x] & ~bit); }
+    uint8_t       *byte = &s_fb[(uint16_t)page * 128U + (uint16_t)x];
+    if (on) { *byte |= bit; }
+    else    { *byte = (uint8_t)(*byte & ~bit); }
+    hal_ui_mark_tile_dirty(x, y);
 }
 
 CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color)
@@ -459,7 +370,9 @@ CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color)
         case HAL_UI_INVERT: {
             const uint8_t page = (uint8_t)(y >> 3);
             const uint8_t bit  = (uint8_t)(1U << (y & 0x07U));
-            s_dev._page[page]._segs[x] ^= bit;
+            uint8_t *byte = &s_fb[(uint16_t)page * 128U + (uint16_t)x];
+            *byte = (uint8_t)(*byte ^ bit);
+            hal_ui_mark_tile_dirty(x, y);
             break;
         }
         default: return CEEPEW_ERR_PARAM;
@@ -494,145 +407,40 @@ CeePewErr_t hal_ui_vline(uint8_t x, uint8_t y0, uint8_t y1, HalUIColor_t color)
 CeePewErr_t hal_ui_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
-    CEEPEW_ASSERT(x0 < HAL_UI_WIDTH_PX && y0 < HAL_UI_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
-    CEEPEW_ASSERT(x1 < HAL_UI_WIDTH_PX && y1 < HAL_UI_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
-
-    int dx = (int)x1 - (int)x0;
-    int dy = (int)y1 - (int)y0;
-    int sx = (dx >= 0) ? 1 : -1;
-    int sy = (dy >= 0) ? 1 : -1;
-
-    dx = (dx < 0) ? -dx : dx;
-    dy = (dy < 0) ? -dy : dy;
-
-    int err = (dx > dy) ? (dx / 2) : -(dy / 2);
-    int x = (int)x0;
-    int y = (int)y0;
-
-    while (true) {
-        if (x >= 0 && x < (int)HAL_UI_WIDTH_PX && y >= 0 && y < (int)HAL_UI_HEIGHT_PX) {
-            (void)hal_ui_pixel((uint8_t)x, (uint8_t)y, color);
-        }
-        if (x == (int)x1 && y == (int)y1) { break; }
-        int e2 = err;
-        if (e2 > -dx) { err = e2 - dy; x += sx; }
-        if (e2 <  dy) { err = e2 + dx; y += sy; }
-    }
-    return CEEPEW_OK;
+    return ceepew_oled_gfx_line(s_oled, x0, y0, x1, y1, color);
 }
 
 CeePewErr_t hal_ui_rect(const HalUIRect_t *r, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(r->x + r->w <= HAL_UI_WIDTH_PX && r->y + r->h <= HAL_UI_HEIGHT_PX,
-                  CEEPEW_ERR_BOUNDS);
-
-    (void)hal_ui_hline(r->x, (uint8_t)(r->x + r->w - 1U), r->y, color);
-    (void)hal_ui_hline(r->x, (uint8_t)(r->x + r->w - 1U), (uint8_t)(r->y + r->h - 1U), color);
-    (void)hal_ui_vline(r->x, r->y, (uint8_t)(r->y + r->h - 1U), color);
-    (void)hal_ui_vline((uint8_t)(r->x + r->w - 1U), r->y, (uint8_t)(r->y + r->h - 1U), color);
-    return CEEPEW_OK;
+    return ceepew_oled_gfx_rect(s_oled, r, color);
 }
 
 CeePewErr_t hal_ui_rect_fill(const HalUIRect_t *r, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(r->x + r->w <= HAL_UI_WIDTH_PX && r->y + r->h <= HAL_UI_HEIGHT_PX,
-                  CEEPEW_ERR_BOUNDS);
-
-    for (uint8_t y = 0U; y < r->h; y++) {
-        (void)hal_ui_hline(r->x, (uint8_t)(r->x + r->w - 1U), (uint8_t)(r->y + y), color);
-    }
-    return CEEPEW_OK;
+    return ceepew_oled_gfx_rect_fill(s_oled, r, color);
 }
 
 CeePewErr_t hal_ui_circle(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
-
-    int x = (int)radius;
-    int y = 0;
-    int err = 0;
-
-    while (x >= y) {
-        if ((int)cx + x < (int)HAL_UI_WIDTH_PX && (int)cy + y < (int)HAL_UI_HEIGHT_PX) {
-            (void)hal_ui_pixel((uint8_t)(cx + x), (uint8_t)(cy + y), color);
-        }
-        if ((int)cx - x >= 0 && (int)cy + y < (int)HAL_UI_HEIGHT_PX) {
-            (void)hal_ui_pixel((uint8_t)(cx - x), (uint8_t)(cy + y), color);
-        }
-        if ((int)cx + y < (int)HAL_UI_WIDTH_PX && (int)cy + x < (int)HAL_UI_HEIGHT_PX) {
-            (void)hal_ui_pixel((uint8_t)(cx + y), (uint8_t)(cy + x), color);
-        }
-        if ((int)cx - y >= 0 && (int)cy + x < (int)HAL_UI_HEIGHT_PX) {
-            (void)hal_ui_pixel((uint8_t)(cx - y), (uint8_t)(cy + x), color);
-        }
-        if ((int)cx + x < (int)HAL_UI_WIDTH_PX && (int)cy - y >= 0) {
-            (void)hal_ui_pixel((uint8_t)(cx + x), (uint8_t)(cy - y), color);
-        }
-        if ((int)cx - x >= 0 && (int)cy - y >= 0) {
-            (void)hal_ui_pixel((uint8_t)(cx - x), (uint8_t)(cy - y), color);
-        }
-        if ((int)cx + y < (int)HAL_UI_WIDTH_PX && (int)cy - x >= 0) {
-            (void)hal_ui_pixel((uint8_t)(cx + y), (uint8_t)(cy - x), color);
-        }
-        if ((int)cx - y >= 0 && (int)cy - x >= 0) {
-            (void)hal_ui_pixel((uint8_t)(cx - y), (uint8_t)(cy - x), color);
-        }
-        y++;
-        err += 2U * y + 1U;
-        if (2U * err - (2U * x - 1U) > 0) {
-            x--;
-            err += 1U - 2U * x;
-        }
-    }
-    return CEEPEW_OK;
+    return ceepew_oled_gfx_circle(s_oled, cx, cy, radius, color);
 }
 
 CeePewErr_t hal_ui_circle_fill(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
-
-    int x = (int)radius;
-    int y = 0;
-    int err = 0;
-
-    while (x >= y) {
-        if ((int)cx + x < (int)HAL_UI_WIDTH_PX && (int)cy + y < (int)HAL_UI_HEIGHT_PX) {
-            (void)hal_ui_hline((uint8_t)(cx - x), (uint8_t)(cx + x), (uint8_t)(cy + y), color);
-        }
-        if ((int)cy - y >= 0) {
-            (void)hal_ui_hline((uint8_t)(cx - x), (uint8_t)(cx + x), (uint8_t)(cy - y), color);
-        }
-        if ((int)cx + y < (int)HAL_UI_WIDTH_PX) {
-            (void)hal_ui_hline((uint8_t)(cx - y), (uint8_t)(cx + y), (uint8_t)(cy + x), color);
-        }
-        if ((int)cy - x >= 0) {
-            (void)hal_ui_hline((uint8_t)(cx - y), (uint8_t)(cx + y), (uint8_t)(cy - x), color);
-        }
-        y++;
-        err += 2U * y + 1U;
-        if (2U * err - (2U * x - 1U) > 0) {
-            x--;
-            err += 1U - 2U * x;
-        }
-    }
-    return CEEPEW_OK;
+    return ceepew_oled_gfx_circle_fill(s_oled, cx, cy, radius, color);
 }
 
 CeePewErr_t hal_ui_text(uint8_t x, uint8_t y, const char *str, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     CEEPEW_ASSERT(str != NULL, CEEPEW_ERR_NULL_PTR);
-
-    uint8_t cx = x;
-    for (uint16_t i = 0U; str[i] != '\0' && cx < HAL_UI_WIDTH_PX; i++) {
-        (void)hal_ui_char(cx, y, str[i], color);
-        cx = (uint8_t)(cx + 6U);
-    }
-    return CEEPEW_OK;
+    return ceepew_oled_gfx_text(s_oled, x, y, str, color);
 }
 
 CeePewErr_t hal_ui_char(uint8_t x, uint8_t y, char c, HalUIColor_t color)
@@ -664,6 +472,11 @@ CeePewErr_t hal_ui_char(uint8_t x, uint8_t y, char c, HalUIColor_t color)
 uint16_t hal_ui_text_width(const char *str)
 {
     if (str == NULL) { return 0U; }
+    /* The GFXfont adapter's first=0x20, last=0x7E, yAdvance=8 — 5 px
+     * glyph + 1 px column gap = 6 px per char, matching the legacy
+     * monospace assumption in ui_manager.c. Replicate the loop here
+     * so hal_ui_text_width stays a leaf with no ceepew_oled_*
+     * dependency. */
     uint16_t width = 0U;
     for (uint16_t i = 0U; str[i] != '\0' && i < 128U; i++) {
         width = (uint16_t)(width + 6U);

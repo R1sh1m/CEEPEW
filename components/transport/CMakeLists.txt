@@ -5,6 +5,7 @@ idf_component_register(
         "transport_esl.c"
         "transport_stream.c"
         "transport_ble.c"
+        "transport_ble_gatt_crypto.c"
         "transport_hop.c"
     INCLUDE_DIRS
         "."

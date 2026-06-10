@@ -29,12 +29,15 @@
    by completion flags and user input. This architecture allows all 9 screen
    types to coexist in one efficient state machine. */
 
-/* Weak reference to BLE context; actual definition lives in transport_ble.c
-   but a weak symbol here allows building/linking in configurations where the
-   transport component may be omitted during unit tests or static linking. */
-__attribute__((weak)) BleContext_t g_ble_ctx = {0};
+/* Strong definition of g_ble_ctx lives in components/transport/transport_ble.c;
+ * tests/component/ceepew_hal/ui_manager_test.c writes to it directly. Forward
+ * declaration here — the weak fallback was a code smell (linked objects always
+ * resolve to the strong symbol from transport_ble.c). */
+extern BleContext_t g_ble_ctx;
 
-/* Forward declarations of session FSM accessors for Sprint 10 integration */
+/* Forward declarations of session FSM accessors for Sprint 10 integration.
+ * Definitions in main/session_fsm.c; test injection via session_test_set_*()
+ * setters in session_fsm.h. */
 extern uint64_t session_get_id(void);
 extern uint64_t session_get_nonce_counter(void);
 extern CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
@@ -1187,6 +1190,43 @@ static CeePewErr_t ui_restart_discovery_from_pairing(void)
     return CEEPEW_OK;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SECTION 1c — BLE VISUAL FEEDBACK BRIDGE
+ *
+ * Drives the RGB LED from the BLE transport's pairing phase (or from the
+ * supervisor recovery flag) so the user gets fine-grained progress
+ * indication while the pairing countdown runs. Overrides the static
+ * "amber pulse" mapping used by task_session_sync_visual_state() only
+ * while the UI is on UI_STATE_PAIRING.
+ *
+ * Throttling: the LED is only reprogrammed when the desired pattern
+ * actually changes — keeps I2C/LEDC traffic down and avoids stomping the
+ * PWM timer mid-cycle.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+void task_ui_update_visual_feedback(void)
+{
+    CEEPEW_ASSERT_VOID(s_ui_manager_initialised);
+
+    PairingPhase_t phase = transport_ble_get_phase();
+    bool recovering = transport_ble_is_recovering();
+
+    RgbPattern_t target = recovering
+                          ? RGB_YELLOW_RED_BLINK
+                          : transport_ble_phase_to_rgb(phase);
+
+    static RgbPattern_t s_last_feedback_pattern = RGB_PATTERN_COUNT;
+    static bool         s_last_feedback_recovering = false;
+
+    if (target == s_last_feedback_pattern &&
+        recovering == s_last_feedback_recovering) {
+        return;
+    }
+    s_last_feedback_pattern = target;
+    s_last_feedback_recovering = recovering;
+
+    (void)rgb_set_pattern(target);
+}
+
 /* Peer blip renderer.
  * The blip becomes more persistent and exhibits a slow, periodic drift in
  * displayed location so transient scan gaps don't make it disappear instantly
@@ -1443,9 +1483,9 @@ static const char *ui_pairing_result_detail_text(uint8_t reason)
         case UI_PAIRING_RESULT_TIMED_OUT:
             return "Timer expired before handshake.";
         case UI_PAIRING_RESULT_LINK_FAIL:
-            return "Peer vanished during pairing.";
+            return "Pairing Failed. Bring devices closer";
         case UI_PAIRING_RESULT_COMMITMENT_FAIL:
-            return "Code mismatch with peer.";
+            return "Code mismatch. Verify codes match.";
         case UI_PAIRING_RESULT_UNKNOWN:
         case UI_PAIRING_RESULT_NONE:
         default:
@@ -1679,7 +1719,7 @@ static CeePewErr_t render_pairing_failed(void)
     }
     /* Slightly increase spacing between detail box and footer text to improve legibility */
     draw_hline(8U, 50U, 112U);
-    ui_draw_text_wrapped(12U, Y_STATUS, "Retrying link. Please wait.", 102U, 8U);
+    ui_draw_text_wrapped(12U, Y_STATUS, "System Syncing... Please wait.", 102U, 8U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2724,10 +2764,16 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.transition_ready = true;
         }
     } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
-        if (g_ui_ctx.pairing_result_start_ms != 0U &&
-            (now_ms - g_ui_ctx.pairing_result_start_ms) >= CEEPEW_PAIRING_FAILED_HOLD_MS) {
+        /* Spec §4: PAIRING_FAILED persists until button press.
+         * The user must explicitly acknowledge the failure before the
+         * device returns to discovery. The legacy auto-restart timer
+         * (CEEPEW_PAIRING_FAILED_HOLD_MS) is removed to match the spec. */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             g_ui_ctx.pairing_result_start_ms = 0U;
             (void)ui_restart_discovery_from_pairing();
+            g_ui_ctx.transition_ready = true;
         }
     }
 
@@ -2841,6 +2887,29 @@ CeePewErr_t ui_manager_update(void)
                 (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
                 g_ui_ctx.transition_ready = true;
             }
+        }
+    } else if (g_ui_ctx.current_state == UI_STATE_PAIRING) {
+        /* Pairing countdown: 3 s hold on the button = DEBUG hook that
+         * forces the supervisor to run its recovery path. The RGB LED
+         * should immediately switch to RGB_YELLOW_RED_BLINK and the
+         * device should re-advertise / re-scan. Useful for verifying
+         * Task 2 (radio-failure recovery) without a broken device. */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 3000U) {
+                ESP_LOGW("ui", "Pairing screen: 3 s hold detected — triggering debug timeout");
+                (void)transport_ble_debug_trigger_timeout();
+                /* Force the visual feedback bridge to re-evaluate immediately
+                 * so the LED reflects the recovery state on the very next
+                 * tick rather than waiting for a phase transition. */
+                task_ui_update_visual_feedback();
+            }
+            /* No short-press action — pairing is non-interactive once
+             * the user has confirmed the code. Short press is ignored
+             * to avoid accidental state churn. */
         }
     } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT) {
         if (g_ui_ctx.diag_mode) {
@@ -3045,6 +3114,17 @@ CeePewErr_t ui_manager_update(void)
 
     /* Remember previous button state for edge detection */
     g_ui_ctx.button_prev = g_ui_ctx.button_pressed;
+
+    /* ── BLE visual feedback bridge ──────────────────────────────────────
+     * While the user is on the Pairing screen, surface the BLE pairing
+     * phase (or the supervisor recovery indicator) on the RGB LED so
+     * the user can tell at a glance whether the link is stuck, recovering,
+     * or making progress. task_ui_update_visual_feedback() itself
+     * throttles writes — only called when state == PAIRING, not on
+     * every tick of every screen. */
+    if (g_ui_ctx.current_state == UI_STATE_PAIRING) {
+        task_ui_update_visual_feedback();
+    }
 
     return CEEPEW_OK;
 }

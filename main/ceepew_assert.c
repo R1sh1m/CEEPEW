@@ -1,6 +1,14 @@
-/* main/ceepew_assert.c */
+/* main/ceepew_assert.c
+ *
+ * Implementation of ceepew_log_assert, the logger called by every
+ * CEEPEW_ASSERT macro site. Hosted in main/ so all components can
+ * link against it without depending on the OLED driver.
+ *
+ * CEEPEW_DEBUG_SERIAL is defined globally via -D in the project's
+ * CMake toolchain file (and gated by main/ceepew_config.h). We use
+ * #ifdef here to avoid a circular REQUIRES with main.
+ */
 #include "ceepew_assert.h"
-#include "ceepew_config.h"
 #include <esp_log.h>
 
 static const char *TAG = "CEEPEW";

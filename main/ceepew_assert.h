@@ -1,37 +1,27 @@
-/* main/ceepew_assert.h */
+/* main/ceepew_assert.h
+ *
+ * Project-wide assert macros and the CeePewErr_t type.
+ *
+ * Hosted in main/ so all components can include it without depending on
+ * the OLED driver. Previously lived in components/ceepew_oled/. The
+ * implementation of ceepew_log_assert() is in main/ceepew_assert.c.
+ *
+ * CeePewErr_t itself is defined in hal_ui_types.h (components/ceepew_oled).
+ * We keep the transitive include here intentionally: ~100 TUs in the
+ * codebase use CeePewErr_t without including hal_ui_types.h directly,
+ * so removing the include would require a separate sweep. The cost
+ * of the transitive include is one extra preprocessor pass per TU
+ * and zero runtime cost.
+ */
 #ifndef CEEPEW_ASSERT_H
 #define CEEPEW_ASSERT_H
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "hal_ui_types.h"
 
-typedef enum{
-    CEEPEW_OK = 0,
-    CEEPEW_ERR_NULL_PTR = 1,
-    CEEPEW_ERR_BOUNDS = 2,
-    CEEPEW_ERR_PARAM = 3,
-    CEEPEW_ERR_NONCE_EXHAUSTED = 4,
-    CEEPEW_ERR_CRYPTO = 5,
-    CEEPEW_ERR_TRANSPORT = 6,
-    CEEPEW_ERR_FEC = 7,
-    CEEPEW_ERR_PINS = 8,
-    CEEPEW_ERR_ALLOC = 9,
-    CEEPEW_ERR_INTERNAL = 10,
-    CEEPEW_ERR_TIMEOUT = 11,
-    CEEPEW_ERR_OVERFLOW = 12,
-    CEEPEW_ERR_UNSUPPORTED = 13,
-    CEEPEW_ERR_BUSY = 14,
-    CEEPEW_ERR_HW = 15,
-    CEEPEW_ERR_NOENT = 16,
-    CEEPEW_ERR_REPLAY = 17,
-    CEEPEW_ERR_SIG_FAIL = 18,
-    CEEPEW_ERR_MAX_RETRIES = 19,
-    CEEPEW_ERR_AUTH_FAIL = 20,
-    CEEPEW_ERR_FEC_UNCORRECT = 21,
-    CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED = 22
-} CeePewErr_t;
-
-/* Forward declaration for assertion logger. Implemented elsewhere. */
+/* Forward declaration for assertion logger. Implemented in
+ * main/ceepew_assert.c. */
 void ceepew_log_assert(const char *expr, const char *file, int line, CeePewErr_t code);
 
 /* CEEPEW_ASSERT: return 'err' in non-void functions when condition fails. */

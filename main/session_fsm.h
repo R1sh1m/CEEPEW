@@ -87,10 +87,13 @@ CeePewErr_t session_phase2_derive_key(void);
 
 /* Enforce nonce limit before every encryption operation.
  * SECURITY: Must be called BEFORE every call to crypto_box or crypto_ascon_aead_encrypt.
- * Increments nonce_counter AFTER checking limit.
+ * Increments nonce_counter by 2 AFTER checking limit, preserving parity:
+ *   initiator uses even nonces (0,2,4,...), responder uses odd (1,3,5,...).
+ * Both nonce sequences are guaranteed disjoint — no collision possible.
  *
  * RETURNS:
  *   CEEPEW_OK — Nonce counter incremented, safe to encrypt
+ *   CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED — Counter >= 90% of hard limit
  *   CEEPEW_ERR_NONCE_EXHAUSTED — Nonce counter >= CEEPEW_NONCE_HARD_LIMIT
  *   CEEPEW_ERR_PARAM — Not in phase 3 or session not active
  */
@@ -142,17 +145,156 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
                                  const uint8_t peer_public_key[32]);
 
 /* Get peer's Ed25519 public key (for signature verification).
- * In full implementation, exchanged during Phase 2.
+ * Returns the key that was stored via session_set_peer_public_key() during
+ * the BLE commitment exchange. No derivation or RNG is performed.
  *
  * PARAMETERS:
  *   peer_pk: Output buffer for 32-byte Ed25519 public key (not NULL)
  *
  * RETURNS:
  *   CEEPEW_OK — Peer public key populated
- *   CEEPEW_ERR_PARAM — Not in phase 3 or session not active
+ *   CEEPEW_ERR_PARAM — Not in phase 2+, session not active, or peer's key has
+ *                      not yet been received via the BLE commitment exchange
  *   CEEPEW_ERR_NULL_PTR — peer_pk is NULL
  */
 CeePewErr_t session_get_peer_public_key(uint8_t peer_pk[32]);
+
+/* Store the peer's ephemeral Ed25519 public key, received over BLE during
+ * the Phase 2 commitment exchange. Must be called before
+ * session_get_peer_public_key() will return a valid key. Idempotent.
+ *
+ * PARAMETERS:
+ *   peer_pk: 32-byte peer's ephemeral Ed25519 public key (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — peer_pk is NULL
+ */
+CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32]);
+
+/* Copy the local ephemeral Ed25519 public key (generated at session_phase2_initiate)
+ * into pk_out. Used by the transport layer to publish our sign_pk to the peer
+ * over BLE during the commitment exchange. Available in phase 2 and 3.
+ *
+ * PARAMETERS:
+ *   pk_out: Output buffer for 32-byte local sign_pk (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Local sign_pk populated
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — pk_out is NULL
+ */
+CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32]);
+
+/* ── X25519 ECDH public key exchange ─────────────────────────────────────── */
+
+/* Get the local ephemeral X25519 public key (generated at session_phase2_derive_key).
+ * Used by the transport layer to exchange the ECDH key with the peer over BLE.
+ * Available in phase 3.
+ *
+ * PARAMETERS:
+ *   pk_out: Output buffer for 32-byte X25519 public key (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Local box_pubkey populated
+ *   CEEPEW_ERR_PARAM — Not in phase 3
+ *   CEEPEW_ERR_NULL_PTR — pk_out is NULL
+ */
+CeePewErr_t session_get_local_box_pubkey(uint8_t pk_out[32]);
+
+/* Store the peer's ephemeral X25519 public key, received over BLE.
+ * Must be called before crypto_box encrypt/decrypt will work correctly.
+ * Idempotent.
+ *
+ * PARAMETERS:
+ *   peer_pk: 32-byte peer's X25519 public key (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — peer_pk is NULL
+ */
+CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32]);
+
+/* Check if the peer's X25519 public key has been received.
+ * Returns false until session_set_peer_box_pubkey() has been called. */
+bool session_peer_box_pubkey_valid(void);
+
+/* Copy the 32-byte human-verified session code into out. Used by the
+ * transport layer to derive the GATT-side sign_pk encryption key (see
+ * transport_ble_gatt_crypto.c). The session code is the trust anchor:
+ * both peers must enter the same value at pairing time, so the derived
+ * key is identical at both ends without any key exchange.
+ *
+ * Available in phase 2 and 3.
+ *
+ * PARAMETERS:
+ *   out: Output buffer for 32-byte session code (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Session code populated
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — out is NULL
+ */
+CeePewErr_t session_get_session_code(uint8_t out[32]);
+
+/* Apply a peer-uptime offset (seconds) to the ESL timestamp check.
+ * Computed by the transport layer from a one-shot BLE time-sync characteristic
+ * read. Calling with 0 clears any applied offset.
+ */
+CeePewErr_t session_set_peer_uptime_offset(int32_t offset_s);
+
+/* Set the initiator/responder role for this session. Must be called
+ * BEFORE session_phase2_derive_key() so the nonce counter starts at the
+ * correct parity (initiator: even, responder: odd). Both peers compute
+ * the same role from the same MAC ordering — no network exchange needed.
+ *
+ * PARAMETERS:
+ *   initiator: true if local MAC < peer MAC
+ *
+ * RETURNS:
+ *   CEEPEW_OK
+ */
+CeePewErr_t session_set_role(bool initiator);
+
+/* Get the current role assignment (true = initiator, false = responder).
+ * Returns false if role has not been set. */
+bool session_get_role(void);
+
+/* Mark the post-derive sync barrier as cleared. Called by the session
+ * task after an encrypted MSG_TYPE_KEY_ACK round-trip has been verified.
+ * Until this is set, the FSM must NOT transition the UI to PAIRING_SUCCESS.
+ *
+ * Idempotent. Returns CEEPEW_OK.
+ */
+CeePewErr_t session_mark_sync_barrier_cleared(void);
+
+/* Has the post-derive sync barrier been cleared? Used by the session
+ * task to gate the UI transition to PAIRING_SUCCESS. */
+bool session_sync_barrier_cleared(void);
+
+/* Drive the post-derive sync exchange. Call from the session task main
+ * loop while in phase 3 and the sync barrier is uncleared. The initiator
+ * retransmits a 1-byte HELLO inside the encrypted tunnel until the
+ * responder's ACK arrives or CEEPEW_KEY_SYNC_TIMEOUT_MS elapses.
+ *
+ * Returns CEEPEW_ERR_TIMEOUT if the deadline has passed (caller should
+ * transition to PAIRING_FAILED), CEEPEW_OK otherwise. */
+CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms);
+
+/* Called by the session task's RX path when a 1-byte post-derive sync
+ * payload is decoded. Routes the byte to the appropriate handler:
+ *   CEEPEW_KEY_SYNC_HELLO_BYTE → mark cleared, return CEEPEW_ERR_NEED_TX
+ *                                (caller should send the ACK)
+ *   CEEPEW_KEY_SYNC_ACK_BYTE   → mark cleared, return CEEPEW_OK
+ *   anything else              → return CEEPEW_ERR_PARAM (ignored) */
+CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte);
+
+/* Read the currently-applied peer-uptime offset (seconds).
+ * Returns 0 if no offset has been set.
+ */
+int32_t session_get_peer_uptime_offset(void);
 
 /* MAC-locking security check (constant-time).
  * Verify frame came from the bound peer (silent discard on mismatch).
@@ -179,6 +321,18 @@ CeePewErr_t session_mac_lock_check(const uint8_t peer_mac[6]);
  *   CEEPEW_OK — Session ended and cleaned up
  */
 CeePewErr_t session_end(void);
+
+/* Reset session FSM from pairing phase back to discovery (phase 1).
+ * Calls session_end() to securely zero all key material, then
+ * re-initialises Phase 1 with the stored local device ID so the
+ * device is immediately ready to re-discover and re-pair.
+ * Safe to call from any phase; idempotent when phase == 1.
+ *
+ * RETURNS:
+ *   CEEPEW_OK  — Session reset to discovery
+ *   CEEPEW_ERR — Session phase unknown (pre-1, or re-init failed)
+ */
+CeePewErr_t session_reset_to_discovery(void);
 
 /* Phase 4: Secure wipe triggered by TTL expiry or nonce exhaustion.
  * Securely zeros all key material, resets region allocator,
@@ -287,6 +441,14 @@ CeePewErr_t session_get_commitment_with_sig(uint8_t *out_buf, uint8_t *out_len);
  * Returns CEEPEW_OK on successful verification (commitment and signature ok)
  */
 CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, uint8_t len);
+
+/* ── Test injection setters (replace the old __attribute__((weak)) mocks) ──
+ * Setting a value short-circuits the corresponding session_get_*() return.
+ * Safe to call from any context. Marked with a leading underscore on the
+ * shadow flag in implementation to make grep cleaner. */
+void session_test_set_id(uint64_t id);
+void session_test_set_nonce_counter(uint64_t nc);
+void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]);
 
 #ifdef __cplusplus
 }

@@ -202,6 +202,20 @@ CeePewErr_t ui_show_nonce_exhausted(void);
  */
 void ui_manager_reset_to_discovery(void);
 
+/* UI → BLE visual feedback bridge.
+ * Maps the current BLE pairing phase to an RGB pattern so the user gets
+ * fine-grained progress feedback (CONNECTING, MTU, COMMITMENT, etc.) instead
+ * of a single "amber pulse" while the pairing countdown runs.
+ *
+ * If the PairingSupervisor is currently performing a forced recovery
+ * (PHASE_TIMEOUT / RADIO_RESTART), the recovery indicator pattern
+ * (RGB_YELLOW_RED_BLINK) takes precedence over the phase pattern.
+ *
+ * Called once per UI tick from ui_manager_update() while on the pairing
+ * screen. Safe to call repeatedly — only writes the LED when the desired
+ * pattern changes. */
+void task_ui_update_visual_feedback(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,7 +1,7 @@
 build/
 sdkconfig
 sdkconfig.defaults
-keys/
+.claude/
 *.pem
 *.key
 *.p12
@@ -25,6 +25,11 @@ sdkconfig.old
 .github/
 .clangd
 sdkconfig.production
-.claude/
+CLAUDE.md
 docs/
-tests/
+opencode.json
+.cache/
+verify_handoff_fix.ps1
+sdkconfig.production
+skills-lock.json
+logs/

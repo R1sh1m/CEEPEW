@@ -22,7 +22,6 @@
 #include "hal_pins.h"
 #include "hal_i2c_scanner.h"
 #include "hal_ui.h"
-#include "ssd1306.h"
 #include "ui_manager.h"
 #include "task_arch.h"
 #include "esp_wifi.h"
@@ -82,7 +81,7 @@ void app_main(void){
 
     /* Single init for both the panel and the UI layer. The previous
      * hal_oled_init() / hal_ui_init() pair is now collapsed into one call
-     * because both share the same vendored SSD1306_t device. */
+     * because the UI layer wraps the in-house ceepew_oled panel handle. */
     err = hal_ui_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
@@ -91,40 +90,6 @@ void app_main(void){
         esp_restart();
     }
 
-    /* Boot-time charge-pump toggles + selftest flash. The SSD1306_t device
-     * is owned by hal_ui; we borrow it for these raw I2C commands via the
-     * hal_ui_get_dev() accessor. */
-    SSD1306_t *dev = hal_ui_get_dev();
-    if (dev != NULL) {
-        esp_err_t pump_err;
-        pump_err = ssd1306_set_charge_pump(dev, true);
-        if (pump_err == ESP_OK) { (void)ssd1306_selftest_flash(dev, 350U); }
-        if (pump_err != ESP_OK) {
-            ESP_LOGW(TAG, "startup OLED selftest (pump on) failed: %d", (int)pump_err);
-        }
-        pump_err = ssd1306_set_charge_pump(dev, false);
-        if (pump_err == ESP_OK) { (void)ssd1306_selftest_flash(dev, 350U); }
-        if (pump_err != ESP_OK) {
-            ESP_LOGW(TAG, "startup OLED selftest (pump off) failed: %d", (int)pump_err);
-        }
-        (void)ssd1306_set_charge_pump(dev, true);
-    } else {
-        ESP_LOGW(TAG, "hal_ui_get_dev() returned NULL; skipping selftest");
-    }
-
-    /* Render a deterministic startup pattern before task scheduler flow.
-     * This isolates OLED HW/driver visibility from UI-state-machine timing.
-     * Uses the project's existing 5x7 font via hal_ui_text / hal_ui_hline. */
-    err = hal_ui_clear();
-    if (err == CEEPEW_OK) { err = hal_ui_text(20U, 12U, "CEE-PEW", HAL_UI_WHITE); }
-    if (err == CEEPEW_OK) { err = hal_ui_text(8U,  28U, "OLED LINK OK", HAL_UI_WHITE); }
-    if (err == CEEPEW_OK) { err = hal_ui_hline(8U, 119U, 44U, HAL_UI_WHITE); }
-    if (err == CEEPEW_OK) { err = hal_ui_flush(); }
-    if (err == CEEPEW_OK) {
-        vTaskDelay(pdMS_TO_TICKS(1200U));
-    } else {
-        ESP_LOGW(TAG, "startup OLED pattern failed: %d", (int)err);
-    }
 
     /* ── BT CONTROLLER MEMORY RELEASE ──────────────────────────────────────── */
     /* Must be called before esp_bt_controller_init() AND before WiFi starts.
@@ -177,6 +142,17 @@ void app_main(void){
         ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err);
         esp_restart();  /* Cannot proceed without BLE */
     }
+
+    /* On-device pairing handoff regression test (runs once at boot) */
+#if CONFIG_CEEPEW_BUILD_TESTS
+    extern void test_pairing_handoff_run(void);
+    test_pairing_handoff_run();
+
+    /* On-device key-convergence + post-derive sync barrier regression
+     * test. Exercises the fixes for the 4 critical pairing bugs. */
+    extern void test_pairing_convergence_run(void);
+    test_pairing_convergence_run();
+#endif /* CONFIG_CEEPEW_BUILD_TESTS */
 
     /* BLE advertising/scan start is driven from BLE GATT/GAP events to avoid race conditions */
 
