@@ -187,7 +187,9 @@ CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16], const uint8_t nonce
     uint64_t pblk = s[0] ^ cblk;
     store64_be(block, pblk);
     for (uint16_t i = 0U; i < rem; i++) { pt[out_pos + i] = block[i]; }
-    s[0] = cblk;
+    ascon_pad(block, rem);
+    for (uint16_t i = 0U; i < rem; i++) { block[i] = pt[out_pos + i]; }
+    s[0] ^= load64_be(block);
     s[1] ^= k0;
     s[2] ^= k1;
     ascon_p(s, 12U);

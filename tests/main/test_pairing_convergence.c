@@ -421,7 +421,7 @@ static void test_beacon_nonce_bit15_flag(void)
           "peer_gatt_ready extracted from bit 15 of accepted beacon");
 }
 
-void test_pairing_convergence_run(void)
+uint32_t test_pairing_convergence_run(void)
 {
     ESP_LOGI(TAG, "=== Pairing convergence + sync barrier test ===");
     s_pass_count = 0U;
@@ -441,4 +441,5 @@ void test_pairing_convergence_run(void)
     ESP_LOGI(TAG, "Pairing convergence summary: passed=%u failed=%u",
              (unsigned)s_pass_count, (unsigned)s_fail_count);
     s_pass = (s_fail_count == 0U);
+    return s_fail_count;
 }

@@ -22,6 +22,9 @@ static bool s_ready = false;
 
 CeePewErr_t hal_temp_init(void)
 {
+    CEEPEW_ASSERT(HAL_TEMP_SAMPLES_PER_READ > 0U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(HAL_TEMP_SAMPLES_PER_READ <= 16U, CEEPEW_ERR_PARAM);
+
     ESP_LOGW(HAL_TEMP_TAG,
              "die-temp sensor initialised; accuracy is ±10 C and the "
              "reading is biased upward by WiFi/BT self-heating (not a "
@@ -37,7 +40,8 @@ bool hal_temp_is_ready(void)
 
 bool hal_temp_read_celsius(float *out_celsius)
 {
-    CEEPEW_ASSERT(out_celsius != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(s_ready, false);
+    CEEPEW_ASSERT(out_celsius != NULL, false);
 
     if ((out_celsius == NULL) || (!s_ready)) {
         return false;

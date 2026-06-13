@@ -87,13 +87,22 @@ static bool handoff_test_matching_beacon_promotes(void)
         shared_commitment[i] = (uint8_t)(0x10U + i);
     }
 
+    /* Build a full CEEPEW_COMMITMENT_BYTES commitment whose first
+     * CEEPEW_COMMITMENT_ADV_BYTES match the beacon so that
+     * session_verify_peer_commitment_with_sig() succeeds in the ADV path. */
+    uint8_t full_commitment[CEEPEW_COMMITMENT_BYTES];
+    memcpy(full_commitment, shared_commitment, CEEPEW_COMMITMENT_ADV_BYTES);
+    memset(full_commitment + CEEPEW_COMMITMENT_ADV_BYTES, 0x42U,
+           CEEPEW_COMMITMENT_BYTES - CEEPEW_COMMITMENT_ADV_BYTES);
+    session_test_set_commitment(full_commitment);
+
     g_ble_ctx.commitment_verified          = false;
     g_ble_ctx.handoff_ready                = false;
     g_ble_ctx.ready_for_chat               = false;
     g_ble_ctx.state                        = BLE_ADVERTISING_AND_SCANNING;
-    g_ble_ctx.local_commitment_len         = CEEPEW_COMMITMENT_ADV_BYTES;
-    memcpy(g_ble_ctx.commitment_digest, shared_commitment,
-           CEEPEW_COMMITMENT_ADV_BYTES);
+    g_ble_ctx.local_commitment_len         = CEEPEW_COMMITMENT_BYTES;
+    memcpy(g_ble_ctx.commitment_digest, full_commitment,
+           CEEPEW_COMMITMENT_BYTES);
     g_ble_ctx.peer_commitment_pending      = true;
     g_ble_ctx.pending_peer_commitment_len  = CEEPEW_COMMITMENT_ADV_BYTES;
     memcpy(g_ble_ctx.pending_peer_commitment, shared_commitment,
@@ -133,13 +142,22 @@ static bool handoff_test_mismatch_does_not_promote(void)
         peer_commitment[i]  = (uint8_t)(0x90U + i);
     }
 
+    /* Build a full CEEPEW_COMMITMENT_BYTES commitment from the local ADV
+     * data and register it so session_get_commitment() returns a value that
+     * matches the local side but mismatches the peer. */
+    uint8_t full_commitment[CEEPEW_COMMITMENT_BYTES];
+    memcpy(full_commitment, local_commitment, CEEPEW_COMMITMENT_ADV_BYTES);
+    memset(full_commitment + CEEPEW_COMMITMENT_ADV_BYTES, 0x43U,
+           CEEPEW_COMMITMENT_BYTES - CEEPEW_COMMITMENT_ADV_BYTES);
+    session_test_set_commitment(full_commitment);
+
     g_ble_ctx.commitment_verified          = false;
     g_ble_ctx.handoff_ready                = false;
     g_ble_ctx.ready_for_chat               = false;
     g_ble_ctx.state                        = BLE_ADVERTISING_AND_SCANNING;
-    g_ble_ctx.local_commitment_len         = CEEPEW_COMMITMENT_ADV_BYTES;
-    memcpy(g_ble_ctx.commitment_digest, local_commitment,
-           CEEPEW_COMMITMENT_ADV_BYTES);
+    g_ble_ctx.local_commitment_len         = CEEPEW_COMMITMENT_BYTES;
+    memcpy(g_ble_ctx.commitment_digest, full_commitment,
+           CEEPEW_COMMITMENT_BYTES);
     g_ble_ctx.peer_commitment_pending      = true;
     g_ble_ctx.pending_peer_commitment_len  = CEEPEW_COMMITMENT_ADV_BYTES;
     memcpy(g_ble_ctx.pending_peer_commitment, peer_commitment,
@@ -154,8 +172,8 @@ static bool handoff_test_mismatch_does_not_promote(void)
                         "handoff_ready stays false on mismatch");
     ok &= handoff_check(!g_ble_ctx.ready_for_chat,
                         "ready_for_chat stays false on mismatch");
-    ok &= handoff_check(g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING,
-                        "state stays BLE_ADVERTISING_AND_SCANNING on mismatch");
+    ok &= handoff_check(g_ble_ctx.state == BLE_DONE,
+                        "state is BLE_DONE after failed verification");
     ok &= handoff_check(!transport_ble_handoff_ready(),
                         "transport_ble_handoff_ready() returns false on mismatch");
 
@@ -174,7 +192,7 @@ static bool handoff_test_no_pending_returns_ok(void)
     g_ble_ctx.handoff_ready           = false;
     g_ble_ctx.ready_for_chat          = false;
     g_ble_ctx.state                   = BLE_ADVERTISING_AND_SCANNING;
-    g_ble_ctx.local_commitment_len    = CEEPEW_COMMITMENT_ADV_BYTES;
+    g_ble_ctx.local_commitment_len    = CEEPEW_COMMITMENT_BYTES;
     g_ble_ctx.peer_commitment_pending = false;
     g_ble_ctx.pending_peer_commitment_len = 0U;
 
@@ -215,6 +233,9 @@ void test_pairing_handoff_run(void)
 
     /* Restore BLE context — zero side effects on production state. */
     memcpy(&g_ble_ctx, &saved_ctx, sizeof(BleContext_t));
+
+    /* Clear test commitment so later test suites aren't affected. */
+    session_test_unset_commitment();
 
     ESP_LOGI(TAG, "Pairing handoff test summary: passed=%u failed=%u (g_ble_ctx restored)",
              (unsigned)passed, (unsigned)failed);

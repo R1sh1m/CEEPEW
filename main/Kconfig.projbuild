@@ -18,4 +18,19 @@ menu "CEE-PEW Build Options"
             time, instead of probing for it reactively. Useful in
             production for known-good wiring; off by default.
 
+    config CEEPEW_EFUSE_HMAC_KEY
+        bool "Enable eFuse HMAC device identity key"
+        default n
+        help
+            Store a 32-byte device identity key in the ESP32 eFuse user
+            data block (EFUSE_BLK3) and use it to derive a device-bound
+            HKDF salt during session key derivation.  The eFuse key is
+            written once during factory provisioning; subsequent boots
+            read it back.  This adds a hardware-bound factor to the
+            session key — an attacker with flash dump + memory dump
+            still cannot derive the correct session key without the
+            eFuse identity.  Enable only if your devices have a free
+            eFuse user block.  Falls back to software-only salt if the
+            eFuse block is not provisioned.
+
 endmenu

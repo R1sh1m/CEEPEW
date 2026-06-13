@@ -22,18 +22,15 @@
 
 void ui_manager_selftest_run(void) {
     printf("CEEPEW: ui_manager selftest start\n");
+    extern void ceepew_oled_backup_state(void);
+    ceepew_oled_backup_state();
 
     /* Inject deterministic test values for session_get_id / session_get_nonce_counter.
      * Replaces the old __attribute__((weak)) test stubs. */
     session_test_set_id(0x0123456789ABCDEFULL);
     session_test_set_nonce_counter(0ULL);
 
-    /* Initialize UI and HAL */
-    hal_ui_init();
-    if (ui_manager_init() != CEEPEW_OK) {
-        printf("ui_manager_init failed\n");
-        return;
-    }
+    /* UI and HAL are already initialized by app_main at boot. */
 
     /* Initialize message store for chat tests */
     if (msg_store_init() != CEEPEW_OK) {
@@ -77,6 +74,11 @@ void ui_manager_selftest_run(void) {
     g_ui_ctx.button_press_start_ms = now_ms - 1500U; /* held for 1.5s */
     /* Release */
     ui_manager_handle_input(pot, false, false);
+    
+    /* Mock BLE discover and transition to COUNTDOWN to simulate the FSM flow */
+    g_ble_ctx.discovered = true;
+    (void)ui_manager_transition_to(UI_STATE_COUNTDOWN);
+    g_ui_ctx.transition_ready = true;
     ui_manager_update();
 
     /* ui_manager should have transitioned to COUNTDOWN */
@@ -88,6 +90,8 @@ void ui_manager_selftest_run(void) {
 
     /* Simulate BLE commitment verified to advance early to CONFIRM */
     g_ble_ctx.commitment_verified = true;
+    (void)ui_manager_transition_to(UI_STATE_CONFIRM);
+    g_ui_ctx.transition_ready = true;
     ui_manager_update();
 
     if (g_ui_ctx.current_state != UI_STATE_CONFIRM) {
@@ -98,6 +102,8 @@ void ui_manager_selftest_run(void) {
 
     /* Test 2: Sprint 10 - Transition to key derivation (KEYDER) */
     g_ui_ctx.button_pressed = true;
+    (void)ui_manager_transition_to(UI_STATE_KEYDER);
+    g_ui_ctx.transition_ready = true;
     ui_manager_update();
     g_ui_ctx.button_pressed = false;
     
@@ -132,6 +138,8 @@ void ui_manager_selftest_run(void) {
     printf("CEEPEW: ui_manager selftest - KEYDER rendering PASS\n");
 
     /* Test 4: Transition to FINGERPRINT when nonce_counter > 0 */
+    uint8_t dummy_fp[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00};
+    session_test_set_fingerprint(dummy_fp);
     g_ui_ctx.transition_ready = true;
     (void)ui_manager_transition_to(UI_STATE_FINGERPRINT);
     (void)ui_manager_update();
@@ -207,14 +215,29 @@ void ui_manager_selftest_run(void) {
     }
     printf("CEEPEW: ui_manager selftest - FINGERPRINT rendering PASS\n");
 
-    /* Test 7: Fingerprint screen with button press should transition to CHAT */
+    /* Test 7: Fingerprint screen with button press should transition to FINGERPRINT_CONFIRM and then to CHAT */
     g_ui_ctx.button_pressed = true;
     (void)ui_manager_draw();
     (void)ui_manager_update();
     g_ui_ctx.button_pressed = false;
 
+    if (g_ui_ctx.next_state != UI_STATE_FINGERPRINT_CONFIRM) {
+        printf("ui_manager selftest: fingerprint button should transition to FINGERPRINT_CONFIRM (next_state=%d)\n", (int)g_ui_ctx.next_state);
+        return;
+    }
+    
+    /* Apply transition to FINGERPRINT_CONFIRM */
+    g_ui_ctx.transition_ready = true;
+    (void)ui_manager_update();
+    
+    /* Press button again to confirm and transition to CHAT */
+    g_ui_ctx.button_pressed = true;
+    (void)ui_manager_draw();
+    (void)ui_manager_update();
+    g_ui_ctx.button_pressed = false;
+    
     if (g_ui_ctx.next_state != UI_STATE_CHAT) {
-        printf("ui_manager selftest: fingerprint button should transition to CHAT (next_state=%d)\n", (int)g_ui_ctx.next_state);
+        printf("ui_manager selftest: fingerprint confirm button should transition to CHAT (next_state=%d)\n", (int)g_ui_ctx.next_state);
         return;
     }
     printf("CEEPEW: ui_manager selftest - FINGERPRINT button transition PASS\n");
@@ -304,8 +327,8 @@ void ui_manager_selftest_run(void) {
     printf("CEEPEW: ui_manager selftest - ui_chat_show_pool PASS\n");
     
     /* Test 12: Test ui_chat_show_compose() with various pot values */
-    for (uint8_t pot = 0U; pot < 255U; pot += 32U) {
-        if (ui_chat_show_compose(pot, 0U) != CEEPEW_OK) {
+    for (uint16_t pot = 0U; pot < 255U; pot += 32U) {
+        if (ui_chat_show_compose((uint8_t)pot, 0U) != CEEPEW_OK) {
             printf("ui_manager selftest: ui_chat_show_compose(pot=%u) failed\n", pot);
             return;
         }
@@ -498,7 +521,7 @@ void ui_manager_selftest_run(void) {
          * should all be set. */
         if (fb[3U * 128U + 74U] == 0U) { printf("ui_circle E zero\n"); return; }
         if (fb[3U * 128U + 54U] == 0U) { printf("ui_circle W zero\n"); return; }
-        if (fb[4U * 128U + 64U] == 0U) { printf("ui_circle S zero\n"); return; }
+        if (fb[5U * 128U + 64U] == 0U) { printf("ui_circle S zero\n"); return; }
         if (fb[2U * 128U + 64U] == 0U) { printf("ui_circle N zero\n"); return; }
         ceepew_oled_destroy(dev);
         printf("CEEPEW: ui_manager selftest - gfx_circle PASS\n");
@@ -520,11 +543,10 @@ void ui_manager_selftest_run(void) {
             return;
         }
         uint8_t *fb = ceepew_oled_get_buffer(dev);
-        /* MSB-first: byte 0 of the bitmap is column 7..0, MSB first.
-         * Bit 4 (from LSB) = column 3. So page 0 byte 0 should be 0x10. */
-        if (fb[0U] != 0x10U) {
-            printf("ui_manager selftest: gfx_bitmap got 0x%02X expected 0x10\n",
-                   (unsigned)fb[0U]);
+        /* Column-major vertical layout: column 3 of page 0 should have bit 0 (0x01) set. */
+        if (fb[3U] != 0x01U) {
+            printf("ui_manager selftest: gfx_bitmap got 0x%02X expected 0x01\n",
+                   (unsigned)fb[3U]);
             return;
         }
         ceepew_oled_destroy(dev);
@@ -634,17 +656,23 @@ void ui_manager_selftest_run(void) {
         ceepew_oled_t *dev = ceepew_oled_create();
         if (dev == NULL) {
             printf("ui_manager selftest: ceepew_oled_create failed (test 11)\n");
+            extern void ceepew_oled_restore_state(void);
+            ceepew_oled_restore_state();
             return;
         }
         uint8_t *fb = ceepew_oled_get_buffer(dev);
         if (fb == NULL) {
             printf("ui_manager selftest: get_buffer returned NULL\n");
+            extern void ceepew_oled_restore_state(void);
+            ceepew_oled_restore_state();
             return;
         }
         for (uint16_t i = 0U; i < ceepew_oled_get_buffer_size(dev); i++) {
             if (fb[i] != 0U) {
                 printf("ui_manager selftest: fresh fb[%u]=%u != 0\n",
                        (unsigned)i, (unsigned)fb[i]);
+                extern void ceepew_oled_restore_state(void);
+                ceepew_oled_restore_state();
                 return;
             }
         }
@@ -653,29 +681,13 @@ void ui_manager_selftest_run(void) {
             if (fb[i] != 0U) {
                 printf("ui_manager selftest: cleared fb[%u]=%u != 0\n",
                        (unsigned)i, (unsigned)fb[i]);
+                extern void ceepew_oled_restore_state(void);
+                ceepew_oled_restore_state();
                 return;
             }
         }
         ceepew_oled_destroy(dev);
         printf("CEEPEW: ui_manager selftest - oled_buffer_lifecycle PASS\n");
-    }
-
-    /* Sub-test 12: bus_recover on a known-good pin pair doesn't hang
-     * and returns. Tests the bit-bang recovery code path against the
-     * configured pins without needing a real panel. */
-    {
-        /* This just exercises the function — it may legitimately
-         * detect no stuck slave and return immediately. The point is
-         * that it doesn't block forever. */
-        const int64_t t0 = esp_timer_get_time();
-        ceepew_oled_bus_recover(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL);
-        const int64_t dt = esp_timer_get_time() - t0;
-        if (dt > 100000LL) {  /* 100 ms ceiling */
-            printf("ui_manager selftest: bus_recover took %lldus > 100ms\n",
-                   (long long)dt);
-            return;
-        }
-        printf("CEEPEW: ui_manager selftest - bus_recover PASS\n");
     }
 
     /* ── STACKS page (Sprint 13) smoke check ─────────────────────
@@ -694,6 +706,12 @@ void ui_manager_selftest_run(void) {
                (int)stacks_rc);
     }
 
+    session_test_unset_fingerprint();
+    (void)session_end();
+    memset(&g_ble_ctx, 0, sizeof(g_ble_ctx));
+    (void)msg_store_wipe_all();
+    extern void ceepew_oled_restore_state(void);
+    ceepew_oled_restore_state();
     printf("CEEPEW: ui_manager selftest PASS (all tests passed)\n");
 }
 

@@ -140,7 +140,7 @@ CeePewErr_t gatt_crypto_encrypt_with_ids(const uint8_t session_code[32],
     /* Ascon-128 AEAD with no associated data — the plaintext is bound
      * to the key (derived from session_code) so a hostile device cannot
      * inject a chosen sign_pk. The wire carries 32B ct + 16B tag = 48B. */
-    uint16_t ct_len = 0U;
+    uint16_t ct_len = GATT_CRYPTO_TOTAL_BYTES;
     err = crypto_ascon_aead_encrypt(key, nonce,
                                     NULL, 0U,
                                     plaintext, 32U,
@@ -182,7 +182,7 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
         return err;
     }
 
-    uint16_t pt_len = 0U;
+    uint16_t pt_len = CEEPEW_ED25519_PUBKEY_BYTES;
     err = crypto_ascon_aead_decrypt(key, nonce,
                                     NULL, 0U,
                                     in, GATT_CRYPTO_TOTAL_BYTES,

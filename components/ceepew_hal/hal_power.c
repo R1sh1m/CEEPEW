@@ -13,6 +13,12 @@
 /* Forward declarations for Phase 4 session lifecycle (called by task_session.c on TTL/nonce exhaustion) */
 extern CeePewErr_t session_wipe(void);
 extern void ui_manager_reset_to_discovery(void);
+extern CeePewErr_t crypto_ctx_destroy(void);
+
+static void crypto_shutdown_handler(void)
+{
+    (void)crypto_ctx_destroy();
+}
 
 /* Initialize power/wakeup sources. Two CEEPEW_ASSERT checks per project rules. */
 CeePewErr_t hal_power_init(void){
@@ -26,6 +32,9 @@ CeePewErr_t hal_power_init(void){
     /* Configure wake sources: external (button) and timer (default 1s). */
     esp_sleep_enable_ext0_wakeup((gpio_num_t)CEEPEW_PIN_BUTTON, CEEPEW_BUTTON_ACTIVE_LEVEL);
     esp_sleep_enable_timer_wakeup(1000ULL * 1000ULL); /* 1s in microseconds */
+
+    esp_err_t sys_err = esp_register_shutdown_handler(crypto_shutdown_handler);
+    CEEPEW_ASSERT(sys_err == ESP_OK, CEEPEW_ERR_INTERNAL);
 
     return CEEPEW_OK;
 }

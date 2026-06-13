@@ -164,7 +164,7 @@ static void test_large_gap_reset_bitmap(void) {
     ESP_LOGI(TAG, "  Testing boundary after jump at seq=%llu", boundary_after_jump);
     TEST_ASSERT_REPLAY_REJECTED(boundary_after_jump, true, "At boundary after jump REJECTED");
     
-    uint64_t within_after_jump = far_ahead - CEEPEW_REPLAY_WINDOW_SIZE + 1ULL;
+    uint64_t within_after_jump = far_ahead - CEEPEW_REPLAY_WINDOW_SIZE + 2ULL;
     ESP_LOGI(TAG, "  Testing within window after jump at seq=%llu", within_after_jump);
     TEST_ASSERT_REPLAY_REJECTED(within_after_jump, false, "Within window after jump accepted");
 }

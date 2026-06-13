@@ -4,11 +4,13 @@
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "ceepew_security_utils.h"
+#include "freertos/FreeRTOS.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 
 Region_t g_region = { .bump = 0U, .hwm = 0U, .alloc_count = 0U, .initialised = false};
+static portMUX_TYPE s_region_mux = portMUX_INITIALIZER_UNLOCKED;
 
 CeePewErr_t region_init(Region_t *r) {
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
@@ -23,6 +25,8 @@ void region_reset(Region_t *r) {
     CEEPEW_ASSERT_VOID(r != NULL);
     CEEPEW_ASSERT_VOID(CEEPEW_REGION_POOL_BYTES > 0U);
 
+    portENTER_CRITICAL(&s_region_mux);
+
     /* loop bound: CEEPEW_REGION_POOL_BYTES (compile-time constant) */
     ceepew_secure_zero((volatile void *)r->pool, CEEPEW_REGION_POOL_BYTES);
 
@@ -36,7 +40,7 @@ void region_reset(Region_t *r) {
         r->allocs[i].in_use = false;
     }
 
-    /* Do not alter r->initialised here — region_init controls initialization state */
+    portEXIT_CRITICAL(&s_region_mux);
 }
 
 void *region_alloc(Region_t *r, uint32_t size){
@@ -45,23 +49,31 @@ void *region_alloc(Region_t *r, uint32_t size){
 
     if (size == 0U || size > CEEPEW_REGION_POOL_BYTES) { return NULL; }
 
-    if (r->alloc_count >= CEEPEW_REGION_MAX_ALLOCS) { return NULL; }
+    void *ret_ptr = NULL;
 
-    uint32_t align_mask = CEEPEW_REGION_ALIGN - 1U;
-    uint32_t aligned_bump = (r->bump + align_mask) & ~align_mask;
-    if (aligned_bump > CEEPEW_REGION_POOL_BYTES) { return NULL; }
-    if (size > (CEEPEW_REGION_POOL_BYTES - aligned_bump)) { return NULL; }
+    portENTER_CRITICAL(&s_region_mux);
 
-    uint16_t rec = r->alloc_count;
-    r->allocs[rec].offset = aligned_bump;
-    r->allocs[rec].size = size;
-    r->allocs[rec].in_use = true;
-    r->alloc_count++;
+    if (r->alloc_count < CEEPEW_REGION_MAX_ALLOCS) {
+        uint32_t align_mask = CEEPEW_REGION_ALIGN - 1U;
+        uint32_t aligned_bump = (r->bump + align_mask) & ~align_mask;
+        if (aligned_bump <= CEEPEW_REGION_POOL_BYTES &&
+            size <= (CEEPEW_REGION_POOL_BYTES - aligned_bump)) {
+            uint16_t rec = r->alloc_count;
+            r->allocs[rec].offset = aligned_bump;
+            r->allocs[rec].size = size;
+            r->allocs[rec].in_use = true;
+            r->alloc_count++;
 
-    r->bump = aligned_bump + size;
-    if (r->bump > r->hwm) { r->hwm = r->bump; }
+            r->bump = aligned_bump + size;
+            if (r->bump > r->hwm) { r->hwm = r->bump; }
 
-    return (void *)&r->pool[aligned_bump];
+            ret_ptr = (void *)&r->pool[aligned_bump];
+        }
+    }
+
+    portEXIT_CRITICAL(&s_region_mux);
+
+    return ret_ptr;
 }
 
 void *region_alloc_zeroed(Region_t *r, uint32_t size) {

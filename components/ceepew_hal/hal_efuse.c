@@ -21,14 +21,13 @@ CeePewErr_t hal_efuse_get_device_secret(uint8_t secret_out[32])
 {
     CEEPEW_ASSERT(secret_out != NULL, CEEPEW_ERR_NULL_PTR);
 
-#ifdef SOC_EFUSE_KEY_PURPOSE_FIELD
     /* Try reading a manufacturer-provisioned key from BLOCK_KEY0.
      * esp_efuse_key_block_unused() returns true if the block has
      * never been written (all zeros). If it's written, we read
      * the raw 256-bit value directly. */
-    if (!esp_efuse_key_block_unused(ESP_EFUSE_KEY_0)) {
+    if (!esp_efuse_key_block_unused(EFUSE_BLK1)) {
         uint8_t raw_key[32];
-        esp_err_t err = esp_efuse_read_block(ESP_EFUSE_KEY_0,
+        esp_err_t err = esp_efuse_read_block(EFUSE_BLK1,
                                               raw_key, 0U, 256U);
         if (err == ESP_OK) {
             /* Verify key is not all-zeros (paranoia — should never
@@ -46,7 +45,6 @@ CeePewErr_t hal_efuse_get_device_secret(uint8_t secret_out[32])
         ceepew_secure_zero(raw_key, sizeof(raw_key));
         /* Fall through to MAC-derived if eFuse read failed or was zero */
     }
-#endif
 
     /* Fallback: Derive a device secret from the MAC address.
      *

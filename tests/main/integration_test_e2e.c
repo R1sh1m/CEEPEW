@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "CEE-PEW-E2E-TEST";
 
@@ -56,6 +57,7 @@ static diag_subsys_t s_report[] = {
     { "Pairing Handoff",   false },
     { "Pairing Converge",  false },
     { "Temp Sensor",       false },
+    { "RNG Health",        false },
 };
 
 #define REPORT_SET(_label, ok_expr) do {                                        \
@@ -200,19 +202,22 @@ static void test_nonce_enforcement(void){
     err = session_phase2_initiate(SESSION_CODE);
     test_assert_ok(err, "session_phase2_initiate");
 
+    /* Set role BEFORE derive_key so the nonce counter is initialized
+     * with the correct parity (initiator=even, responder=odd). */
+    session_set_role(true);
+
     err = session_phase2_derive_key();
     test_assert_ok(err, "session_phase2_derive_key");
 
-    /* Verify nonce starts at 1 */
     uint64_t nonce_0 = session_get_nonce_counter();
     test_assert_eq_u64(0ULL, nonce_0, "initial nonce counter");
 
-    /* Call enforce_nonce_limit multiple times */
+    /* enforce_nonce_limit increments by 2 to preserve parity */
     for (uint32_t i = 0U; i < 10U; i++) {
         err = session_enforce_nonce_limit();
         if (err == CEEPEW_OK) {
             uint64_t nonce_after = session_get_nonce_counter();
-            test_assert_eq_u64((uint64_t)(i + 1U), nonce_after, "nonce counter increment");
+            test_assert_eq_u64((uint64_t)((i + 1U) * 2U), nonce_after, "nonce counter increment");
         }
         else {
             ESP_LOGE(TAG, "[FAIL] enforce_nonce_limit failed at iteration %lu", i);
@@ -316,11 +321,18 @@ static void test_session_termination(void){
 static void test_region_alloc_reset(void){
     ESP_LOGI(TAG, "=== Test: Region alloc after reset ===");
 
-    Region_t r;
-    CeePewErr_t err = region_init(&r);
+    /* Region_t is ~51KB (48KB pool + metadata) - too large for 8KB main task stack.
+     * Allocate dynamically on the heap to avoid both stack overflow and DRAM overflow. */
+    Region_t *r = malloc(sizeof(Region_t));
+    if (r == NULL) {
+        ESP_LOGE(TAG, "[FAIL] malloc Region_t failed");
+        s_tests_failed++;
+        return;
+    }
+    CeePewErr_t err = region_init(r);
     test_assert_ok(err, "region_init");
 
-    void *p = region_alloc(&r, 100U);
+    void *p = region_alloc(r, 100U);
     if (p != NULL) {
         ESP_LOGI(TAG, "[PASS] region_alloc(100) first");
         s_tests_passed++;
@@ -329,8 +341,8 @@ static void test_region_alloc_reset(void){
         s_tests_failed++;
     }
 
-    region_reset(&r);
-    p = region_alloc(&r, 100U);
+    region_reset(r);
+    p = region_alloc(r, 100U);
     if (p != NULL) {
         ESP_LOGI(TAG, "[PASS] region_alloc(100) after reset");
         s_tests_passed++;
@@ -338,6 +350,8 @@ static void test_region_alloc_reset(void){
         ESP_LOGE(TAG, "[FAIL] region_alloc(100) after reset");
         s_tests_failed++;
     }
+
+    free(r);
 }
 
 /* external pipeline test (defined in test_pipeline_memory.c) */
@@ -354,13 +368,13 @@ void test_power(void);
 
 /* Pairing handoff + convergence regression tests */
 void test_pairing_handoff_run(void);
-void test_pairing_convergence_run(void);
+uint32_t test_pairing_convergence_run(void);
 
 /* Self-test entry points (constructor-free per DIAG-mode policy) */
 void curve25519_selftest_run(void);
 void ui_manager_selftest_run(void);
 void ui_cryptogram_selftest_run(void);
-void hal_oled_selftest_run(void);
+/* void hal_oled_selftest_run(void);  -- deferred: hal_oled facade not yet implemented */
 void hal_temp_selftest_run(void);
 
 /* session message store test (defined below) */
@@ -428,7 +442,7 @@ static void test_crypto_hkdf_smoke(void){
 void test_hop_determinism(void);
 
 /* comprehensive transport hop PRG tests (defined in test_transport_hop.c) */
-void test_transport_hop_comprehensive(void);
+uint32_t test_transport_hop_comprehensive(void);
 
 /* pairing UI convergence / symmetry coverage */
 bool test_pairing_ui_coverage(void);
@@ -437,6 +451,11 @@ void integration_tests_run_all(void){
     ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║  CEE-PEW End-to-End Integration Test Suite                 ║");
     ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "Firmware: v%u.%u.%u (%s)",
+             CEEPEW_FIRMWARE_VERSION_MAJOR,
+             CEEPEW_FIRMWARE_VERSION_MINOR,
+             CEEPEW_FIRMWARE_VERSION_PATCH,
+             CEEPEW_GIT_HASH);
 
     /* Capture local pass/fail state for the structured report.
      * Each sub-test below updates s_report[…] in addition to the
@@ -455,6 +474,7 @@ void integration_tests_run_all(void){
     bool pairing_handoff_ok   = false;
     bool pairing_converge_ok  = false;
     bool temp_sensor_ok       = false;
+    bool rng_health_ok        = false;
 
     uint32_t pass_before = s_tests_passed;
     uint32_t fail_before = s_tests_failed;
@@ -492,7 +512,8 @@ void integration_tests_run_all(void){
     /* Transport hop tests */
     fail_before = s_tests_failed;
     test_hop_determinism();
-    test_transport_hop_comprehensive();
+    uint32_t hop_comp_fails = test_transport_hop_comprehensive();
+    s_tests_failed += hop_comp_fails;
     hop_ok = (s_tests_failed == fail_before);
 
     /* Power/wakeup tests */
@@ -518,8 +539,9 @@ void integration_tests_run_all(void){
     pairing_handoff_ok = (s_tests_failed == fail_before);
 
     fail_before = s_tests_failed;
-    test_pairing_convergence_run();
-    pairing_converge_ok = (s_tests_failed == fail_before);
+    uint32_t converge_fails = test_pairing_convergence_run();
+    s_tests_failed += converge_fails;
+    pairing_converge_ok = (converge_fails == 0);
 
     /* Component-level self-tests (Curve25519, UI). These print their
      * own PASS/FAIL lines via printf; we count on a best-effort basis
@@ -535,9 +557,15 @@ void integration_tests_run_all(void){
 
     /* New Sprint 14 self-tests (always compiled in but only run when
      * Diagnostic Mode is on). */
-    hal_oled_selftest_run();
+    /* hal_oled_selftest_run();  -- deferred: hal_oled facade not yet implemented */
     hal_temp_selftest_run();
     temp_sensor_ok = true;    /* absence of crash is the test */
+
+    /* RNG continuous health test */
+    fail_before = s_tests_failed;
+    extern void test_rng_health_run_all(void);
+    test_rng_health_run_all();
+    rng_health_ok = (s_tests_failed == fail_before);
 
     /* Update structured report. */
     REPORT_SET("Session FSM",       session_fsm_ok);
@@ -554,6 +582,7 @@ void integration_tests_run_all(void){
     REPORT_SET("Pairing Handoff",   pairing_handoff_ok);
     REPORT_SET("Pairing Converge",  pairing_converge_ok);
     REPORT_SET("Temp Sensor",       temp_sensor_ok);
+    REPORT_SET("RNG Health",        rng_health_ok);
 
     /* Legacy pass/fail summary (preserved for human readability). */
     ESP_LOGI(TAG, "");

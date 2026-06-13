@@ -14,6 +14,7 @@
  */
 
 #include "curve25519.h"
+#include "ceepew_assert.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -185,6 +186,10 @@ static void fe_inv(fe o, const fe z){
 /* ── Montgomery ladder (X25519) ─────────────────────────────────── */
 
 int curve25519_scalarmult(uint8_t q[32], const uint8_t scalar[32], const uint8_t p[32]){
+    CEEPEW_ASSERT(q != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(scalar != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(p != NULL, CEEPEW_ERR_NULL_PTR);
+
     /* Clamp scalar per RFC 7748 §5 */
     u8 s[32];
     for (int i = 0; i < 32; i++) { s[i] = scalar[i]; }
@@ -197,6 +202,10 @@ int curve25519_scalarmult(uint8_t q[32], const uint8_t scalar[32], const uint8_t
     fe_1(x2); fe_0(z2);
     fe_copy(x3, x1); fe_1(z3);
 
+    static const u8 _a24[32] = {0x41, 0xdb, 0x01, 0}; /* 121665 LE */
+    fe a24;
+    fe_unpack(a24, _a24);
+
     int swap = 0;
     for (int pos = 254; pos >= 0; pos--) {
         int bit = (s[pos >> 3] >> (pos & 7)) & 1;
@@ -205,34 +214,25 @@ int curve25519_scalarmult(uint8_t q[32], const uint8_t scalar[32], const uint8_t
         fe_cswap(z2, z3, swap);
         swap = bit;
 
-        /* Montgomery ladder step */
+        /* Montgomery ladder step (TweetNaCl standard formulas) */
         fe_add(tmp0, x2, z2);
-        fe_sub(tmp1, x3, z3);
-        fe_mul(tmp1, tmp1, tmp0);
-
-        fe_sub(tmp0, x2, z2);
-        fe_add(z3,   x3, z3);
-        fe_mul(z3,   z3, tmp0);
-
-        fe C, D;
-
-        fe aa, bb, e, da, cb;
-        fe_add(aa, x2, z2); fe_sq(aa, aa);    /* (x2+z2)^2 */
-        fe_sub(bb, x2, z2); fe_sq(bb, bb);    /* (x2-z2)^2 */
-        fe_sub(e, aa, bb);                     /* 4*x2*z2   */
-
-        fe_add(D, x3, z3);
-        fe_sub(C, x3, z3);
-        fe_mul(da, D, bb);    /* intentional naming from ref */
-        fe_mul(cb, C, aa);
-
-        fe_add(x3, da, cb); fe_sq(x3, x3);
-        fe_sub(z3, da, cb); fe_sq(z3, z3); fe_mul(z3, z3, x1);
-
-        fe_mul(x2, aa, bb);
-        static const u8 _a24[32] = {0xdb, 0x06, 0, 0}; /* 121665 LE */
-        fe a24; fe_unpack(a24, _a24);
-        fe_mul(z2, e, a24); fe_add(z2, z2, bb); fe_mul(z2, z2, e);
+        fe_sub(x2, x2, z2);
+        fe_add(z2, x3, z3);
+        fe_sub(x3, x3, z3);
+        fe_sq(z3, tmp0);
+        fe_sq(tmp1, x2);
+        fe_mul(x2, z2, x2);
+        fe_mul(z2, x3, tmp0);
+        fe_add(tmp0, x2, z2);
+        fe_sub(x2, x2, z2);
+        fe_sq(x3, x2);
+        fe_sub(z2, z3, tmp1);
+        fe_mul(x2, z2, a24);
+        fe_add(x2, x2, z3);
+        fe_mul(z2, z2, x2);
+        fe_mul(x2, z3, tmp1);
+        fe_mul(z3, x3, x1);
+        fe_sq(x3, tmp0);
     }
 
     fe_cswap(x2, x3, swap);
@@ -244,11 +244,14 @@ int curve25519_scalarmult(uint8_t q[32], const uint8_t scalar[32], const uint8_t
 }
 
 int curve25519_scalarmult_base(uint8_t q[32], const uint8_t scalar[32]){
+    CEEPEW_ASSERT(q != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(scalar != NULL, CEEPEW_ERR_NULL_PTR);
     static const u8 base[32] = {9};
     return curve25519_scalarmult(q, scalar, base);
 }
 
 void curve25519_clamp(uint8_t scalar[32]){
+    CEEPEW_ASSERT_VOID(scalar != NULL);
     scalar[0]  &= 248u;
     scalar[31] &= 127u;
     scalar[31] |= 64u;

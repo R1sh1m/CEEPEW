@@ -399,6 +399,9 @@ CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16]);
 /* Phase 4: Get local device ID (for fingerprint derivation and UI binding). */
 CeePewErr_t session_get_device_id(uint8_t device_id[6]);
 
+/* Get currently accepted peer device ID (MAC address). Returns CEEPEW_OK on success. */
+CeePewErr_t session_get_peer_device_id(uint8_t peer_id[6]);
+
 /* ────────────────────────────────────────────────────────────────────── */
 /* Query/Diagnostic Functions (safe to call at any time)                 */
 /* ────────────────────────────────────────────────────────────────────── */
@@ -449,6 +452,9 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
 void session_test_set_id(uint64_t id);
 void session_test_set_nonce_counter(uint64_t nc);
 void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]);
+void session_test_unset_commitment(void);
+void session_test_set_fingerprint(const uint8_t fp[16]);
+void session_test_unset_fingerprint(void);
 
 #ifdef __cplusplus
 }

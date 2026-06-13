@@ -23,10 +23,12 @@ if(CONFIG_CEEPEW_BUILD_TESTS)
         "main/test_transport_hop.c"
         "main/test_pairing_handoff.c"
         "main/test_pairing_convergence.c"
+        "main/test_rng_health.c"
         "components/crypto/curve25519_test.c"
         "components/ceepew_hal/ui_manager_test.c"
         "components/ceepew_hal/ui_cryptogram_test.c"
         "components/ceepew_hal/hal_temp_test.c"
+        # "components/ceepew_hal/hal_oled_test.c"  # deferred: hal_oled facade not yet implemented
     )
 endif()
 

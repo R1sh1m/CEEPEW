@@ -11,6 +11,8 @@ idf_component_register(
         "crypto_pad.c"
         "crypto_stream.c"
         "curve25519.c"
+        "crypto_hmac.c"
+        "crypto_hmac_efuse.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -18,5 +20,7 @@ idf_component_register(
         ceepew_hal
         mbedtls
         esp_system
+        esp_hw_support
+        efuse
         log
 )

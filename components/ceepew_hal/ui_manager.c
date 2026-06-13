@@ -12,6 +12,7 @@
 #include "ceepew_security_utils.h"
 #include "../../main/session_fsm.h"
 #include "../../main/session_msgstore.h"
+#include "../../main/session_memory.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -146,11 +147,8 @@ static void draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1)
 /* Midpoint circle — outline only */
 static void draw_circle(int16_t cx, int16_t cy, uint8_t r)
 {
-    CEEPEW_ASSERT_VOID(cx >= 0 && cy >= 0);
-    CEEPEW_ASSERT_VOID((int32_t)cx - (int32_t)r >= 0);
-    CEEPEW_ASSERT_VOID((int32_t)cy - (int32_t)r >= 0);
-    CEEPEW_ASSERT_VOID((int32_t)cx + (int32_t)r < (int32_t)CEEPEW_OLED_WIDTH_PX);
-    CEEPEW_ASSERT_VOID((int32_t)cy + (int32_t)r < (int32_t)CEEPEW_OLED_HEIGHT_PX);
+    CEEPEW_ASSERT_VOID(cx >= 0);
+    CEEPEW_ASSERT_VOID(cy >= 0);
     int16_t x = 0;
     int16_t y = (int16_t)r;
     int16_t d = 1 - (int16_t)r;
@@ -970,16 +968,13 @@ static CeePewErr_t render_boot_anim(void)
                       + (int16_t)((((int32_t)64 - BOOT_STARS[i].sx) * (int32_t)progress) / 30);
            int16_t py = (int16_t)BOOT_STARS[i].sy
                       + (int16_t)((((int32_t)32 - BOOT_STARS[i].sy) * (int32_t)progress) / 30);
-           if (f < 30U) {
-               /* Moving: draw as 2×2 pixel */
-               draw_pixel((uint8_t)px, (uint8_t)py);
-               if (px + 1 < 128 && py + 1 < 64) {
-                   draw_pixel((uint8_t)(px + 1), (uint8_t)(py + 1));
-               }
-           } else {
-               /* Arrived at centre — draw as single dot (will be covered by logo) */
-               draw_pixel((uint8_t)px, (uint8_t)py);
-           }
+            if (f < 30U) {
+                /* Moving: draw as 2x2 pixel */
+                draw_pixel((uint8_t)px, (uint8_t)py);
+                if (px + 1 < 128 && py + 1 < 64) {
+                    draw_pixel((uint8_t)(px + 1), (uint8_t)(py + 1));
+                }
+            }
        }
     }
 
@@ -1186,6 +1181,7 @@ static CeePewErr_t ui_restart_discovery_from_pairing(void)
     g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_NONE;
     g_ui_ctx.button_press_start_ms = 0U;
     g_ui_ctx.anim.frame_count = 0U;
+    (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
     g_ui_ctx.transition_ready = true;
     return CEEPEW_OK;
 }
@@ -2667,7 +2663,6 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_prev = false;
             g_ui_ctx.reject_sequence_start_ms = 0U;
             g_ui_ctx.error_start_ms = 0U;
-            (void)transport_ble_disconnect();
             /* Trigger red LED pulse for pairing failure */
             (void)rgb_set_pattern(RGB_RED_BLINK);
 
@@ -2813,7 +2808,9 @@ CeePewErr_t ui_manager_update(void)
         uint8_t idx = (uint8_t)(((uint16_t)pot * 36U) / 256U); /* 0..35 */
         if (idx >= 36U) { idx = 35U; }
         if (g_ui_ctx.code_selected < 4U) {
+            session_ui_ctx_lock();
             g_ui_ctx.code_digits[g_ui_ctx.code_selected] = (uint8_t)CODE_CHARSET[idx];
+            session_ui_ctx_unlock();
         }
 
         /* Button edge detection for short-press vs hold */
@@ -3073,7 +3070,8 @@ CeePewErr_t ui_manager_update(void)
     }
 
     uint32_t now_s = now_ms / 1000U;
-    if (!g_ble_ctx.gattc_connected &&
+    if (g_ui_ctx.current_state == UI_STATE_DISCOVERY &&
+        !g_ble_ctx.gattc_connected &&
         !g_ble_ctx.gatts_connected &&
         !g_ble_ctx.connecting &&
         !session_is_active() &&
@@ -3629,12 +3627,115 @@ void ui_manager_reset_to_discovery(void)
     memset(g_ui_ctx.fingerprint, 0U, sizeof(g_ui_ctx.fingerprint));
     memset(g_ui_ctx.peer_mac, 0U, sizeof(g_ui_ctx.peer_mac));
 
-    BleState_t ble_state = transport_ble_get_state();
-    if (ble_state == BLE_DONE) {
-        (void)transport_ble_disconnect();
-        ble_state = transport_ble_get_state();
+    if (transport_ble_is_initialised()) {
+        BleState_t ble_state = transport_ble_get_state();
+        if (ble_state == BLE_DONE) {
+            (void)transport_ble_disconnect();
+            ble_state = transport_ble_get_state();
+        }
+        if (ble_state == BLE_IDLE) {
+            (void)transport_ble_start_advertising();
+        }
     }
-    if (ble_state == BLE_IDLE) {
-        (void)transport_ble_start_advertising();
+}
+
+/* ── Sprint 10 public render helpers ──────────────────────────────────── */
+
+CeePewErr_t ui_keygen_show_progress(uint8_t frame_index)
+{
+    hal_ui_clear();
+
+    /* "DERIVING KEY..." label */
+    hal_ui_text(24U, 2U, "DERIVING KEY...", HAL_UI_WHITE);
+    draw_hline(0U, 12U, 128U);
+
+    /* Matrix rain — 10 columns, 6 rows, same charset as render_keyder_anim */
+    const uint8_t ROW_Y[6U] = { 16U, 24U, 32U, 40U, 48U, 56U };
+    const uint8_t NUM_ROWS  = 6U;
+
+    for (uint8_t col = 0U; col < 10U; col++) {
+        uint32_t head_f = (uint32_t)frame_index + (uint32_t)col * 6U;
+        uint8_t  head_row = (uint8_t)((head_f / 4U) % (NUM_ROWS + 4U));
+
+        for (uint8_t row = 0U; row < NUM_ROWS; row++) {
+            if (row > head_row) { continue; }
+            uint8_t char_idx = (uint8_t)(
+                ((uint32_t)(col * 17U) + (head_f / 2U) + (uint32_t)(row * 13U))
+                % MATRIX_CHARSET_LEN);
+            char ch[2U] = { MATRIX_CHARS[char_idx], '\0' };
+            hal_ui_text(MATRIX_COL_X[col], ROW_Y[row], ch, HAL_UI_WHITE);
+        }
     }
+
+    /* Progress bar — frame_index 0–99 maps to 0–120 px width */
+    HalUIRect_t pbar_bg = { .x = 4U, .y = 46U, .w = 120U, .h = 8U };
+    hal_ui_rect(&pbar_bg, HAL_UI_WHITE);
+    uint8_t prog_w = (uint8_t)((frame_index < 100U) ? (frame_index * 120U / 100U) : 120U);
+    if (prog_w > 0U) {
+        HalUIRect_t prog = { .x = 4U, .y = 46U, .w = prog_w, .h = 8U };
+        hal_ui_rect_fill(&prog, HAL_UI_WHITE);
+    }
+
+    return CEEPEW_OK;
+}
+
+CeePewErr_t ui_keygen_show_fingerprint(bool show_commitment)
+{
+    hal_ui_clear();
+
+    hal_ui_text(4U, 2U, "FINGERPRINT", HAL_UI_WHITE);
+    draw_hline(0U, 11U, 128U);
+
+    /* Build 32-char hex string from 16-byte fingerprint in g_ui_ctx */
+    char fp_hex[33U];
+    for (uint8_t i = 0U; i < 16U; i++) {
+        uint8_t b = g_ui_ctx.fingerprint[i];
+        uint8_t h = (b >> 4U) & 0x0FU;
+        uint8_t l = b & 0x0FU;
+        fp_hex[i * 2U]      = (h < 10U) ? (char)('0' + h) : (char)('A' + h - 10U);
+        fp_hex[i * 2U + 1U] = (l < 10U) ? (char)('0' + l) : (char)('A' + l - 10U);
+    }
+    fp_hex[32U] = '\0';
+
+    /* Row 1: chars 0–15 at y=16 */
+    char row1[17U];
+    (void)memcpy(row1, fp_hex, 16U);
+    row1[16U] = '\0';
+    hal_ui_text(4U, 16U, row1, HAL_UI_WHITE);
+
+    /* Row 2: chars 16–31 at y=26 */
+    char row2[17U];
+    (void)memcpy(row2, fp_hex + 16U, 16U);
+    row2[16U] = '\0';
+    hal_ui_text(4U, 26U, row2, HAL_UI_WHITE);
+
+    /* 8x8 visual grid from fingerprint bytes */
+    for (uint8_t gy = 0U; gy < 8U; gy++) {
+        for (uint8_t gx = 0U; gx < 8U; gx++) {
+            uint8_t byte_idx = gy;
+            uint8_t bit_idx  = 7U - gx;
+            bool filled = (g_ui_ctx.fingerprint[byte_idx] >> bit_idx) & 1U;
+            if (filled) {
+                HalUIRect_t px = {
+                    .x = (uint8_t)(4U + gx * 2U),
+                    .y = (uint8_t)(38U + gy * 2U),
+                    .w = 2U, .h = 2U
+                };
+                hal_ui_rect_fill(&px, HAL_UI_WHITE);
+            }
+        }
+    }
+
+    /* Peer MAC */
+    char mac_str[18U];
+    (void)snprintf(mac_str, sizeof(mac_str), "Peer: %02X%02X%02X%02X",
+                   g_ui_ctx.peer_mac[2U], g_ui_ctx.peer_mac[3U],
+                   g_ui_ctx.peer_mac[4U], g_ui_ctx.peer_mac[5U]);
+    hal_ui_text(24U, 56U, mac_str, HAL_UI_WHITE);
+
+    if (show_commitment) {
+        hal_ui_text(4U, 38U, "COMMIT", HAL_UI_WHITE);
+    }
+
+    return CEEPEW_OK;
 }

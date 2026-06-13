@@ -47,12 +47,14 @@
 #include "crypto_rng.h"
 #include "transport_esl.h"
 #include "transport_ble.h"
+#include "transport_hop.h"
 #include "hal_radio.h"
 #include "ceepew_pipeline.h"
 #include "ceepew_region.h"  /* Phase 4: For region_reset */
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
 #include "crypto_ecdh.h"
+#include "crypto_hmac_efuse.h"
 #include "session_fsm.h"
 #include "esp_log.h"
 #include <stdint.h>
@@ -120,6 +122,8 @@ static bool     s_test_nc_set = false;
 static uint64_t s_test_nc     = 0ULL;
 static bool     s_test_commitment_set = false;
 static uint8_t  s_test_commitment[CEEPEW_COMMITMENT_BYTES] = {0U};
+static bool     s_test_fingerprint_set = false;
+static uint8_t  s_test_fingerprint[16] = {0U};
 
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
@@ -227,12 +231,24 @@ static void session_secure_zero_context(void)
 
 CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
     CEEPEW_ASSERT(device_id != NULL, CEEPEW_ERR_NULL_PTR);
+    esl_reset_callbacks();
     memset(&s_session, 0, sizeof(s_session));
     CeePewErr_t err = crypto_ctx_init();
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
     s_session.phase = 1U;
     memcpy(s_session.device_id_self, device_id, 6U);
     s_session.session_active = false;
+
+    /* Clear any test-shadow state left behind by the boot-time diagnostic
+     * suite.  The s_test_*_set flags are file-scope statics (not part of
+     * s_session) so session_end() / memset do not touch them.  If
+     * ui_cryptogram_selftest_run() sets s_test_commitment_set and forgets
+     * to unset it, the next real pairing would use a stale test
+     * commitment instead of computing the real one. */
+    s_test_commitment_set = false;
+    s_test_fingerprint_set = false;
+    s_test_id_set = false;
+    s_test_nc_set = false;
 
     /* M7: Power management — enable WiFi modem PS + low BLE duty during discovery */
     (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_DISCOVERY);
@@ -321,12 +337,20 @@ CeePewErr_t session_phase2_derive_key(void){
     /* Step 1: Digital sum preprocessing of session code */
     digital_sum_mix(s_session.session_code, 32U, ds_mix);
 
-    /* Step 2: SHA256(digital_sum_mix || session_code) as HKDF salt */
+    /* Step 2: Derive HKDF salt.
+     * If eFuse identity is provisioned, use device-bound derivation:
+     *   salt = SHA-256( HMAC(efuse_key, ds_mix) || SHA256(ds_mix || code) )
+     * Otherwise, fallback to the original:
+     *   salt = SHA-256(ds_mix || code) */
+#ifdef CONFIG_CEEPEW_EFUSE_HMAC_KEY
+    err = crypto_hmac_efuse_derive_salt(ds_mix, s_session.session_code, hkdf_salt);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
+#else
     memcpy(salt_input, ds_mix, 32U);
     memcpy(salt_input + 32U, s_session.session_code, 32U);
-
     err = crypto_sha256_compute(salt_input, 64U, hkdf_salt);
     if (err != CEEPEW_OK) { goto error_cleanup; }
+#endif
 
     /* Step 3: Build canonical HKDF info (label || id_A || id_B || commitment || t_round)
      * Use crypto_hkdf_build_info() to ensure canonical ordering and fixed-length fields. */
@@ -690,7 +714,16 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
     CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
 
-    if (magic_byte == CEEPEW_KEY_SYNC_HELLO_BYTE) {
+    if (s_session.is_initiator) {
+        if (magic_byte != CEEPEW_KEY_SYNC_ACK_BYTE) {
+            return CEEPEW_ERR_PARAM;
+        }
+        s_session.sync_barrier_cleared = true;
+        return CEEPEW_OK;
+    } else {
+        if (magic_byte != CEEPEW_KEY_SYNC_HELLO_BYTE) {
+            return CEEPEW_ERR_PARAM;
+        }
         /* Responder's turn to ACK. We only do this once; the barrier is
          * cleared after the ACK is enqueued (best-effort — the actual
          * send can still fail, but the round-trip semantics are preserved:
@@ -701,13 +734,6 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
         }
         return CEEPEW_OK;
     }
-
-    if (magic_byte == CEEPEW_KEY_SYNC_ACK_BYTE) {
-        s_session.sync_barrier_cleared = true;
-        return CEEPEW_OK;
-    }
-
-    return CEEPEW_ERR_PARAM;
 }
 
 int32_t session_get_peer_uptime_offset(void)
@@ -736,6 +762,10 @@ CeePewErr_t session_end(void){
     if (err != CEEPEW_OK) { /* continue with zeroing */ }
     err = crypto_ctx_destroy();
     if (err != CEEPEW_OK) { /* continue with zeroing */ }
+    /* Invalidate cached hop key to prevent key material reuse */
+    transport_hop_invalidate_key();
+    /* Reset ESL callback registration state to allow re-registration */
+    esl_reset_callbacks();
     /* Securely zero X25519 ECDH key material */
     ceepew_secure_zero(g_crypto_ctx.box_privkey, sizeof(g_crypto_ctx.box_privkey));
     ceepew_secure_zero(g_crypto_ctx.peer_box_pubkey, sizeof(g_crypto_ctx.peer_box_pubkey));
@@ -820,6 +850,20 @@ void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]) {
     s_test_commitment_set = true;
 }
 
+void session_test_unset_commitment(void) {
+    s_test_commitment_set = false;
+}
+
+void session_test_set_fingerprint(const uint8_t fp[16]) {
+    if (fp == NULL) { return; }
+    memcpy(s_test_fingerprint, fp, 16U);
+    s_test_fingerprint_set = true;
+}
+
+void session_test_unset_fingerprint(void) {
+    s_test_fingerprint_set = false;
+}
+
 CeePewErr_t session_get_device_id(uint8_t device_id[6])
 {
     CEEPEW_ASSERT(s_session.phase >= 1U, CEEPEW_ERR_PARAM);
@@ -828,14 +872,34 @@ CeePewErr_t session_get_device_id(uint8_t device_id[6])
     return CEEPEW_OK;
 }
 
+CeePewErr_t session_get_peer_device_id(uint8_t peer_id[6])
+{
+    CEEPEW_ASSERT(peer_id != NULL, CEEPEW_ERR_NULL_PTR);
+    memcpy(peer_id, s_session.device_id_peer, 6U);
+    return CEEPEW_OK;
+}
+
 CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
+
+    ESP_LOGI("session_fsm", "session_get_commitment entry: phase=%u test_flag=%d "
+             "self=%02X:%02X:%02X:%02X:%02X:%02X peer=%02X:%02X:%02X:%02X:%02X:%02X",
+             s_session.phase, (int)s_test_commitment_set,
+             s_session.device_id_self[0], s_session.device_id_self[1],
+             s_session.device_id_self[2], s_session.device_id_self[3],
+             s_session.device_id_self[4], s_session.device_id_self[5],
+             s_session.device_id_peer[0], s_session.device_id_peer[1],
+             s_session.device_id_peer[2], s_session.device_id_peer[3],
+             s_session.device_id_peer[4], s_session.device_id_peer[5]);
+
     if (s_test_commitment_set) {
         memcpy(commitment, s_test_commitment, CEEPEW_COMMITMENT_BYTES);
         return CEEPEW_OK;
     }
-    CEEPEW_ASSERT(s_session.phase >= 2U && s_session.phase <= 3U, CEEPEW_ERR_PARAM);
+    if (s_session.phase < 2U || s_session.phase > 3U) {
+        return CEEPEW_ERR_PARAM;
+    }
 
     /* Stronger commitment v2: SHA256("CEEPEW_COMMIT_v2" || id_A || id_B || session_code || t_round)
      * Truncate to first 16 bytes for improved collision resistance. Order device ids
@@ -871,6 +935,18 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 
     memcpy(commitment, out32, CEEPEW_COMMITMENT_BYTES);
 
+    ESP_LOGI("session_fsm", "session_get_commitment: self=%02X:%02X:%02X:%02X:%02X:%02X peer=%02X:%02X:%02X:%02X:%02X:%02X",
+             s_session.device_id_self[0], s_session.device_id_self[1], s_session.device_id_self[2],
+             s_session.device_id_self[3], s_session.device_id_self[4], s_session.device_id_self[5],
+             s_session.device_id_peer[0], s_session.device_id_peer[1], s_session.device_id_peer[2],
+             s_session.device_id_peer[3], s_session.device_id_peer[4], s_session.device_id_peer[5]);
+    ESP_LOGI("session_fsm", "session_get_commitment: code=%.32s", (char*)s_session.session_code);
+    ESP_LOGI("session_fsm", "session_get_commitment: local_commit=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+             commitment[0], commitment[1], commitment[2], commitment[3],
+             commitment[4], commitment[5], commitment[6], commitment[7],
+             commitment[8], commitment[9], commitment[10], commitment[11],
+             commitment[12], commitment[13], commitment[14], commitment[15]);
+
     /* Secure zero temporaries */
     ceepew_secure_zero(out32, sizeof(out32));
     ceepew_secure_zero(info, sizeof(info));
@@ -895,6 +971,12 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
         CeePewErr_t adv_err = session_get_commitment(local_commit);
         if (adv_err != CEEPEW_OK) { return adv_err; }
 
+        ESP_LOGI("session_fsm", "session_verify_peer_commitment_with_sig: peer_commit=%02X%02X%02X%02X...",
+                 peer_data[0], peer_data[1], peer_data[2], peer_data[3]);
+
+        ESP_LOGI("session_fsm", "verify_adv: local_commit=%02X%02X%02X%02X...",
+                 local_commit[0], local_commit[1], local_commit[2], local_commit[3]);
+
         uint8_t diff = 0U;
         for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_ADV_BYTES; i++) {
             diff |= (uint8_t)(local_commit[i] ^ peer_data[i]);
@@ -910,6 +992,19 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
     uint8_t local_commit[CEEPEW_COMMITMENT_BYTES];
     CeePewErr_t err = session_get_commitment(local_commit);
     if (err != CEEPEW_OK) { return err; }
+
+    ESP_LOGI("session_fsm", "verify_gatt: local=%02X%02X%02X%02X%02X%02X%02X%02X"
+             "%02X%02X%02X%02X%02X%02X%02X%02X peer=%02X%02X%02X%02X%02X%02X%02X%02X"
+             "%02X%02X%02X%02X%02X%02X%02X%02X len=%u",
+             local_commit[0], local_commit[1], local_commit[2], local_commit[3],
+             local_commit[4], local_commit[5], local_commit[6], local_commit[7],
+             local_commit[8], local_commit[9], local_commit[10], local_commit[11],
+             local_commit[12], local_commit[13], local_commit[14], local_commit[15],
+             peer_data[0], peer_data[1], peer_data[2], peer_data[3],
+             peer_data[4], peer_data[5], peer_data[6], peer_data[7],
+             peer_data[8], peer_data[9], peer_data[10], peer_data[11],
+             peer_data[12], peer_data[13], peer_data[14], peer_data[15],
+             (unsigned)len);
 
     uint8_t match = 0U;
     for (uint8_t i = 0U; i < cmp_len; i++) { match |= (uint8_t)(local_commit[i] ^ peer_data[i]); }
@@ -1037,9 +1132,13 @@ CeePewErr_t session_compute_fingerprint(const uint8_t peer_pk[32],
 /* Phase 4: Get stored fingerprint */
 CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16])
 {
+    CEEPEW_ASSERT(fingerprint != NULL, CEEPEW_ERR_NULL_PTR);
+    if (s_test_fingerprint_set) {
+        memcpy(fingerprint, s_test_fingerprint, 16U);
+        return CEEPEW_OK;
+    }
     CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(fingerprint != NULL, CEEPEW_ERR_NULL_PTR);
 
     if (!s_session.fingerprint_valid) {
         return CEEPEW_ERR_PARAM;

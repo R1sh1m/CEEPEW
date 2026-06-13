@@ -26,12 +26,7 @@ void ui_cryptogram_selftest_run(void)
     };
     session_test_set_commitment(test_commitment);
 
-    /* Initialize UI and HAL */
-    hal_ui_init();
-    if (ui_manager_init() != CEEPEW_OK) {
-        printf("ui_cryptogram selftest: ui_manager_init failed\n");
-        return;
-    }
+    /* UI and HAL are already initialized by app_main at boot. */
 
     /* Initialize message store for chat integration */
     if (msg_store_init() != CEEPEW_OK) {
@@ -112,6 +107,8 @@ void ui_cryptogram_selftest_run(void)
 
     /* Test 8: Test button press transitions to CHAT */
     g_ble_ctx.commitment_verified = true;
+    g_ble_ctx.handoff_ready = true;
+    g_ble_ctx.ready_for_chat = true;
     memcpy(g_ble_ctx.commitment_digest, test_commitment, CEEPEW_COMMITMENT_BYTES);
     g_ui_ctx.button_pressed = true;
     (void)ui_manager_draw();
@@ -149,6 +146,10 @@ void ui_cryptogram_selftest_run(void)
     }
     printf("CEEPEW: ui_cryptogram selftest - CRYPTOGRAM waiting state PASS\n");
 
+    session_test_unset_commitment();
+    (void)session_end();
+    memset(&g_ble_ctx, 0, sizeof(g_ble_ctx));
+    (void)msg_store_wipe_all();
     printf("CEEPEW: ui_cryptogram selftest PASS (all tests passed)\n");
 }
 

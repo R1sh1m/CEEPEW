@@ -119,7 +119,7 @@ typedef struct {
     uint32_t       accumulated_conn_ms;        /* accumulated connected ms for current cached peer */
     BlePeerRecord_t peer_record;
     uint32_t       scan_seen_count;            /* total advertisements observed */
-    uint8_t        scan_hit_count;             /* total hits recorded for this peer */
+    uint16_t       scan_hit_count;             /* total hits recorded for this peer */
     uint32_t       adv_packet_count;           /* number of advertisement packets sent (for UI feedback) */
     bool           is_advertising;
     bool           is_scanning;
@@ -232,6 +232,9 @@ CeePewErr_t transport_ble_disconnect(void);
 
 /* Deinit BLE subsystem (call on session end) */
 CeePewErr_t transport_ble_deinit(void);
+
+/* Check if BLE subsystem is initialised */
+bool transport_ble_is_initialised(void);
 
 /* Adjust BLE scan duty cycle (interval/window).
  * Low duty cycle during discovery saves ~40% BLE power.

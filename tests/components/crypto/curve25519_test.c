@@ -42,10 +42,8 @@ static void run_vector(const char *label, const char *k_hex, const char *u_hex, 
     rc = hex2bin(expected_hex, expected, 32);
     if (rc) { printf("%s: invalid expected hex\n", label); return; }
 
-    /* Clamp scalar as RFC7748 requires - curve25519_scalarmult implementations
-       usually expect raw scalar bytes and will clamp internally; to be safe
-       clamp here too. */
-    curve25519_clamp(k);
+    /* curve25519_scalarmult clamps internally per RFC7748 §5.
+       The test vectors provide raw private keys, so do NOT clamp here. */
 
     int r = curve25519_scalarmult(out, k, u);
     if (r != 0) {

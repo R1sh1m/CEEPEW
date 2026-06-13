@@ -39,8 +39,8 @@ CeePewErr_t hal_i2c_scanner_scan_bus(void)
         .i2c_port              = CEEPEW_I2C_PORT,
         .sda_io_num            = CEEPEW_PIN_I2C_SDA,
         .scl_io_num            = CEEPEW_PIN_I2C_SCL,
-        .clk_source            = I2C_CLK_SRC_APB,
-        .glitch_ignore_cnt     = 0U,
+        .clk_source            = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt     = 7U,
         .intr_priority         = 0,
         .trans_queue_depth     = 0U,  /* synchronous mode */
         .flags = {
@@ -83,14 +83,11 @@ CeePewErr_t hal_i2c_scanner_scan_bus(void)
     }
 #endif
 
-    /* Clean up bus handle, then reset pins for next I2C user */
+    /* Clean up bus handle */
     esp_err_t delete_result = i2c_del_master_bus(bus);
     if (delete_result != ESP_OK) {
         ESP_LOGW(TAG, "Warning: i2c_del_master_bus returned 0x%X", (unsigned int)delete_result);
     }
-    gpio_reset_pin(CEEPEW_PIN_I2C_SDA);
-    gpio_reset_pin(CEEPEW_PIN_I2C_SCL);
-    vTaskDelay(pdMS_TO_TICKS(10U));
 
     ESP_LOGI(TAG, "Scan complete. %u device(s) discovered.", (unsigned int)device_count);
 

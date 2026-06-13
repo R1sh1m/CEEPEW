@@ -1,4 +1,4 @@
-/* components/transport/transport_esl.c
+/* components/transport/transport_esl.c - touched for compile check
  *
  * CEE-PEW ESP-NOW Security Layer (hardened receive pipeline)
  *
@@ -163,6 +163,13 @@ CeePewErr_t esl_register_callbacks(EslMacCheckFn mac_cb, EslNonceFn nonce_cb)
     s_nonce_cb = nonce_cb;
     s_esl_callbacks_registered = true;
     return CEEPEW_OK;
+}
+
+void esl_reset_callbacks(void)
+{
+    s_mac_cb = NULL;
+    s_nonce_cb = NULL;
+    s_esl_callbacks_registered = false;
 }
 
 static CeePewErr_t dos_generate_cookie(const uint8_t sender_mac[6], uint32_t timestamp_rounded, uint8_t cookie_out[CEEPEW_COOKIE_BYTES]){

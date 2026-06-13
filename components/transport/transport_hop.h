@@ -29,6 +29,10 @@ CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx,
                                          uint64_t nonce_counter,
                                          uint8_t *channel_out);
 
+/* Invalidate the cached hop key. Must be called when session ends
+ * (session_wipe / session_end) to prevent key material reuse. */
+void transport_hop_invalidate_key(void);
+
 #ifdef __cplusplus
 }
 #endif

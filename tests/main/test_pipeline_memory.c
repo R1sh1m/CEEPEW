@@ -3,6 +3,7 @@
 #include "ceepew_assert.h"
 #include <esp_log.h>
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "PIPELINE-MEM-TEST";
 
@@ -48,40 +49,72 @@ CeePewErr_t stage_identity(Region_t *region, const uint8_t *in, uint16_t in_len,
 void test_pipeline_memory(void) {
     ESP_LOGI(TAG, "=== pipeline memory test ===");
 
-    Region_t r;
-    CeePewErr_t err = region_init(&r);
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "region_init failed %d", (int)err); return; }
+    Region_t *r = malloc(sizeof(Region_t));
+    if (r == NULL) {
+        ESP_LOGE(TAG, "malloc Region_t failed");
+        return;
+    }
+
+    CeePewErr_t err = region_init(r);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "region_init failed %d", (int)err);
+        free(r);
+        return;
+    }
 
     err = ceepew_pipeline_init();
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "pipeline_init failed %d", (int)err); return; }
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "pipeline_init failed %d", (int)err);
+        free(r);
+        return;
+    }
 
     Pipeline_t p;
     err = pipeline_reset(&p);
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "pipeline_reset failed %d", (int)err); return; }
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "pipeline_reset failed %d", (int)err);
+        free(r);
+        return;
+    }
 
     err = pipeline_add_stage(&p, stage_fragment, NULL);
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "add stage_fragment failed %d", (int)err); return; }
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "add stage_fragment failed %d", (int)err);
+        free(r);
+        return;
+    }
 
     err = pipeline_add_stage(&p, stage_identity, NULL);
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "add stage_identity failed %d", (int)err); return; }
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "add stage_identity failed %d", (int)err);
+        free(r);
+        return;
+    }
 
     const uint8_t input[] = { 'A', 'B', 'C' };
     uint8_t *out = NULL;
     uint16_t out_len = 0U;
 
-    err = pipeline_run(&p, &r, input, (uint16_t)sizeof(input), &out, &out_len);
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "pipeline_run failed %d", (int)err); return; }
+    err = pipeline_run(&p, r, input, (uint16_t)sizeof(input), &out, &out_len);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "pipeline_run failed %d", (int)err);
+        free(r);
+        return;
+    }
 
     uint8_t expected[] = { 3U, 0U, 'A', 'B', 'C' };
     if (out_len != sizeof(expected)) {
         ESP_LOGE(TAG, "unexpected out_len %u (expected %u)", out_len, (unsigned)sizeof(expected));
+        free(r);
         return;
     }
 
     if (memcmp(out, expected, sizeof(expected)) != 0) {
         ESP_LOGE(TAG, "output mismatch");
+        free(r);
         return;
     }
 
     ESP_LOGI(TAG, "pipeline memory test PASSED");
+    free(r);
 }

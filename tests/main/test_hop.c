@@ -17,6 +17,7 @@ static const char *TAG = "TEST_HOP";
 
 void test_hop_determinism(void){
     CryptoCtx_t ctx = {0};
+    ctx.session_active = true;
     /* Fixed key */
     for (uint8_t i = 0; i < CEEPEW_SESSION_KEY_BYTES; i++) { ctx.ascon_key[i] = (uint8_t)i; }
 

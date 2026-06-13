@@ -62,7 +62,6 @@ extern const uint8_t s_font5x7[95][5];
 static CeePewErr_t ssd1306_bringup(void);
 static CeePewErr_t ssd1306_display_push(void);
 static CeePewErr_t ssd1306_display_push_tiled(void);
-static CeePewErr_t hal_ui_benchmark_flush(uint32_t iterations);
 
 /* ── Tile-dirty helpers ───────────────────────────────────────────── */
 
@@ -87,47 +86,141 @@ static void hal_ui_clear_tile_dirty(void)
 
 /* ── Boot bring-up ────────────────────────────────────────────────── */
 
-static CeePewErr_t ssd1306_bringup(void)
+static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
 {
-    /* Try the configured (pin-pair × speed × address) matrix first. */
-    const ceepew_oled_pins_t pins = {
-        .sda_primary       = CEEPEW_PIN_I2C_SDA,
-        .sda_fallback      = CEEPEW_PIN_I2C_SDA_FALLBACK,
-        .scl_primary       = CEEPEW_PIN_I2C_SCL,
-        .scl_fallback      = CEEPEW_PIN_I2C_SCL_FALLBACK,
-        .speed_primary_hz  = CEEPEW_I2C_FREQ_HZ,
-        .speed_fallback_hz = CEEPEW_I2C_FREQ_FALLBACK_HZ,
-        .addr_primary      = CEEPEW_OLED_I2C_ADDR,
-        .addr_fallback     = CEEPEW_OLED_I2C_ADDR_FB,
-    };
-
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_dev_handle_t dev = NULL;
-    uint8_t                 addr = 0U;
-    esp_err_t rc = ceepew_oled_multi_attempt(&pins, &bus, &dev, &addr);
+    esp_err_t rc = ceepew_oled_bus_init(&bus, &dev, sda, scl, freq, addr);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "OLED not found on primary (26/27) or fallback (21/22) pins");
         return CEEPEW_ERR_HW;
     }
 
-    /* The ceepew_oled_t struct is in static storage inside
-     * ceepew_oled_create(), so this pointer is valid for the
-     * program's lifetime. The I2C bus and dev handle live for the
-     * session; we never delete them (matches the prior behaviour). */
     s_oled = ceepew_oled_create();
     if (s_oled == NULL) {
-        ESP_LOGE(TAG, "ceepew_oled_create returned NULL");
+        (void)i2c_master_bus_rm_device(dev);
+        (void)i2c_del_master_bus(bus);
         return CEEPEW_ERR_HW;
     }
     s_fb = ceepew_oled_get_buffer(s_oled);
 
     rc = ceepew_oled_init_panel(s_oled, bus, dev, addr);
+    if (rc == ESP_OK) {
+        ESP_LOGI(TAG, "OLED bring-up SUCCESS on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
+                 (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq);
+        return CEEPEW_OK;
+    }
+
+    ESP_LOGW(TAG, "OLED bring-up failed on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz: %d (%s)",
+             (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq, (int)rc, esp_err_to_name(rc));
+
+    /* Clean up the failed attempt */
+    (void)i2c_master_bus_rm_device(dev);
+    (void)i2c_del_master_bus(bus);
+    ceepew_oled_destroy(s_oled);
+    s_oled = NULL;
+    s_fb = NULL;
+
+    return CEEPEW_ERR_HW;
+}
+
+static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
+{
+    i2c_master_bus_handle_t bus = NULL;
+    i2c_master_dev_handle_t dev = NULL;
+    esp_err_t rc = ceepew_oled_bus_init(&bus, &dev, sda, scl, freq, addr);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "ceepew_oled_init_panel failed: %d (%s)",
-                 (int)rc, esp_err_to_name(rc));
         return CEEPEW_ERR_HW;
     }
-    return CEEPEW_OK;
+
+    s_oled = ceepew_oled_create();
+    if (s_oled == NULL) {
+        (void)i2c_master_bus_rm_device(dev);
+        (void)i2c_del_master_bus(bus);
+        return CEEPEW_ERR_HW;
+    }
+    s_fb = ceepew_oled_get_buffer(s_oled);
+
+    rc = ceepew_oled_init_panel_sh1106(s_oled, bus, dev, addr);
+    if (rc == ESP_OK) {
+        ESP_LOGI(TAG, "OLED bring-up SUCCESS (SH1106) on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
+                 (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq);
+        return CEEPEW_OK;
+    }
+
+    ESP_LOGW(TAG, "OLED bring-up failed on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz: %d (%s)",
+             (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq, (int)rc, esp_err_to_name(rc));
+
+    /* Clean up the failed attempt */
+    (void)i2c_master_bus_rm_device(dev);
+    (void)i2c_del_master_bus(bus);
+    ceepew_oled_destroy(s_oled);
+    s_oled = NULL;
+    s_fb = NULL;
+
+    return CEEPEW_ERR_HW;
+}
+
+static CeePewErr_t ssd1306_bringup(void)
+{
+    /* Try Configuration 1: Primary pins, Primary address, Primary frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* Try Configuration 2: Primary pins, Fallback address, Primary frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* Try Configuration 3: Fallback pins, Primary address, Primary frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* Try Configuration 4: Fallback pins, Fallback address, Primary frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* Try Configuration 5: Fallback pins, Primary address, Fallback frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* Try Configuration 6: Fallback pins, Fallback address, Fallback frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* All SSD1306 configs failed. Try SH1106 with the same 6 combos. */
+    ESP_LOGW(TAG, "All SSD1306 configs failed, trying SH1106 init...");
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    ESP_LOGE(TAG, "All OLED bring-up configurations failed (SSD1306 + SH1106)!");
+    return CEEPEW_ERR_HW;
 }
 
 static CeePewErr_t ssd1306_display_push(void)
@@ -175,61 +268,6 @@ static CeePewErr_t ssd1306_display_push_tiled(void)
     return CEEPEW_OK;
 }
 
-static CeePewErr_t hal_ui_benchmark_flush(uint32_t iterations)
-{
-#ifdef CEEPEW_DEBUG_SERIAL
-    if (iterations == 0U) { return CEEPEW_OK; }
-    ESP_LOGI(TAG, "benchmark: %lu iterations", (unsigned long)iterations);
-
-    /* Warm-up: one full push to amortise any first-call cost. */
-    (void)hal_ui_clear();
-    (void)hal_ui_flush();
-
-    int64_t t_full_min = INT64_MAX;
-    int64_t t_full_sum = 0;
-    int64_t t_full_max = 0;
-    for (uint32_t i = 0U; i < iterations; i++) {
-        (void)hal_ui_clear();
-        const int64_t t0 = esp_timer_get_time();
-        (void)hal_ui_flush();
-        const int64_t t1 = esp_timer_get_time();
-        const int64_t dt = t1 - t0;
-        if (dt < t_full_min) { t_full_min = dt; }
-        if (dt > t_full_max) { t_full_max = dt; }
-        t_full_sum += dt;
-    }
-    const int64_t t_full_avg = t_full_sum / (int64_t)iterations;
-
-    /* Single-pixel dirty: touches 1 tile, so the tile-dirty fast path
-     * engages. */
-    int64_t t_tile_min = INT64_MAX;
-    int64_t t_tile_sum = 0;
-    int64_t t_tile_max = 0;
-    for (uint32_t i = 0U; i < iterations; i++) {
-        (void)hal_ui_clear();
-        (void)hal_ui_pixel(64U, 32U, HAL_UI_WHITE);
-        const int64_t t0 = esp_timer_get_time();
-        (void)hal_ui_flush();
-        const int64_t t1 = esp_timer_get_time();
-        const int64_t dt = t1 - t0;
-        if (dt < t_tile_min) { t_tile_min = dt; }
-        if (dt > t_tile_max) { t_tile_max = dt; }
-        t_tile_sum += dt;
-    }
-    const int64_t t_tile_avg = t_tile_sum / (int64_t)iterations;
-
-    ESP_LOGI(TAG,
-             "benchmark full-frame: min=%lldus avg=%lldus max=%lldus",
-             (long long)t_full_min, (long long)t_full_avg, (long long)t_full_max);
-    ESP_LOGI(TAG,
-             "benchmark tile-dirty: min=%lldus avg=%lldus max=%lldus",
-             (long long)t_tile_min, (long long)t_tile_avg, (long long)t_tile_max);
-#else
-    (void)iterations;
-#endif
-    return CEEPEW_OK;
-}
-
 /* ── Public API ───────────────────────────────────────────────────── */
 
 CeePewErr_t hal_ui_init(void)
@@ -262,9 +300,7 @@ CeePewErr_t hal_ui_init(void)
         return flush_err;
     }
 
-    /* Optional 32-iteration full-frame vs single-tile benchmark. Logged
-     * at LOG_INFO when CEEPEW_DEBUG_SERIAL is set, no-op otherwise. */
-    (void)hal_ui_benchmark_flush(32U);
+
     return CEEPEW_OK;
 }
 

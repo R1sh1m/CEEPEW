@@ -34,9 +34,9 @@ extern "C" {
 
 
 
-/* Initialize UI subsystem and bring up the OLED panel. Performs I2C
- * bus recovery, tries the configured (pin × speed × address) matrix,
- * then falls back to a full GPIO-pair scan, all within hal_ui_init().
+/* Initialize UI subsystem and bring up the OLED panel. Creates I2C bus
+ * and adds device (nopnop2002 pattern: no probe, no bus recovery).
+ * The first i2c_master_transmit() inside init_panel tests the connection.
  *
  * Returns CEEPEW_OK on success, CEEPEW_ERR_HW if no SSD1306 was found. */
 CeePewErr_t hal_ui_init(void);

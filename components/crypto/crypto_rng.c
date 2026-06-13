@@ -8,8 +8,19 @@
 #include "esp_random.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define CEEPEW_RNG_CHUNK_BYTES 32U
+#define CEEPEW_RNG_FAILURE_THRESHOLD 3U
+
+typedef struct {
+    uint8_t prev_sample[CEEPEW_RNG_CHUNK_BYTES];
+    uint8_t has_prev;
+    uint32_t failure_count;
+    crypto_rng_failure_cb_t failure_cb;
+} RngHealthState_t;
+
+static RngHealthState_t s_rng_health;
 
 static CeePewErr_t rng_fill_esp(uint8_t *buf, uint32_t len) {
     CEEPEW_ASSERT(buf != NULL, CEEPEW_ERR_NULL_PTR);
@@ -34,10 +45,58 @@ static CeePewErr_t rng_fill_esp(uint8_t *buf, uint32_t len) {
     return CEEPEW_OK;
 }
 
+void crypto_rng_set_failure_callback(crypto_rng_failure_cb_t cb)
+{
+    s_rng_health.failure_cb = cb;
+}
+
+uint32_t crypto_rng_get_failure_count(void)
+{
+    return s_rng_health.failure_count;
+}
+
+void crypto_rng_reset_health_state(void)
+{
+    ceepew_secure_zero(&s_rng_health.prev_sample[0], CEEPEW_RNG_CHUNK_BYTES);
+    s_rng_health.has_prev = 0U;
+    s_rng_health.failure_count = 0U;
+    s_rng_health.failure_cb = NULL;
+}
+
+CeePewErr_t crypto_rng_continuous_test(const uint8_t *sample, uint32_t len)
+{
+    if (len < CEEPEW_RNG_CHUNK_BYTES) { return CEEPEW_OK; }
+
+    if (s_rng_health.has_prev != 0U) {
+        uint8_t diff_acc = 0U;
+        for (uint32_t i = 0U; i < CEEPEW_RNG_CHUNK_BYTES; i++) {
+            diff_acc |= (uint8_t)(sample[i] ^ s_rng_health.prev_sample[i]);
+        }
+        if (diff_acc == 0U) {
+            s_rng_health.failure_count++;
+            if (s_rng_health.failure_count >= CEEPEW_RNG_FAILURE_THRESHOLD) {
+                if (s_rng_health.failure_cb != NULL) { s_rng_health.failure_cb(); }
+            }
+            return CEEPEW_ERR_CRYPTO;
+        }
+        s_rng_health.failure_count = 0U;
+    }
+
+    memcpy(s_rng_health.prev_sample, sample, CEEPEW_RNG_CHUNK_BYTES);
+    s_rng_health.has_prev = 1U;
+    return CEEPEW_OK;
+}
+
 CeePewErr_t crypto_rng_fill(uint8_t *buf, uint32_t len) {
     CEEPEW_ASSERT(buf != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(len > 0U && len <= CEEPEW_REGION_POOL_BYTES, CEEPEW_ERR_BOUNDS);
-    return rng_fill_esp(buf, len);
+    CeePewErr_t err = rng_fill_esp(buf, len);
+    if (err != CEEPEW_OK) { return err; }
+    if (len >= CEEPEW_RNG_CHUNK_BYTES) {
+        err = crypto_rng_continuous_test(buf, len);
+        if (err != CEEPEW_OK) { return err; }
+    }
+    return CEEPEW_OK;
 }
 
 CeePewErr_t crypto_rng_health_check(void)

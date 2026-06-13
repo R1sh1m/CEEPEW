@@ -34,6 +34,7 @@
     #include "freertos/task.h"
     #include "freertos/queue.h"
     #include "esp_log.h"
+    #include "esp_crc.h"
     #include "esp_timer.h"
     #include <string.h>
     #include <stdio.h>
@@ -112,7 +113,30 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
     static uint32_t s_phase2_jitter_target_ms = 0U;
     static uint32_t s_phase2_jitter_start_ms = 0U;
 
+    /* ── Pairing Flow Ownership (Option C) ──────────────────────────────────────
+     * The session task now owns the pairing state machine. The BLE supervisor
+     * only handles low-level radio recovery (disconnect/reconnect), NOT pairing
+     * phase transitions. This prevents the race where the supervisor restarts
+     * discovery while the session task is still in pairing. */
+    typedef enum {
+        PAIRING_FLOW_IDLE = 0,          /* Not in pairing */
+        PAIRING_FLOW_DISCOVERY = 1,     /* Waiting for peer discovery */
+        PAIRING_FLOW_COMMITMENT = 2,    /* Broadcasting/receiving commitment beacons */
+        PAIRING_FLOW_GATT_IDENTITY = 3, /* Brief GATT connection for sign_pk exchange */
+        PAIRING_FLOW_KEY_DERIVE = 4,    /* Deriving session keys */
+        PAIRING_FLOW_POST_DERIVE_SYNC = 5, /* Encrypted ACK round-trip */
+        PAIRING_FLOW_FAILED = 6,        /* Pairing failed, cleanup in progress */
+    } PairingFlowState_t;
+
+    static PairingFlowState_t s_pairing_flow_state = PAIRING_FLOW_IDLE;
+    static uint32_t s_pairing_flow_start_ms = 0U;
+    static uint32_t s_pairing_phase_entered_ms = 0U;
+    static uint8_t s_pairing_retry_count = 0U;
+
     static void task_session_reset_pairing_static_state(void);
+    static void task_session_pairing_flow_reset(void);
+    static void task_session_pairing_flow_advance(PairingFlowState_t new_state);
+    static CeePewErr_t task_session_pairing_flow_drive(void);
 
     static const char *task_session_ble_state_name(BleState_t state){
         switch (state) {
@@ -155,6 +179,13 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             session_code[i] = ch;
         }
 
+        ESP_LOGI(TAG, "build_session_code: digits=[%u,%u,%u,%u] ascii=[%c,%c,%c,%c]",
+                 digits[0], digits[1], digits[2], digits[3],
+                 (digits[0] >= 32U && digits[0] < 127U) ? (char)digits[0] : '?',
+                 (digits[1] >= 32U && digits[1] < 127U) ? (char)digits[1] : '?',
+                 (digits[2] >= 32U && digits[2] < 127U) ? (char)digits[2] : '?',
+                 (digits[3] >= 32U && digits[3] < 127U) ? (char)digits[3] : '?');
+
         return CEEPEW_OK;
     }
 
@@ -173,10 +204,22 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         session_ui_get_state_snapshot(&ui_state);
         if (ui_state == UI_STATE_PAIRING_SUCCESS ||
             ui_state == UI_STATE_PAIRING_FAILED) {
+            task_session_pairing_flow_reset();
             return CEEPEW_OK;
         }
         /* Nothing to do once active session is established */
-        if (phase == 3U && session_is_active()) {return CEEPEW_OK;}
+        if (phase == 3U && session_is_active() && session_sync_barrier_cleared()) {
+            task_session_pairing_flow_reset();
+            return CEEPEW_OK;
+        }
+
+        /* Drive the pairing flow state machine (Option C: session task owns pairing) */
+        (void)task_session_pairing_flow_drive();
+
+        /* If pairing flow has failed, don't proceed with pairing steps */
+        if (s_pairing_flow_state == PAIRING_FLOW_FAILED) {
+            return CEEPEW_OK;
+        }
 
         /* BLE link-drop detection during the pairing flow (GATTS sign_pk
          * phase). If the user is in code entry / countdown / confirm and the
@@ -202,6 +245,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
             g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
             (void)session_reset_to_discovery();
             task_session_reset_pairing_static_state();
+            task_session_pairing_flow_reset();
             (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
             g_ui_ctx.transition_ready = true;
             return CEEPEW_OK;
@@ -210,13 +254,25 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         /* Reset phase-latched flags whenever we drop below their stage. */
         if (phase < 1U) {
             s_ble_peer_latched = false;
+            task_session_pairing_flow_reset();
         }
         if (phase < 2U) {
             s_ble_commitment_exchanged = false;
         }
 
+        /* Initialize pairing flow on first entry to phase 1 */
+        if (phase == 1U && peer != NULL && s_pairing_flow_state == PAIRING_FLOW_IDLE) {
+            task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
+        }
+
         /* ── STEP 1: Accept peer MAC into session FSM once discovered ────────── */
-        if (phase == 1U && peer != NULL && !s_ble_peer_latched) {
+        uint8_t current_fsm_peer[6] = {0U};
+        bool peer_mismatch = false;
+        if (session_get_peer_device_id(current_fsm_peer) == CEEPEW_OK) {
+            peer_mismatch = (peer != NULL && memcmp(current_fsm_peer, peer->peer_mac, 6U) != 0);
+        }
+
+        if (phase == 1U && peer != NULL && (!s_ble_peer_latched || peer_mismatch)) {
             char peer_mac[18];
             task_session_format_mac(peer->peer_mac, peer_mac);
             ESP_LOGI(TAG, "Discovery peer latched: mac=%s rssi=%d hits=%u name_len=%u",
@@ -230,7 +286,7 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         * Lower MAC = initiator (opens the brief GATT connection for sign_pk).
         * Higher MAC = responder (waits for GATTS connect).                      */
         bool is_initiator = false;
-        if (peer != NULL) {
+        if (phase >= 1U && peer != NULL) {
             uint8_t self_mac[CEEPEW_DEVICE_ID_BYTES] = {0U};
             if (session_get_device_id(self_mac) == CEEPEW_OK) {
                 is_initiator = (ceepew_ct_less(self_mac, peer->peer_mac,
@@ -572,6 +628,120 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
         s_phase2_jitter_start_ms = 0U;
     }
 
+    /* Pairing flow ownership — session task drives the pairing state machine */
+    static void task_session_pairing_flow_reset(void)
+    {
+        s_pairing_flow_state = PAIRING_FLOW_IDLE;
+        s_pairing_flow_start_ms = 0U;
+        s_pairing_phase_entered_ms = 0U;
+        s_pairing_retry_count = 0U;
+    }
+
+    static void task_session_pairing_flow_advance(PairingFlowState_t new_state)
+    {
+        if (s_pairing_flow_state != new_state) {
+            ESP_LOGI(TAG, "pairing flow: %d -> %d", s_pairing_flow_state, new_state);
+            s_pairing_flow_state = new_state;
+            s_pairing_phase_entered_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        }
+    }
+
+    static CeePewErr_t task_session_pairing_flow_drive(void)
+    {
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        uint8_t phase = session_get_phase();
+        const BlePeerRecord_t *peer = transport_ble_get_peer_cached();
+        UIState_t ui_state;
+        session_ui_get_state_snapshot(&ui_state);
+
+        /* Timeout budgets per pairing flow state (ms) */
+        static const uint32_t pairing_flow_timeout_ms[] = {
+            0,          /* IDLE */
+            30000,      /* DISCOVERY - 30s */
+            15000,      /* COMMITMENT - 15s */
+            20000,      /* GATT_IDENTITY - 20s */
+            10000,      /* KEY_DERIVE - 10s */
+            10000,      /* POST_DERIVE_SYNC - 10s */
+            5000,       /* FAILED - 5s cleanup */
+        };
+
+        switch (s_pairing_flow_state) {
+            case PAIRING_FLOW_IDLE:
+                if (phase == 1U && peer != NULL) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
+                    s_pairing_flow_start_ms = now_ms;
+                }
+                break;
+
+            case PAIRING_FLOW_DISCOVERY:
+                if (phase >= 2U) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_COMMITMENT);
+                } else if (peer == NULL) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_IDLE);
+                } else if ((now_ms - s_pairing_phase_entered_ms) > pairing_flow_timeout_ms[PAIRING_FLOW_DISCOVERY]) {
+                    ESP_LOGW(TAG, "pairing flow: DISCOVERY timeout");
+                    task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
+                }
+                break;
+
+            case PAIRING_FLOW_COMMITMENT:
+                if (transport_ble_handoff_ready()) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_GATT_IDENTITY);
+                } else if (phase < 2U) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
+                } else if ((now_ms - s_pairing_phase_entered_ms) > pairing_flow_timeout_ms[PAIRING_FLOW_COMMITMENT]) {
+                    ESP_LOGW(TAG, "pairing flow: COMMITMENT timeout");
+                    task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
+                }
+                break;
+
+            case PAIRING_FLOW_GATT_IDENTITY:
+                if (g_ble_ctx.sign_pk_received || g_ble_ctx.reconnect_attempts >= CEEPEW_MAX_RECONNECT_ATTEMPTS) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_KEY_DERIVE);
+                } else if (phase < 2U) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
+                } else if ((now_ms - s_pairing_phase_entered_ms) > pairing_flow_timeout_ms[PAIRING_FLOW_GATT_IDENTITY]) {
+                    ESP_LOGW(TAG, "pairing flow: GATT_IDENTITY timeout");
+                    task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
+                }
+                break;
+
+            case PAIRING_FLOW_KEY_DERIVE:
+                if (session_is_active() && session_sync_barrier_cleared()) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_POST_DERIVE_SYNC);
+                } else if (phase < 3U || !session_is_active()) {
+                    task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
+                } else if ((now_ms - s_pairing_phase_entered_ms) > pairing_flow_timeout_ms[PAIRING_FLOW_KEY_DERIVE]) {
+                    ESP_LOGW(TAG, "pairing flow: KEY_DERIVE timeout");
+                    task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
+                }
+                break;
+
+            case PAIRING_FLOW_POST_DERIVE_SYNC:
+                if (session_sync_barrier_cleared()) {
+                    task_session_pairing_flow_reset();
+                } else if ((now_ms - s_pairing_phase_entered_ms) > pairing_flow_timeout_ms[PAIRING_FLOW_POST_DERIVE_SYNC]) {
+                    ESP_LOGW(TAG, "pairing flow: POST_DERIVE_SYNC timeout");
+                    task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
+                }
+                break;
+
+            case PAIRING_FLOW_FAILED:
+                if ((now_ms - s_pairing_phase_entered_ms) > pairing_flow_timeout_ms[PAIRING_FLOW_FAILED]) {
+                    ESP_LOGI(TAG, "pairing flow: cleanup complete, returning to discovery");
+                    (void)transport_ble_restart_discovery_session();
+                    task_session_reset_pairing_static_state();
+                    task_session_pairing_flow_reset();
+                }
+                break;
+
+            default:
+                break;
+        }
+
+        return CEEPEW_OK;
+    }
+
     CeePewErr_t task_session_sync_visual_state(void)
     {
         uint8_t phase = session_get_phase();
@@ -757,6 +927,17 @@ static uint64_t s_ble_scan_start_ms = 0ULL; /* ms when discovery pattern started
 
         err = transport_esl_process_incoming(local_work_frame, &work_len, frame->src_mac, 0U);
         if (err != CEEPEW_OK) { return CEEPEW_OK; }
+
+        /* Verify Inner CRC appended after the FEC-encoded data */
+        if (work_len < 4U) { return CEEPEW_OK; }
+        uint32_t rx_inner_crc = 0U;
+        memcpy(&rx_inner_crc, local_work_frame + work_len - 4U, 4U);
+        uint32_t calc_inner_crc = esp_crc32_le(0U, local_work_frame, work_len - 4U);
+        if (rx_inner_crc != calc_inner_crc) {
+            ESP_LOGE("SESSION", "Inner CRC mismatch: rx=%08lx, calc=%08lx", rx_inner_crc, calc_inner_crc);
+            return CEEPEW_OK; // Silent discard
+        }
+        work_len -= 4U; // Strip Inner CRC
 
         bool corrected = false;
         uint16_t fec_out_len = (uint16_t)sizeof(local_fec_out);

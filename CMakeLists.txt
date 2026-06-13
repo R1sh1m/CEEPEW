@@ -24,6 +24,19 @@ idf_build_set_property(MINIMAL_BUILD ON)
 
 project(ceepew)
 
+# Inject git hash as a compile definition for firmware versioning
+execute_process(
+    COMMAND git describe --always --dirty
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT GIT_HASH)
+    set(GIT_HASH "unknown")
+endif()
+add_compile_definitions(CEEPEW_GIT_HASH="${GIT_HASH}")
+
 # Link order: ceepew_oled.a is scanned before ceepew_hal.a because
 # ceepew_hal REQUIRES ceepew_oled. ceepew_oled.a defines ceepew_oled_*
 # symbols but no one in the prior link set has unresolved refs to

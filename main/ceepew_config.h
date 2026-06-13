@@ -152,7 +152,7 @@
 #define CEEPEW_PHASE_TIMEOUT_MTU_MS      5000U  /* MTU_NEGOTIATING phase      */
 #define CEEPEW_PHASE_TIMEOUT_DISC_MS     6000U  /* CHAR_DISCOVERING phase     */
 #define CEEPEW_PHASE_TIMEOUT_VERIFY_MS   15000U /* VERIFICATION phase         */
-#define CEEPEW_PHASE_TIMEOUT_GATT_MS     2000U  /* Hybrid-GATT: GATTC_OPEN → write must complete */
+#define CEEPEW_PHASE_TIMEOUT_GATT_MS     45000U /* Hybrid-GATT: allow human typing delay + GATTC_OPEN → write */
 #define CEEPEW_PHASE_TIMEOUT_OVERALL_MS  30000U /* Whole-pairing ceiling      */
 
 /* Pairing event queue depth — small because handlers drain quickly. */
@@ -179,7 +179,7 @@
 /* FreeRTOS                                                                    */
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_CORE0_STACK_BYTES         4096U
-#define CEEPEW_CORE1_STACK_BYTES         8192U
+#define CEEPEW_CORE1_STACK_BYTES         16384U
 #define CEEPEW_QUEUE_DEPTH               8U
 #define CEEPEW_TASK_UI_PRIORITY          3U
 #define CEEPEW_TASK_SESSION_PRIORITY     3U
@@ -270,5 +270,21 @@
     "error", "wipe_pending" \
 })
 #define CEEPEW_SESSION_STATE_COUNT 10U
+
+/* ── Firmware Version ───────────────────────────────────────────────────────
+ * Semantic version (MAJOR.MINOR.PATCH). CEEPEW_GIT_HASH is injected by
+ * CMakeLists.txt at build time via `git describe --always --dirty`.         */
+#define CEEPEW_FIRMWARE_VERSION_MAJOR    1U
+#define CEEPEW_FIRMWARE_VERSION_MINOR    0U
+#define CEEPEW_FIRMWARE_VERSION_PATCH    0U
+
+#ifndef CEEPEW_GIT_HASH
+#define CEEPEW_GIT_HASH                  "unknown"
+#endif
+
+/* BLE advertisement version field: 7 bytes total
+ *   [0] = major, [1] = minor, [2] = patch,
+ *   [3..6] = first 4 bytes of git hash (truncated) */
+#define CEEPEW_VERSION_ADV_BYTES         7U
 
 #endif /* CEEPEW_CONFIG_H */

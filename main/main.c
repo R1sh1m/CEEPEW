@@ -25,9 +25,12 @@
 #include "ui_manager.h"
 #include "task_arch.h"
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "transport_ble.h"
 
 static const char *TAG = "CEE-PEW-MAIN";
+
+static void rng_failure_session_wipe(void) { (void)session_wipe(); }
 
 void app_main(void){
     ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup ===");
@@ -57,8 +60,24 @@ void app_main(void){
         return;
     }
 
-    /* Boot-time I2C diagnostic scan — helps identify OLED address/wiring issues */
-    (void)hal_i2c_scanner_scan_bus();
+    /* Boot-time I2C diagnostic scan — only when DIAG switch held LOW at boot */
+    {
+        gpio_config_t io_cfg = {
+            .pin_bit_mask = (1ULL << CEEPEW_PIN_DIAG_SWITCH),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        (void)gpio_config(&io_cfg);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (gpio_get_level(CEEPEW_PIN_DIAG_SWITCH) == CEEPEW_DIAG_SWITCH_ACTIVE) {
+            ESP_LOGW(TAG, "DIAG switch active — running I2C scanner");
+            (void)hal_i2c_scanner_scan_bus();
+        } else {
+            ESP_LOGI(TAG, "DIAG switch inactive — skipping I2C scanner");
+        }
+    }
 
     err = hal_adc_init();
     if (err != CEEPEW_OK) {
@@ -72,22 +91,19 @@ void app_main(void){
         return;
     }
 
-    /* RNG health audit: detect trivial HW RNG failures early and reboot */
-    err = crypto_rng_health_check();
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "RNG health check failed (%d) — rebooting", (int)err);
-        esp_restart();
-    }
-
     /* Single init for both the panel and the UI layer. The previous
      * hal_oled_init() / hal_ui_init() pair is now collapsed into one call
      * because the UI layer wraps the in-house ceepew_oled panel handle. */
     err = hal_ui_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
+#if CONFIG_CEEPEW_BUILD_TESTS
+        ESP_LOGW(TAG, "Display init failed — continuing headless for diagnostic tests");
+#else
         ESP_LOGE(TAG, "Display bring-up failed; restarting to avoid headless run");
         vTaskDelay(pdMS_TO_TICKS(2000U));
         esp_restart();
+#endif
     }
 
 
@@ -113,13 +129,20 @@ void app_main(void){
         return;
     }
 
+    /* RNG health audit: detect trivial HW RNG failures when RF is active and reboot */
+    err = crypto_rng_health_check();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "RNG health check failed (%d) — rebooting", (int)err);
+        esp_restart();
+    }
+
     uint8_t local_mac[6] = {0};
-    esp_err_t mac_err = esp_wifi_get_mac(WIFI_IF_STA, local_mac);
+    esp_err_t mac_err = esp_read_mac(local_mac, ESP_MAC_BT);
     if (mac_err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_get_mac failed: %d", (int)mac_err);
+        ESP_LOGE(TAG, "esp_read_mac failed: %d", (int)mac_err);
         return;
     }
-    ESP_LOGI(TAG, "Local STA MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+    ESP_LOGI(TAG, "Local BLE MAC: %02X:%02X:%02X:%02X:%02X:%02X",
              local_mac[0], local_mac[1], local_mac[2],
              local_mac[3], local_mac[4], local_mac[5]);
 
@@ -129,6 +152,10 @@ void app_main(void){
         return;
     }
 
+    /* Register RNG continuous health test failure callback.
+     * 3 consecutive identical samples trigger session_wipe(). */
+    crypto_rng_set_failure_callback(rng_failure_session_wipe);
+
     /* Initialize UI manager state machine before starting UI task */
     err = ui_manager_init();
     if (err != CEEPEW_OK) {
@@ -136,23 +163,16 @@ void app_main(void){
         return;
     }
 
-    /* CRITICAL: Initialize BLE stack before UI task (discover/pairing) */
+    /* CRITICAL: Initialize BLE stack before UI task (discover/pairing).
+     * In test mode, defer BLE init until after diagnostics to avoid
+     * scan-event flood saturating the 115200-baud serial link. */
+#if !CONFIG_CEEPEW_BUILD_TESTS
     err = transport_ble_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err);
         esp_restart();  /* Cannot proceed without BLE */
     }
-
-    /* On-device pairing handoff regression test (runs once at boot) */
-#if CONFIG_CEEPEW_BUILD_TESTS
-    extern void test_pairing_handoff_run(void);
-    test_pairing_handoff_run();
-
-    /* On-device key-convergence + post-derive sync barrier regression
-     * test. Exercises the fixes for the 4 critical pairing bugs. */
-    extern void test_pairing_convergence_run(void);
-    test_pairing_convergence_run();
-#endif /* CONFIG_CEEPEW_BUILD_TESTS */
+#endif
 
     /* BLE advertising/scan start is driven from BLE GATT/GAP events to avoid race conditions */
 
@@ -169,6 +189,39 @@ void app_main(void){
         ESP_LOGE(TAG, "ceepew_pipeline_init failed: %d", (int)err);
         return;
     }
+
+    /* On-device pairing handoff regression test (runs once at boot) */
+#if CONFIG_CEEPEW_BUILD_TESTS
+    extern void test_pairing_handoff_run(void);
+    test_pairing_handoff_run();
+
+    /* On-device key-convergence + post-derive sync barrier regression
+     * test. Exercises the fixes for the 4 critical pairing bugs. */
+    extern void test_pairing_convergence_run(void);
+    test_pairing_convergence_run();
+
+    /* End-to-end integration test suite — prints === DIAGNOSTIC REPORT === */
+    extern void integration_tests_run_all(void);
+    integration_tests_run_all();
+
+    /* Reset UI manager state to discovery so we don't start stuck in test outcomes */
+    extern void ui_manager_reset_to_discovery(void);
+    ui_manager_reset_to_discovery();
+
+    /* Re-initialize session phase 1 for normal operation after tests */
+    err = session_phase1_init(local_mac);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "session_phase1_init post-test failed: %d", (int)err);
+        return;
+    }
+
+    /* Now initialize BLE for normal operation after tests complete */
+    err = transport_ble_init();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err);
+        esp_restart();
+    }
+#endif /* CONFIG_CEEPEW_BUILD_TESTS */
 
     /* Initialize task UI and session before task architecture */
     task_ui_init();

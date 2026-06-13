@@ -24,6 +24,11 @@ typedef CeePewErr_t (*EslNonceFn)(void);
  */
 CeePewErr_t esl_register_callbacks(EslMacCheckFn mac_cb, EslNonceFn nonce_cb);
 
+/* Reset ESL callback registration state. Must be called from session_end()
+ * so that a subsequent session can re-register callbacks without hitting
+ * the "Cannot re-register" assertion. */
+void esl_reset_callbacks(void);
+
 #ifdef __cplusplus
 extern "C" {
 #endif

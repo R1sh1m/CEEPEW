@@ -42,12 +42,21 @@ static bool pairing_ui_run_session(const uint8_t self_mac[6],
                                    uint8_t key_out[16],
                                    uint8_t commitment_out[CEEPEW_COMMITMENT_BYTES])
 {
+    CEEPEW_ASSERT(self_mac != NULL, false);
+    CEEPEW_ASSERT(peer_mac != NULL, false);
+
     if (!pairing_ui_check(session_phase1_init(self_mac) == CEEPEW_OK, "session_phase1_init")) {
         return false;
     }
     if (!pairing_ui_check(session_phase1_accept_peer(peer_mac) == CEEPEW_OK, "session_phase1_accept_peer")) {
         return false;
     }
+    
+    bool is_initiator = (memcmp(self_mac, peer_mac, 6) < 0);
+    if (!pairing_ui_check(session_set_role(is_initiator) == CEEPEW_OK, "session_set_role")) {
+        return false;
+    }
+
     if (!pairing_ui_check(session_phase2_initiate(SESSION_CODE) == CEEPEW_OK, "session_phase2_initiate")) {
         return false;
     }
@@ -63,7 +72,9 @@ static bool pairing_ui_run_session(const uint8_t self_mac[6],
     if (!pairing_ui_check(session_get_phase() == 3U, "phase reached active")) {
         return false;
     }
-    if (!pairing_ui_check(session_get_nonce_counter() == 0ULL, "nonce starts at zero")) {
+    
+    uint64_t expected_nonce = is_initiator ? 0ULL : 1ULL;
+    if (!pairing_ui_check(session_get_nonce_counter() == expected_nonce, "nonce starts at expected value")) {
         return false;
     }
     return true;
