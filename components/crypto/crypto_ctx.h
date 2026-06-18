@@ -26,10 +26,21 @@ typedef struct {
 extern CryptoCtx_t g_crypto_ctx;
 extern SemaphoreHandle_t g_crypto_mutex;
 
+/* Initialize the global crypto context and PSA crypto subsystem.
+ * Must be called once at boot before any crypto operations. */
 CeePewErr_t crypto_ctx_init(void);
+
+/* Securely zero the global crypto context and destroy the crypto mutex.
+ * Call on session end or device wipe. */
 CeePewErr_t crypto_ctx_destroy(void);
+
+/* Initialize the global crypto mutex (lazy, idempotent). */
 CeePewErr_t crypto_mutex_init(void);
+
+/* Acquire the global crypto mutex (blocking). */
 CeePewErr_t crypto_mutex_lock(void);
+
+/* Release the global crypto mutex. */
 CeePewErr_t crypto_mutex_unlock(void);
 
 #endif /* CRYPTO_CTX_H */

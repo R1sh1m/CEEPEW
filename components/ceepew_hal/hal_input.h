@@ -29,10 +29,12 @@ CeePewErr_t input_update(InputCtx_t *ctx, uint32_t now_ms);
 CeePewErr_t input_get_char_index(const InputCtx_t *ctx, uint8_t total_items, uint8_t *out_index);
 CeePewErr_t input_consume_click(InputCtx_t *ctx, bool *was_clicked);
 
-/* Get normalized pot value (0-255), button stable state, and diag switch state. */
+/* Get normalized pot value (0-255), button stable state, and diag switch state.
+ * Implemented in hal_input_additions.c */
 CeePewErr_t input_get_normalized(const InputCtx_t *ctx, uint8_t *out_pot, bool *out_button, bool *out_diag);
 
-/* Diagnostic accessor: get current raw and smoothed ADC snapshot (safe to call anytime) */
+/* Diagnostic accessor: get current raw and smoothed ADC snapshot (safe to call anytime)
+ * Implemented in hal_input_additions.c */
 CeePewErr_t input_get_adc_snapshot(uint16_t *raw_out, uint16_t *smoothed_out);
 
 #endif /* HAL_INPUT_H */

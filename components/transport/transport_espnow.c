@@ -67,7 +67,7 @@ CeePewErr_t transport_espnow_send(const uint8_t *peer_mac, const uint8_t *data, 
  * peer-level ACK; it only confirms the local radio stack completed the send
  * operation. Use this as a pragmatic improvement over a no-op ACK stub.
  */
-CeePewErr_t transport_wait_ack(const uint8_t *peer_mac, uint8_t seq, uint32_t timeout_ms){
+CeePewErr_t transport_wait_ack(const uint8_t *peer_mac, uint16_t seq, uint32_t timeout_ms){
     (void)peer_mac;
     (void)seq;
 

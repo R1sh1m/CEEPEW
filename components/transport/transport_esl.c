@@ -292,7 +292,7 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     CEEPEW_ASSERT(s_mac_cb != NULL, CEEPEW_ERR_PARAM);
     CeePewErr_t err = s_mac_cb(peer_mac);
     if (err != CEEPEW_OK) {
-        ESP_LOGD(TAG, "MAC lock failed: peer MAC not in session (err=%d)", err);
+        ESP_LOGW(TAG, "MAC lock failed: peer MAC not in session (err=%d)", err);
         return err;  /* Silent fail */
     }
 
@@ -344,19 +344,27 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
      * layer after a one-shot time-sync GATT read; if not set, the offset is
      * 0 and the check is the same as before. */
     int32_t peer_off_s = session_get_peer_uptime_offset();
-    int32_t peer_now_s = (int32_t)now_s + peer_off_s;
-    int32_t hdr_s      = (int32_t)hdr.timestamp_s;
-    int32_t diff = peer_now_s - hdr_s;
-    if (diff < 0) { diff = -diff; }
-    if ((uint32_t)diff > CEEPEW_TIMESTAMP_SLACK_S) {
+    uint32_t peer_now_s = now_s + (uint32_t)peer_off_s;  /* peer_off_s clamped to +/-86400 in session_set_peer_uptime_offset */
+    uint32_t hdr_s      = hdr.timestamp_s;
+    uint32_t diff = (peer_now_s > hdr_s) ? (peer_now_s - hdr_s) : (hdr_s - peer_now_s);
+    if (diff > CEEPEW_TIMESTAMP_SLACK_S) {
+        ESP_LOGW(TAG, "ESL discard: timestamp outside tolerance (diff=%d slack=%u)",
+                 (int)diff, (unsigned)CEEPEW_TIMESTAMP_SLACK_S);
         return CEEPEW_ERR_TRANSPORT;  /* Silent fail — prevents replay via timestamp spoofing */
     }
 
     /* ═ STEP 6: Replay Window (WireGuard bitmap, silent fail) ═ */
     bool is_replay = false;
     err = transport_replay_check(hdr.seq, hdr.timestamp_s, &is_replay);
-    if (err != CEEPEW_OK) { return err; }  /* Silent fail */
-    if (is_replay) { return CEEPEW_ERR_TRANSPORT; }  /* Silent fail */
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "ESL discard: replay check error (err=%d seq=%lu)",
+                 (int)err, (unsigned long)hdr.seq);
+        return err;  /* Silent fail */
+    }
+    if (is_replay) {
+        ESP_LOGW(TAG, "ESL discard: replay detected (seq=%lu)", (unsigned long)hdr.seq);
+        return CEEPEW_ERR_TRANSPORT;  /* Silent fail */
+    }
 
     /* ═ STEP 7: Ascon-128 AEAD Decrypt ═ */
     /* Extract nonce from header.nonce_counter */
@@ -381,10 +389,16 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     /* Copy Ascon key under mutex protection */
     uint8_t ascon_key_copy[CEEPEW_SESSION_KEY_BYTES];
     CeePewErr_t mutex_err = crypto_mutex_lock();
-    if (mutex_err != CEEPEW_OK) { return CEEPEW_ERR_CRYPTO; }
+    if (mutex_err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "ESL discard: crypto mutex lock failed (err=%d)", (int)mutex_err);
+        return CEEPEW_ERR_CRYPTO;
+    }
     memcpy(ascon_key_copy, g_crypto_ctx.ascon_key, CEEPEW_SESSION_KEY_BYTES);
     mutex_err = crypto_mutex_unlock();
-    if (mutex_err != CEEPEW_OK) { return CEEPEW_ERR_CRYPTO; }
+    if (mutex_err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "ESL discard: crypto mutex unlock failed (err=%d)", (int)mutex_err);
+        return CEEPEW_ERR_CRYPTO;
+    }
 
     CeePewErr_t ascon_err = crypto_ascon_aead_decrypt(
         ascon_key_copy,             /* key: 16 bytes from HKDF (copy under lock) */
@@ -398,6 +412,8 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
     );
     ceepew_secure_zero(ascon_key_copy, sizeof(ascon_key_copy));
     if (ascon_err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "ESL discard: Ascon AEAD auth failed (err=%d ct=%u)",
+                 (int)ascon_err, (unsigned)ct_len);
         return CEEPEW_ERR_CRYPTO;  /* Silent fail — authentication failure */
     }
 
@@ -406,6 +422,8 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
      * is bounded to CEEPEW_MAX_MSG_BYTES; an Ascon output that exceeds
      * that is either a bug in the encryptor or a forged packet — reject. */
     if (pt_len > CEEPEW_MAX_MSG_BYTES) {
+        ESP_LOGW(TAG, "ESL discard: plaintext exceeds max (%u > %u)",
+                 (unsigned)pt_len, (unsigned)CEEPEW_MAX_MSG_BYTES);
         return CEEPEW_ERR_BOUNDS;
     }
     memmove(frame, s_pt_buf, pt_len);

@@ -11,11 +11,13 @@ CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_
 
 /* Build canonical HKDF info field for session derivation.
  * out_info must be large enough for label + 6 + 6 + 32 + 4 bytes (>= 50).
+ * out_info_max_len is the allocated size of out_info (bounds check).
  * out_len will be set to the number of bytes written.
  */
 CeePewErr_t crypto_hkdf_build_info(const uint8_t *label, uint8_t label_len,
                                    const uint8_t id_a[6], const uint8_t id_b[6],
                                    const uint8_t commitment[32], uint32_t t_round,
-                                   uint8_t *out_info, uint8_t *out_len);
+                                   uint8_t *out_info, uint8_t out_info_max_len,
+                                   uint8_t *out_len);
 
 #endif /* CRYPTO_HKDF_H */

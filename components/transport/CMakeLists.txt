@@ -3,7 +3,6 @@ idf_component_register(
         "transport_espnow.c"
         "transport_replay.c"
         "transport_esl.c"
-        "transport_stream.c"
         "transport_ble.c"
         "transport_ble_gatt_crypto.c"
         "transport_hop.c"
@@ -16,6 +15,7 @@ idf_component_register(
         mem
         bt
         esp_wifi
+        esp_coex
         esp_timer
         log
         esp_common

@@ -90,11 +90,17 @@ static CeePewErr_t hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t
 CeePewErr_t crypto_hkdf_build_info(const uint8_t *label, uint8_t label_len,
                                    const uint8_t id_a[6], const uint8_t id_b[6],
                                    const uint8_t commitment[32], uint32_t t_round,
-                                   uint8_t *out_info, uint8_t *out_len)
+                                   uint8_t *out_info, uint8_t out_info_max_len,
+                                   uint8_t *out_len)
 {
     CEEPEW_ASSERT(label != NULL && label_len > 0U, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(id_a != NULL && id_b != NULL && commitment != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out_info != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Compute required length and validate against buffer capacity.
+     * Required: label_len + 6 (id_a) + 6 (id_b) + 32 (commitment) + 4 (t_round) */
+    uint32_t required = (uint32_t)label_len + 6U + 6U + 32U + 4U;
+    CEEPEW_ASSERT(required <= (uint32_t)out_info_max_len, CEEPEW_ERR_BOUNDS);
 
     uint8_t off = 0U;
     memcpy(out_info + off, label, label_len); off += label_len;

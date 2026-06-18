@@ -280,3 +280,9 @@ CeePewErr_t ecc_hamming_decode(const uint8_t *in, uint16_t in_len, uint8_t *out,
     *out_len = required_bytes;
     return CEEPEW_OK;
 }
+
+CeePewErr_t ecc_hamming_deinit(void) {
+    memset(&s_ctx, 0, sizeof(s_ctx));
+    s_ctx.initialised = false;
+    return CEEPEW_OK;
+}

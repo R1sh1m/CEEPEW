@@ -22,6 +22,7 @@ idf_component_register(
         tests
         esp_system
         esp_wifi
+        esp_coex
         esp_event
         esp_timer
         freertos

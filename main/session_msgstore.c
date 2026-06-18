@@ -58,7 +58,7 @@ CeePewErr_t msg_store_add(const uint8_t *encrypted_data, uint16_t encrypted_len,
     }
 
     /* Write message at tail */
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint64_t now_s = (uint64_t)(esp_timer_get_time() / 1000000LL);
     g_msg_store.messages[g_msg_store.tail].meta.created_at = now_s;
     g_msg_store.messages[g_msg_store.tail].meta.payload_len = plaintext_len;
     g_msg_store.messages[g_msg_store.tail].meta.dir = direction;
@@ -99,7 +99,7 @@ CeePewErr_t msg_store_expire_old(void)
     CEEPEW_ASSERT(g_msg_store.count <= CEEPEW_MAX_MESSAGES, CEEPEW_ERR_INTERNAL);
     CEEPEW_ASSERT(CEEPEW_MSG_TTL_S > 0U, CEEPEW_ERR_PARAM);
 
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint64_t now_s = (uint64_t)(esp_timer_get_time() / 1000000LL);
 
     /* Remove messages from head while expired (oldest entries expire first) */
     /* loop bound: CEEPEW_MAX_MESSAGES (compile-time constant) */
@@ -107,7 +107,7 @@ CeePewErr_t msg_store_expire_old(void)
         const StoredMsg_t *msg = msg_store_get(0U);
         if (msg == NULL) { break; }
 
-        uint32_t age_s = (now_s > msg->meta.created_at)
+        uint64_t age_s = (now_s > msg->meta.created_at)
                        ? (now_s - msg->meta.created_at)
                        : 0U;
 
@@ -126,7 +126,7 @@ CeePewErr_t msg_store_expire_old(void)
         }
     }
 
-    g_msg_store.last_wipe_ts = now_s;
+    g_msg_store.last_wipe_ts = (uint32_t)now_s;
     return CEEPEW_OK;
 }
 

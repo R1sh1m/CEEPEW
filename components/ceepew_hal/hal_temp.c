@@ -25,7 +25,7 @@ CeePewErr_t hal_temp_init(void)
     CEEPEW_ASSERT(HAL_TEMP_SAMPLES_PER_READ > 0U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(HAL_TEMP_SAMPLES_PER_READ <= 16U, CEEPEW_ERR_PARAM);
 
-    ESP_LOGW(HAL_TEMP_TAG,
+    ESP_LOGI(HAL_TEMP_TAG,
              "die-temp sensor initialised; accuracy is ±10 C and the "
              "reading is biased upward by WiFi/BT self-heating (not a "
              "board-ambient value).");

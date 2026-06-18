@@ -84,7 +84,6 @@ static bool pairing_ui_validate_layout(void)
 {
     const UIState_t states[] = {
         UI_STATE_PAIRING,
-        UI_STATE_PAIRING_SUCCESS,
         UI_STATE_KEYDER,
     };
 
@@ -114,45 +113,32 @@ static bool pairing_ui_validate_transitions(void)
         return false;
     }
 
-    if (!pairing_ui_check(ui_manager_transition_to(UI_STATE_PAIRING_SUCCESS) == CEEPEW_OK, "transition to ready")) {
+    /* Transition from pairing directly to keyder (PAIRING_SUCCESS removed) */
+    if (!pairing_ui_check(ui_manager_transition_to(UI_STATE_KEYDER) == CEEPEW_OK, "transition to keyder")) {
         return false;
     }
     g_ui_ctx.transition_ready = true;
-    if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "enter ready")) {
-        return false;
-    }
-    if (!pairing_ui_check(g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS, "ready state active")) {
-        return false;
-    }
-    if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render ready")) {
-        return false;
-    }
-
-    /* Let the built-in ready hold elapse, then verify the KEYDER transition. */
-    g_ui_ctx.pairing_result_start_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-    vTaskDelay(pdMS_TO_TICKS(1300U));
-
-    if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "arm keyder transition")) {
-        return false;
-    }
-    if (!pairing_ui_check(g_ui_ctx.next_state == UI_STATE_KEYDER, "keyder next state queued")) {
-        return false;
-    }
-    if (!pairing_ui_check(g_ui_ctx.transition_ready, "keyder transition ready")) {
-        return false;
-    }
     if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "enter keyder")) {
         return false;
     }
     if (!pairing_ui_check(g_ui_ctx.current_state == UI_STATE_KEYDER, "keyder state active")) {
         return false;
     }
+    if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render keyder")) {
+        return false;
+    }
+
+    /* Transition to cryptogram (keys verified) */
+    if (!pairing_ui_check(ui_manager_transition_to(UI_STATE_CRYPTOGRAM) == CEEPEW_OK, "transition to cryptogram")) {
+        return false;
+    }
+    g_ui_ctx.transition_ready = true;
 
     for (uint8_t frame = 0U; frame < 8U; frame++) {
-        if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render keyder")) {
+        if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render cryptogram")) {
             return false;
         }
-        if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "advance keyder")) {
+        if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "advance cryptogram")) {
             return false;
         }
     }

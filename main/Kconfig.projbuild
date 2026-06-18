@@ -33,4 +33,13 @@ menu "CEE-PEW Build Options"
             eFuse user block.  Falls back to software-only salt if the
             eFuse block is not provisioned.
 
+    config CEEPEW_WIFI_FULL_RESTART
+        bool "Full WiFi stop+start on BLE->WiFi transition"
+        default y
+        help
+            When enabled (default), performs full esp_wifi_stop()/esp_wifi_start()
+            to force coexistence hardware reset after BLE deinit (Phase 2->3).
+            When disabled, uses coex_schm_process_restart() as lighter alternative.
+            Production should keep this enabled; disable only for A/B testing.
+
 endmenu

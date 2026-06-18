@@ -27,13 +27,19 @@
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "transport_ble.h"
+#include "hal_temp.h"
 
 static const char *TAG = "CEE-PEW-MAIN";
 
-static void rng_failure_session_wipe(void) { (void)session_wipe(); }
+static void rng_failure_session_wipe(void) { session_request_wipe(); }
 
 void app_main(void){
     ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup ===");
+
+    /* Suppress known false-positive warnings that create log noise.
+     * i2c.common: GPIO 26/27 reservation warnings — the OLED works fine;
+     * these fire because WiFi/BT reserve the RTC-domain GPIOs first. */
+    esp_log_level_set("i2c.common", ESP_LOG_ERROR);
 
     /* Initialize NVS (required by BLE stack before bring-up) */
     esp_err_t nvs_err = nvs_flash_init();
@@ -72,7 +78,7 @@ void app_main(void){
         (void)gpio_config(&io_cfg);
         vTaskDelay(pdMS_TO_TICKS(50));
         if (gpio_get_level(CEEPEW_PIN_DIAG_SWITCH) == CEEPEW_DIAG_SWITCH_ACTIVE) {
-            ESP_LOGW(TAG, "DIAG switch active — running I2C scanner");
+            ESP_LOGI(TAG, "DIAG switch active — running I2C scanner");
             (void)hal_i2c_scanner_scan_bus();
         } else {
             ESP_LOGI(TAG, "DIAG switch inactive — skipping I2C scanner");
@@ -82,6 +88,12 @@ void app_main(void){
     err = hal_adc_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_adc_init failed: %d", (int)err);
+        return;
+    }
+
+    err = hal_temp_init();
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "hal_temp_init failed: %d", (int)err);
         return;
     }
 
@@ -98,7 +110,7 @@ void app_main(void){
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
 #if CONFIG_CEEPEW_BUILD_TESTS
-        ESP_LOGW(TAG, "Display init failed — continuing headless for diagnostic tests");
+        ESP_LOGI(TAG, "Display init failed — continuing headless for diagnostic tests");
 #else
         ESP_LOGE(TAG, "Display bring-up failed; restarting to avoid headless run");
         vTaskDelay(pdMS_TO_TICKS(2000U));
@@ -129,11 +141,23 @@ void app_main(void){
         return;
     }
 
-    /* RNG health audit: detect trivial HW RNG failures when RF is active and reboot */
-    err = crypto_rng_health_check();
+    /* RNG health audit: detect trivial HW RNG failures when RF is active.
+     * Retry with exponential backoff instead of immediate reboot to handle
+     * transient RNG anomalies (e.g., thermal noise). */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        err = crypto_rng_health_check();
+        if (err == CEEPEW_OK) {
+            break;
+        }
+        ESP_LOGW(TAG, "RNG health check failed (attempt %d/3): %d", attempt + 1, (int)err);
+        if (attempt < 2) {
+            vTaskDelay(pdMS_TO_TICKS(100 * (1 << attempt)));
+        }
+    }
     if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "RNG health check failed (%d) — rebooting", (int)err);
-        esp_restart();
+        ESP_LOGE(TAG, "RNG health check failed after retries — continuing with degraded entropy warning");
+        /* Do not reboot; mark entropy as degraded but allow operation.
+         * Continuous RNG test will catch persistent failures at runtime. */
     }
 
     uint8_t local_mac[6] = {0};

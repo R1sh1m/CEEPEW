@@ -67,6 +67,30 @@ CeePewErr_t crypto_rng_continuous_test(const uint8_t *sample, uint32_t len)
 {
     if (len < CEEPEW_RNG_CHUNK_BYTES) { return CEEPEW_OK; }
 
+    /* NIST SP 800-90B Repetition Count Test:
+     * Track maximum run of identical consecutive bytes.
+     * Threshold: for 32-byte chunks, fail if run > 16 (2^4).
+     * This detects stuck-at faults and severe entropy degradation.
+     */
+    uint32_t max_run = 1U;
+    uint32_t current_run = 1U;
+    for (uint32_t i = 1U; i < CEEPEW_RNG_CHUNK_BYTES; i++) {
+        if (sample[i] == sample[i - 1U]) {
+            current_run++;
+            if (current_run > max_run) { max_run = current_run; }
+        } else {
+            current_run = 1U;
+        }
+    }
+    if (max_run > 16U) {
+        s_rng_health.failure_count++;
+        if (s_rng_health.failure_count >= CEEPEW_RNG_FAILURE_THRESHOLD) {
+            if (s_rng_health.failure_cb != NULL) { s_rng_health.failure_cb(); }
+        }
+        return CEEPEW_ERR_CRYPTO;
+    }
+
+    /* Also check for identical consecutive samples (catastrophic failure) */
     if (s_rng_health.has_prev != 0U) {
         uint8_t diff_acc = 0U;
         for (uint32_t i = 0U; i < CEEPEW_RNG_CHUNK_BYTES; i++) {

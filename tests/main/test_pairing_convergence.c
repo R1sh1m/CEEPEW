@@ -290,8 +290,8 @@ static void test_gatt_crypto_roundtrip(void)
 {
     ESP_LOGI(TAG, "--- test_gatt_crypto_roundtrip ---");
 
-    uint8_t plaintext[CEEPEW_ED25519_PUBKEY_BYTES];
-    for (uint8_t i = 0U; i < CEEPEW_ED25519_PUBKEY_BYTES; i++) {
+    uint8_t plaintext[GATT_PLAINTEXT_BYTES];
+    for (uint8_t i = 0U; i < GATT_PLAINTEXT_BYTES; i++) {
         plaintext[i] = (uint8_t)(0xC0U + i);
     }
 
@@ -304,22 +304,22 @@ static void test_gatt_crypto_roundtrip(void)
     check(memcmp(encrypted, plaintext, GATT_CIPHERTEXT_BYTES) != 0,
           "encrypted ct != plaintext");
 
-    uint8_t recovered[CEEPEW_ED25519_PUBKEY_BYTES];
+    uint8_t recovered[GATT_PLAINTEXT_BYTES];
     CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
         CODE_32, MAC_A, MAC_B, encrypted, recovered);
     check(dec_err == CEEPEW_OK, "decrypt returned OK");
-    check(memcmp(recovered, plaintext, CEEPEW_ED25519_PUBKEY_BYTES) == 0,
+    check(memcmp(recovered, plaintext, GATT_PLAINTEXT_BYTES) == 0,
           "recovered plaintext matches original");
 
     /* Also verify the responder's MAC ordering (B,A) gives the same
      * derived key — the sort_id() helper inside the crypto module
      * canonicalises the pair. */
-    uint8_t recovered_swap[CEEPEW_ED25519_PUBKEY_BYTES];
+    uint8_t recovered_swap[GATT_PLAINTEXT_BYTES];
     CeePewErr_t dec_swap = gatt_crypto_decrypt_with_ids(
         CODE_32, MAC_B, MAC_A, encrypted, recovered_swap);
     check(dec_swap == CEEPEW_OK,
           "decrypt with swapped (B,A) MACs returned OK");
-    check(memcmp(recovered_swap, plaintext, CEEPEW_ED25519_PUBKEY_BYTES) == 0,
+    check(memcmp(recovered_swap, plaintext, GATT_PLAINTEXT_BYTES) == 0,
           "swapped MAC ordering decrypts to same plaintext");
 }
 
@@ -330,7 +330,7 @@ static void test_gatt_crypto_tamper(void)
 {
     ESP_LOGI(TAG, "--- test_gatt_crypto_tamper ---");
 
-    uint8_t plaintext[CEEPEW_ED25519_PUBKEY_BYTES];
+    uint8_t plaintext[GATT_PLAINTEXT_BYTES];
     memset(plaintext, 0xAAU, sizeof(plaintext));
 
     uint8_t encrypted[GATT_CRYPTO_TOTAL_BYTES];
@@ -341,7 +341,7 @@ static void test_gatt_crypto_tamper(void)
     /* Flip a single bit in the ciphertext body. */
     encrypted[5U] ^= 0x01U;
 
-    uint8_t recovered[CEEPEW_ED25519_PUBKEY_BYTES];
+    uint8_t recovered[GATT_PLAINTEXT_BYTES];
     CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
         CODE_32, MAC_A, MAC_B, encrypted, recovered);
     check(dec_err == CEEPEW_ERR_AUTH_FAIL,
@@ -357,7 +357,7 @@ static void test_gatt_crypto_wrong_session_code(void)
 {
     ESP_LOGI(TAG, "--- test_gatt_crypto_wrong_session_code ---");
 
-    uint8_t plaintext[CEEPEW_ED25519_PUBKEY_BYTES];
+    uint8_t plaintext[GATT_PLAINTEXT_BYTES];
     memset(plaintext, 0x55U, sizeof(plaintext));
 
     uint8_t encrypted[GATT_CRYPTO_TOTAL_BYTES];
@@ -370,7 +370,7 @@ static void test_gatt_crypto_wrong_session_code(void)
         'G','!','W','R','O','N','G','!','W','R','O','N','G','!','W','R'
     };
 
-    uint8_t recovered[CEEPEW_ED25519_PUBKEY_BYTES];
+    uint8_t recovered[GATT_PLAINTEXT_BYTES];
     CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
         WRONG_CODE, MAC_A, MAC_B, encrypted, recovered);
     check(dec_err == CEEPEW_ERR_AUTH_FAIL,

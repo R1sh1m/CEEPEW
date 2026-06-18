@@ -90,7 +90,7 @@
 
 /* Post-derive sync barrier — 1-byte magic plaintexts exchanged inside the
  * encrypted ESP-NOW tunnel to verify that crypto_box works in BOTH
- * directions before the UI advances to PAIRING_SUCCESS. Without this
+ * directions before the UI advances to KEYDER. Without this
  * round-trip, an initiator whose local key derivation succeeds would
  * transition the UI while the responder was still in PAIRING (Bug 3).
  *
@@ -110,6 +110,11 @@
 #define CEEPEW_MAX_MESSAGES              20U
 #define CEEPEW_PAIRING_TIMEOUT_S         30U
 #define CEEPEW_T_ROUND_S                 8U     /* Phase 2 commitment window  */
+#define CEEPEW_PAIRING_COUNTDOWN_MS      45000U /* UI countdown bar total (ms) */
+#define CEEPEW_KEYDER_DURATION_MS        9000U  /* Key derivation animation (ms) */
+#define CEEPEW_KEYS_VERIFIED_HOLD_MS     3000U  /* "Keys Verified" screen hold (ms) */
+#define CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS 15000U /* CONFIRM verification timeout (ms) */
+#define CEEPEW_CHAT_LONG_PRESS_MS        1500U  /* Long press to return to menu (ms) */
 #define CEEPEW_MESSAGE_TTL_S             3600U  /* Phase 4: Message auto-wipe, 1hr default */
 #define CEEPEW_MESSAGE_TTL_DIAG_S        300U   /* Phase 4: 5 min in DIAG mode */
 
@@ -136,12 +141,11 @@
 #define CEEPEW_AUTOSCROLL_INTERVAL_MS    5000U
 #define CEEPEW_OLED_WIDTH_PX             128U
 #define CEEPEW_OLED_HEIGHT_PX            64U
-/* Phase 4: Fingerprint & session lifecycle */
-#define CEEPEW_FINGERPRINT_BYTES         16U    /* SHA256[0:15] of peer key   */
+/* Phase 4: Session lifecycle */
 #define CEEPEW_RGB_IDLE_PULSE_MS         500U   /* Discovery mode pulse       */
 #define CEEPEW_RGB_CODE_ENTRY_BLINK_MS   200U   /* Code entry blink interval  */
 #define CEEPEW_RGB_ERROR_BLINK_MS        300U   /* Error/nonce_exhausted blink*/
-#define CEEPEW_RGB_REJECT_SEQUENCE_CT    3U     /* Red blinks on fingerprint reject */
+#define CEEPEW_RGB_REJECT_SEQUENCE_CT    3U     /* Red blinks on reject */
 
 /* Pairing Supervisor Watchdog (Event-Driven Architecture)
  *
@@ -166,6 +170,12 @@
 #define CEEPEW_RECONNECT_JITTER_MAX_MS   800U   /* Reconnect backoff ceiling  */
 #define CEEPEW_MAX_RECONNECT_ATTEMPTS    5U     /* From spec: 5 attempts max  */
 
+/* GATT connection timing (Phase 7 hardening) */
+#define CEEPEW_INITIATOR_RESPONDER_DELAY_MS     300U  /* initiator waits before responder can connect */
+#define CEEPEW_INITIATOR_JITTER_MAX_MS          200U  /* random jitter added to initiator delay */
+#define CEEPEW_RESPONDER_REV_GATTC_BACKOFF_BASE_MS 1000U  /* responder reverse GATTC base backoff */
+#define CEEPEW_GATT_CONN_PARAM_UPDATE_DELAY_MS  500U  /* delay before conn param update after MTU */
+
 /* -------------------------------------------------------------------------- */
 /* FEC (Hamming)                                                               */
 /* -------------------------------------------------------------------------- */
@@ -180,7 +190,7 @@
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_CORE0_STACK_BYTES         4096U
 #define CEEPEW_CORE1_STACK_BYTES         16384U
-#define CEEPEW_QUEUE_DEPTH               8U
+#define CEEPEW_QUEUE_DEPTH               32U
 #define CEEPEW_TASK_UI_PRIORITY          3U
 #define CEEPEW_TASK_SESSION_PRIORITY     3U
 
@@ -266,10 +276,10 @@
 /* Phase 4: Session lifecycle state names for logging */
 #define CEEPEW_SESSION_STATE_NAMES ((const char *[]){ \
     "idle", "discovery", "code_entry", "keygen", \
-    "fingerprint", "chat_active", "chat_idle", "nonce_exhausted", \
+    "chat_active", "chat_idle", "nonce_exhausted", \
     "error", "wipe_pending" \
 })
-#define CEEPEW_SESSION_STATE_COUNT 10U
+#define CEEPEW_SESSION_STATE_COUNT 9U
 
 /* ── Firmware Version ───────────────────────────────────────────────────────
  * Semantic version (MAJOR.MINOR.PATCH). CEEPEW_GIT_HASH is injected by

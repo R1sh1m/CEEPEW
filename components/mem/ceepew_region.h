@@ -29,12 +29,25 @@ typedef struct {
 
 extern Region_t g_region;
 
+/* Initialize a region allocator (zeroes pool, bump pointer, HWM). */
 CeePewErr_t region_init(Region_t *r);
+
+/* Reset region to empty state (reclaims all allocations, no per-object free). */
 void region_reset(Region_t *r);
+
+/* Allocate aligned memory from region pool. Returns NULL on OOM. */
 void *region_alloc(Region_t *r, uint32_t size);
+
+/* Allocate zeroed memory from region pool. Returns NULL on OOM. */
 void *region_alloc_zeroed(Region_t *r, uint32_t size);
+
+/* Get remaining free bytes in region pool. */
 uint32_t region_free_bytes(Region_t *r);
+
+/* Get total used bytes in region pool. */
 uint32_t region_used_bytes(Region_t *r);
+
+/* Get region usage as percentage (0-100). */
 uint8_t region_usage_pct(Region_t *r);
 
 #endif /* CEEPEW_REGION_H */

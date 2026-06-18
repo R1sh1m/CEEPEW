@@ -221,6 +221,45 @@ CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32]);
  * Returns false until session_set_peer_box_pubkey() has been called. */
 bool session_peer_box_pubkey_valid(void);
 
+/* Store the peer's WiFi STA MAC address (6 bytes), received over BLE during
+ * the Phase 2 commitment exchange (GATT sign_pk+box_pk+wifi_mac payload).
+ * Must be called before session_get_peer_wifi_mac() will return a valid MAC.
+ * Idempotent.
+ *
+ * PARAMETERS:
+ *   wifi_mac: 6-byte peer's WiFi STA MAC address (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — wifi_mac is NULL
+ */
+CeePewErr_t session_set_peer_wifi_mac(const uint8_t wifi_mac[6]);
+
+/* Get the peer's WiFi STA MAC address, stored via session_set_peer_wifi_mac().
+ * Used by the transport layer for ESP-NOW peer registration.
+ *
+ * PARAMETERS:
+ *   wifi_mac: Output buffer for 6-byte WiFi MAC (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Peer WiFi MAC populated
+ *   CEEPEW_ERR_PARAM — Not in phase 2+, session not active, or peer's WiFi MAC
+ *                      has not yet been received via the BLE commitment exchange
+ *   CEEPEW_ERR_NULL_PTR — wifi_mac is NULL
+ */
+CeePewErr_t session_get_peer_wifi_mac(uint8_t wifi_mac[6]);
+
+/* Check if the peer's WiFi STA MAC has been received.
+ * Returns false until session_set_peer_wifi_mac() has been called. */
+bool session_peer_wifi_mac_valid(void);
+
+/* Check if the peer's Ed25519 sign key has been received.
+ * Returns false until session_set_peer_public_key() has been called.
+ * Both this and session_peer_box_pubkey_valid() MUST return true before
+ * the UI is permitted to transition to the chat screen. */
+bool session_peer_sign_pk_valid(void);
+
 /* Copy the 32-byte human-verified session code into out. Used by the
  * transport layer to derive the GATT-side sign_pk encryption key (see
  * transport_ble_gatt_crypto.c). The session code is the trust anchor:
@@ -264,14 +303,14 @@ bool session_get_role(void);
 
 /* Mark the post-derive sync barrier as cleared. Called by the session
  * task after an encrypted MSG_TYPE_KEY_ACK round-trip has been verified.
- * Until this is set, the FSM must NOT transition the UI to PAIRING_SUCCESS.
+ * Until this is set, the FSM must NOT transition the UI to CRYPTOGRAM.
  *
  * Idempotent. Returns CEEPEW_OK.
  */
 CeePewErr_t session_mark_sync_barrier_cleared(void);
 
 /* Has the post-derive sync barrier been cleared? Used by the session
- * task to gate the UI transition to PAIRING_SUCCESS. */
+ * task to gate the UI transition to CRYPTOGRAM. */
 bool session_sync_barrier_cleared(void);
 
 /* Drive the post-derive sync exchange. Call from the session task main
@@ -366,37 +405,7 @@ CeePewErr_t session_update_last_message_time(void);
  */
 CeePewErr_t session_get_idle_seconds(uint32_t *idle_seconds);
 
-/* Phase 4: Compute device fingerprint from peer public key.
- * fingerprint = SHA256(peer_public_key || device_id)[0:15]
- * Call after successful Ed25519 verify in Phase 3.
- *
- * PARAMETERS:
- *   peer_pk: Peer's Ed25519 public key (32 bytes, not NULL)
- *   device_id: This device's MAC address (6 bytes, not NULL)
- *   fingerprint_out: Output buffer for 16-byte fingerprint (not NULL)
- *
- * RETURNS:
- *   CEEPEW_OK — Fingerprint computed and stored in session context
- *   CEEPEW_ERR_NULL_PTR — Any parameter is NULL
- *   CEEPEW_ERR_CRYPTO — SHA256 computation failed
- */
-CeePewErr_t session_compute_fingerprint(const uint8_t peer_pk[32],
-                                        const uint8_t device_id[6],
-                                        uint8_t fingerprint_out[16]);
-
-/* Phase 4: Get stored fingerprint (for UI confirmation panel).
- *
- * PARAMETERS:
- *   fingerprint: Output buffer for 16-byte fingerprint (not NULL)
- *
- * RETURNS:
- *   CEEPEW_OK — Fingerprint populated
- *   CEEPEW_ERR_PARAM — Not in phase 3 or session not active
- *   CEEPEW_ERR_NULL_PTR — fingerprint is NULL
- */
-CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16]);
-
-/* Phase 4: Get local device ID (for fingerprint derivation and UI binding). */
+/* Phase 4: Get local device ID (for UI binding). */
 CeePewErr_t session_get_device_id(uint8_t device_id[6]);
 
 /* Get currently accepted peer device ID (MAC address). Returns CEEPEW_OK on success. */
@@ -453,8 +462,6 @@ void session_test_set_id(uint64_t id);
 void session_test_set_nonce_counter(uint64_t nc);
 void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]);
 void session_test_unset_commitment(void);
-void session_test_set_fingerprint(const uint8_t fp[16]);
-void session_test_unset_fingerprint(void);
 
 #ifdef __cplusplus
 }

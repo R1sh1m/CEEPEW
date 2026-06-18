@@ -16,9 +16,9 @@
  * by the receiver.
  *
  * Queue semantics:
- *   - Depth: 8 frames (CEEPEW_QUEUE_DEPTH)
- *   - Thread-safe: ISR posts via xQueueSendFromISR(); task receives via xQueueReceive()
- *   - On queue full: oldest frame is dropped (LIFO eviction), no error returned to ISR
+ *   - Depth: CEEPEW_QUEUE_DEPTH frames (default 32)
+ *   - Thread-safe: ISR posts via xQueueOverwriteFromISR(); task receives via xQueueReceive()
+ *   - On queue full: oldest frame is overwritten (FIFO eviction), overrun counter incremented
  *   - Frames are NOT acknowledged; loss is transparent to ESP-NOW layer
  */
 typedef struct {
@@ -77,5 +77,18 @@ QueueHandle_t hal_radio_get_rx_queue(void);
  *   CEEPEW_ERR_HW — esp_wifi_set_ps() failed
  */
 CeePewErr_t hal_radio_set_power_save(wifi_ps_type_t ps_mode);
+
+/* Start the channel hopping timer. Must be called after hal_radio_set_hop_context()
+ * when the session is fully established (Phase 3, sync complete, both keys exchanged).
+ * Returns CEEPEW_OK on success, CEEPEW_ERR_HW if timer start fails. */
+CeePewErr_t hal_radio_start_channel_hopping(void);
+
+/* Stop the channel hopping task and timer. */
+CeePewErr_t hal_radio_stop_channel_hopping(void);
+
+/* Check if ESP-NOW peer is currently registered.
+ * Returns true if peer is registered, false otherwise.
+ * Safe to call from any context after hal_radio_init(). */
+bool hal_radio_is_peer_registered(const uint8_t peer_mac[6]);
 
 #endif /* CEEPEW_HAL_RADIO_H */

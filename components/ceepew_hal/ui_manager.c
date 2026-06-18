@@ -42,7 +42,6 @@ extern BleContext_t g_ble_ctx;
 extern uint64_t session_get_id(void);
 extern uint64_t session_get_nonce_counter(void);
 extern CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
-extern CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16]);
 
 UIContext_t g_ui_ctx = {0};
 static bool s_ui_manager_initialised = false;
@@ -59,17 +58,14 @@ static const char *const s_diag_page_names[] = {
 static const uint8_t s_diag_page_count =
     (uint8_t)(sizeof(s_diag_page_names) / sizeof(s_diag_page_names[0]));
 
-static CeePewErr_t render_fingerprint_confirm(void);
 static CeePewErr_t render_error(void);
-static CeePewErr_t render_code_incorrect(void);
 static CeePewErr_t render_info(void);
-static CeePewErr_t render_code_different(void);
-static CeePewErr_t render_pairing_success(void);
 static CeePewErr_t render_pairing_failed(void);
 static CeePewErr_t render_chat_send_confirm(void);
 static CeePewErr_t ui_restart_discovery_from_pairing(void);
 
-#define CEEPEW_PAIRING_SUCCESS_HOLD_MS  1200U
+static void ui_draw_centered_text(uint8_t y, const char *text);
+
 #define CEEPEW_PAIRING_FAILED_HOLD_MS   4000U    /* Bug 5 Fix: reduced from 15000 to allow reconnection */
 #define CEEPEW_PAIRING_PEER_LOSS_MS     15000U
 #define CEEPEW_SCAN_RETRY_DEBOUNCE_MS   2000U
@@ -101,11 +97,16 @@ CeePewErr_t ui_manager_init(void){
  * All coordinate arguments are clamped; nothing writes outside 128×64.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static inline void draw_pixel(uint8_t x, uint8_t y)
+static inline void draw_pixel_color(uint8_t x, uint8_t y, HalUIColor_t color)
 {
     if (x >= 128U || y >= 64U) { return; }
     HalUIRect_t r = { .x = x, .y = y, .w = 1U, .h = 1U };
-    hal_ui_rect_fill(&r, HAL_UI_WHITE);
+    hal_ui_rect_fill(&r, color);
+}
+
+static inline void draw_pixel(uint8_t x, uint8_t y)
+{
+    draw_pixel_color(x, y, HAL_UI_WHITE);
 }
 
 static void draw_hline(uint8_t x, uint8_t y, uint8_t w)
@@ -204,17 +205,19 @@ typedef enum {
 #define COMPOSE_ACTION_DEL_IDX    62U
 #define COMPOSE_ACTION_LEFT_IDX   63U
 #define COMPOSE_ACTION_RIGHT_IDX  64U
-#define COMPOSE_TOTAL_CHOICES     65U
+#define COMPOSE_ACTION_SEND_IDX   65U
+#define COMPOSE_TOTAL_CHOICES     66U
 
 static const char COMPOSE_CHARSET[COMPOSE_CHAR_COUNT + 1U] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     "0123456789"
     " .,!?;:'\"_-@#/()+=%&*<>";
 
-static const char *const s_compose_special_labels[3U] = {
+static const char *const s_compose_special_labels[4U] = {
     "DEL",
     "<-",
     "->",
+    "SEND",
 };
 
 static const char *compose_choice_label(uint8_t choice_idx, char label_buf[4U])
@@ -233,6 +236,9 @@ static const char *compose_choice_label(uint8_t choice_idx, char label_buf[4U])
     }
     if (choice_idx == COMPOSE_ACTION_RIGHT_IDX) {
         return s_compose_special_labels[2];
+    }
+    if (choice_idx == COMPOSE_ACTION_SEND_IDX) {
+        return s_compose_special_labels[3];
     }
 
     label_buf[0] = '?';
@@ -310,13 +316,18 @@ static void draw_selected_option_row(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
                                      const char *text, bool selected)
 {
     HalUIRect_t box = { .x = x, .y = y, .w = w, .h = h };
+    uint8_t text_len = (uint8_t)strlen(text);
+    uint8_t text_px = (uint8_t)(text_len * 6U);
+    uint8_t text_x = (text_px < w) ? (uint8_t)(x + (w - text_px) / 2U) : (uint8_t)(x + 2U);
+    uint8_t text_y = (uint8_t)(y + (h - 8U) / 2U);
+    if (text_y < y) { text_y = y; }
     if (selected) {
         hal_ui_rect_fill(&box, HAL_UI_WHITE);
         hal_ui_rect(&box, HAL_UI_WHITE);
-        hal_ui_text((uint8_t)(x + 6U), (uint8_t)(y + 4U), text, HAL_UI_BLACK);
+        hal_ui_text(text_x, text_y, text, HAL_UI_BLACK);
     } else {
         hal_ui_rect(&box, HAL_UI_WHITE);
-        hal_ui_text((uint8_t)(x + 6U), (uint8_t)(y + 4U), text, HAL_UI_WHITE);
+        hal_ui_text(text_x, text_y, text, HAL_UI_WHITE);
     }
 }
 
@@ -382,6 +393,15 @@ static CeePewErr_t compose_commit_selection(uint8_t choice_idx)
     }
     if (choice_idx == COMPOSE_ACTION_RIGHT_IDX) {
         return compose_move_cursor_right();
+    }
+    if (choice_idx == COMPOSE_ACTION_SEND_IDX) {
+        /* SEND: open confirmation screen if buffer non-empty */
+        if (g_ui_ctx.compose_length > 0U) {
+            g_ui_ctx.chat_send_confirm_selected = 0U;
+            (void)ui_manager_transition_to(UI_STATE_CHAT_SEND_CONFIRM);
+            g_ui_ctx.transition_ready = true;
+        }
+        return CEEPEW_OK;
     }
     return CEEPEW_ERR_BOUNDS;
 }
@@ -504,7 +524,7 @@ const uint8_t s_font5x7[95][5] = {
 /* Render one character at pixel position (x, y). Uses draw_pixel() which
  * calls hal_ui_rect_fill() — known working. Safe: clips to screen bounds.
  * Each character is 5px wide × 7px tall with 1px column gap = 6px advance. */
-static void ui_draw_char(uint8_t x, uint8_t y, char c)
+static void ui_draw_char_color(uint8_t x, uint8_t y, char c, HalUIColor_t color)
 {
     uint8_t idx;
     if ((uint8_t)c < 32U || (uint8_t)c > 126U) {
@@ -519,15 +539,20 @@ static void ui_draw_char(uint8_t x, uint8_t y, char c)
             if ((col_data >> row) & 1U) {
                 uint8_t px = (uint8_t)(x + col);
                 uint8_t py = (uint8_t)(y + row);
-                draw_pixel(px, py);   /* draw_pixel already clips */
+                draw_pixel_color(px, py, color);
             }
         }
     }
 }
 
+static void ui_draw_char(uint8_t x, uint8_t y, char c)
+{
+    ui_draw_char_color(x, y, c, HAL_UI_WHITE);
+}
+
 /* Render a NUL-terminated string starting at (x, y).
  * Advances 6px per character. Stops at screen right edge. */
-static void ui_draw_text(uint8_t x, uint8_t y, const char *str)
+static void ui_draw_text_color(uint8_t x, uint8_t y, const char *str, HalUIColor_t color)
 {
     if (str == NULL) { return; }
     CEEPEW_ASSERT_VOID(x < CEEPEW_OLED_WIDTH_PX);
@@ -535,17 +560,22 @@ static void ui_draw_text(uint8_t x, uint8_t y, const char *str)
     uint8_t cx = x;
     while (*str != '\0') {
         if (cx + 5U > 128U) { break; }   /* no room for another char */
-        ui_draw_char(cx, y, *str);
+        ui_draw_char_color(cx, y, *str, color);
         cx = (uint8_t)(cx + 6U);
         str++;
     }
+}
+
+static void ui_draw_text(uint8_t x, uint8_t y, const char *str)
+{
+    ui_draw_text_color(x, y, str, HAL_UI_WHITE);
 }
 
 /* Clipping-aware character draw for marquee effects.
  * Accepts signed x so partially off-screen glyphs do not wrap to the
  * opposite edge when cast to uint8_t.
  * Clips on both left (TEXT_LEFT_CLIP) and right (128) boundaries. */
-static void ui_draw_char_at(int16_t x, uint8_t y, char c)
+static void ui_draw_char_at_color(int16_t x, uint8_t y, char c, HalUIColor_t color)
 {
     CEEPEW_ASSERT_VOID(y < CEEPEW_OLED_HEIGHT_PX);
     uint8_t idx;
@@ -569,11 +599,16 @@ static void ui_draw_char_at(int16_t x, uint8_t y, char c)
             if ((col_data >> row) & 1U) {
                 int16_t py = (int16_t)y + (int16_t)row;
                 if (py >= 0 && py < 64) {
-                    draw_pixel((uint8_t)px, (uint8_t)py);
+                    draw_pixel_color((uint8_t)px, (uint8_t)py, color);
                 }
             }
         }
     }
+}
+
+static void ui_draw_char_at(int16_t x, uint8_t y, char c)
+{
+    ui_draw_char_at_color(x, y, c, HAL_UI_WHITE);
 }
 
 /* Word-wrapping text renderer for status strings that would otherwise clip.
@@ -710,7 +745,7 @@ static void ui_draw_hex_rows(const uint8_t *bytes, uint8_t byte_count, uint8_t x
             end = byte_count;
         }
         ui_format_hex_grouped(line, sizeof(line), &bytes[start], (uint8_t)(end - start), group_bytes);
-        uint8_t line_y = (uint8_t)(y + row * 8U);
+        uint8_t line_y = (uint8_t)(y + row * 7U);
         if ((uint16_t)line_y + 7U > 64U) {
             break;
         }
@@ -795,12 +830,13 @@ static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
 
 /* ── Redirect broken HAL text/char/circle to self-contained implementations ──
  * hal_ui_rect_fill() works fine so we keep all geometry calls unchanged.
- * #undef first to avoid "macro redefinition" warnings if hal_ui.h declared them. */
+ * #undef first to avoid "macro redefinition" warnings if hal_ui.h declared them.
+ * NOW: forward the colour parameter to enable HAL_UI_BLACK text rendering. */
 #undef  hal_ui_text
-#define hal_ui_text(x, y, s, colour)    ui_draw_text((uint8_t)(x), (uint8_t)(y), (s))
+#define hal_ui_text(x, y, s, colour)    ui_draw_text_color((uint8_t)(x), (uint8_t)(y), (s), (colour))
 
 #undef  hal_ui_char
-#define hal_ui_char(x, y, c, colour)    ui_draw_char((uint8_t)(x), (uint8_t)(y), (char)(c))
+#define hal_ui_char(x, y, c, colour)    ui_draw_char_color((uint8_t)(x), (uint8_t)(y), (char)(c), (colour))
 
 #undef  hal_ui_circle
 #define hal_ui_circle(x, y, r, colour)  draw_circle((int16_t)(x), (int16_t)(y), (uint8_t)(r))
@@ -813,33 +849,33 @@ static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
    RDR_CX, RDR_CY = center of 64×64 radar area on screen (now perfectly centered)
    RDR_R1, RDR_R2, RDR_R3 = concentric ring radii */
 #define RDR_CX 26     /* X-center: 52/2 = 26 (2px margins on each side) */
-#define RDR_CY 32     /* Y-center: 64/2 = 32 (perfect vertical centering) */
+#define RDR_CY 38     /* Y-center: 12 + (64-12)/2 = 38 (sub-rectangle centering) */
 #define RDR_R1 8U
 #define RDR_R2 16U
 #define RDR_R3 24U
 
-/* 16-step radar sweep endpoints, r=24 from centre (26,32).
- * Angles: 0°=E, stepping 22.5° clockwise.
- * Computed: ex = 26 + round(24*cos(θ)), ey = 32 + round(24*sin(θ))  */
+/* 16-step radar sweep endpoints, r=24 from centre (26,38).
+ * Angles: 0=E, stepping 22.5 deg clockwise.
+ * Computed: ex = 26 + round(24*cos(theta)), ey = 38 + round(24*sin(theta))  */
 typedef struct { int16_t ex; int16_t ey; } SweepPt_t;
 
 static const SweepPt_t SWEEP16[16U] = {
-    { 50, 32 }, /* 0  E    */
-    { 48, 41 }, /* 1  ESE  */
-    { 43, 49 }, /* 2  SE   */
-    { 35, 54 }, /* 3  SSE  */
-    { 26, 56 }, /* 4  S    */
-    { 17, 54 }, /* 5  SSW  */
-    {  9, 49 }, /* 6  SW   */
-    {  4, 41 }, /* 7  WSW  */
-    {  2, 32 }, /* 8  W    */
-    {  4, 23 }, /* 9  WNW  */
-    {  9, 15 }, /* 10 NW   */
-    { 17, 10 }, /* 11 NNW  */
-    { 26,  8 }, /* 12 N    */
-    { 35, 10 }, /* 13 NNE  */
-    { 43, 15 }, /* 14 NE   */
-    { 48, 23 }, /* 15 ENE  */
+    { 50, 38 }, /* 0  E    */
+    { 48, 47 }, /* 1  ESE  */
+    { 43, 55 }, /* 2  SE   */
+    { 35, 60 }, /* 3  SSE  */
+    { 26, 62 }, /* 4  S    */
+    { 17, 60 }, /* 5  SSW  */
+    {  9, 55 }, /* 6  SW   */
+    {  4, 47 }, /* 7  WSW  */
+    {  2, 38 }, /* 8  W    */
+    {  4, 29 }, /* 9  WNW  */
+    {  9, 21 }, /* 10 NW   */
+    { 17, 16 }, /* 11 NNW  */
+    { 26, 14 }, /* 12 N    */
+    { 35, 16 }, /* 13 NNE  */
+    { 43, 21 }, /* 14 NE   */
+    { 48, 29 }, /* 15 ENE  */
 };
 
 /* Star particle origins for boot animation.
@@ -932,6 +968,60 @@ static __attribute__((unused)) void draw_progress_bar(uint8_t x, uint8_t y, uint
     char pct_str[6U];
     (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
     hal_ui_text((uint8_t)(x + w + 4U), y, pct_str, HAL_UI_WHITE);
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* HELPER: color-inverting progress bar with centred text                    */
+/*                                                                            */
+/* Draws a white-outlined bar on black background. The progress region fills  */
+/* from left to right in white. Text centred inside inverts dynamically:      */
+/* pixels in the white-filled region draw in HAL_UI_BLACK, otherwise WHITE.   */
+/* ────────────────────────────────────────────────────────────────────────── */
+static void draw_progress_bar_inverted_text(uint8_t x, uint8_t y, uint8_t w,
+                                             uint8_t h, uint8_t pct,
+                                             const char *text)
+{
+    if (w < 6U || h < 4U) { return; }
+    if (pct > 100U) { pct = 100U; }
+
+    /* Outline border */
+    draw_rect_outline(x, y, w, h);
+
+    /* Clear interior to black */
+    {
+        HalUIRect_t inner = { .x = (uint8_t)(x + 1U), .y = (uint8_t)(y + 1U),
+                              .w = (uint8_t)(w - 2U), .h = (uint8_t)(h - 2U) };
+        hal_ui_rect_fill(&inner, HAL_UI_BLACK);
+    }
+
+    /* Fill progress from left */
+    uint8_t inner_w = (uint8_t)(w - 2U);
+    uint8_t fill_w = (uint8_t)((uint16_t)inner_w * (uint16_t)pct / 100U);
+    if (fill_w > 0U) {
+        HalUIRect_t fill = { .x = (uint8_t)(x + 1U), .y = (uint8_t)(y + 1U),
+                             .w = fill_w, .h = (uint8_t)(h - 2U) };
+        hal_ui_rect_fill(&fill, HAL_UI_WHITE);
+    }
+
+    /* Draw centred text with dynamic colour inversion.
+     * For each glyph pixel, check if its X falls inside the filled region:
+     * if yes → draw in BLACK (inverted); if no → draw in WHITE. */
+    if (text == NULL) { return; }
+
+    uint8_t text_len = 0U;
+    while (text[text_len] != '\0' && text_len < 30U) { text_len++; }
+    uint8_t text_px = (uint8_t)(text_len * 6U);
+    if (text_px >= inner_w) { return; }   /* text too wide, skip */
+    uint8_t text_x = (uint8_t)(x + 1U + ((inner_w - text_px) / 2U));
+    uint8_t text_y = (uint8_t)(y + 1U + ((h - 8U) / 2U));
+    uint8_t fill_right = (uint8_t)(x + 1U + fill_w);
+
+    uint8_t cx = text_x;
+    for (uint8_t i = 0U; i < text_len; i++) {
+        HalUIColor_t col = (cx < fill_right) ? HAL_UI_BLACK : HAL_UI_WHITE;
+        ui_draw_char_color(cx, text_y, text[i], col);
+        cx = (uint8_t)(cx + 6U);
+    }
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -1114,8 +1204,8 @@ static void draw_radar_static(void)
     HalUIRect_t cdot = { .x = RDR_CX - 1U, .y = RDR_CY - 1U, .w = 3U, .h = 3U };
     hal_ui_rect_fill(&cdot, HAL_UI_WHITE);
 
-    /* Panel divider (now at x=52: perfectly centers radar with 2px margins on each side) */
-    draw_vline(52U, 0U, 64U);
+    /* Panel divider — starts below heading at Y=12 */
+    draw_vline(52U, 12U, 52U);
 }
 
 static void draw_sweep_arm(uint8_t pos)
@@ -1168,7 +1258,7 @@ static CeePewErr_t ui_restart_discovery_from_pairing(void)
                   g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
                   g_ui_ctx.current_state == UI_STATE_CODE_ENTRY ||
                   g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED ||
-                  g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS,
+                  g_ui_ctx.current_state == UI_STATE_CONFIRM,
                   CEEPEW_ERR_PARAM);
     CeePewErr_t err = transport_ble_restart_discovery_session();
     if (err != CEEPEW_OK) {
@@ -1346,8 +1436,8 @@ static CeePewErr_t render_discovery(void)
      * length so each label loops seamlessly without a hardcoded cycle. */
     uint32_t shared_scroll_px = (g_ui_ctx.anim.frame_count / 3U);
 
-    /* Fixed title to keep header stable */
-    hal_ui_text(RPANEL_X, Y_TITLE, "DISCOVERING PEERS", HAL_UI_WHITE);
+    /* Fixed title centered across full screen width (above divider) */
+    ui_draw_centered_text(Y_TITLE, "DISCOVERING PEERS");
 
     /* ── Peer discovery feedback ── */
     const BlePeerRecord_t *peer = transport_ble_get_peer();
@@ -1507,6 +1597,9 @@ static void ui_draw_centered_text(uint8_t y, const char *text)
 
 static CeePewErr_t render_code_entry(void)
 {
+    CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(g_ui_ctx.current_state == UI_STATE_CODE_ENTRY, CEEPEW_ERR_PARAM);
+
     hal_ui_clear();
 
     uint32_t f = g_ui_ctx.anim.frame_count;
@@ -1520,11 +1613,11 @@ static CeePewErr_t render_code_entry(void)
     }
     draw_hline(0U, 12U, 128U);
 
-    /* Four aligned cells spread across the full width. */
-    const uint8_t cell_x[4U] = { 8U, 38U, 68U, 98U };
-    const uint8_t cell_w     = 22U;
-    const uint8_t cell_h     = 18U;
-    const uint8_t cell_y     = 14U;
+    /* Four aligned cells spread across the full width: 7px margin, 24px cell, 6px gap. */
+    const uint8_t cell_x[4U] = { 7U, 37U, 67U, 97U };
+    const uint8_t cell_w     = 24U;
+    const uint8_t cell_h     = 20U;
+    const uint8_t cell_y     = 16U;
 
     for (uint8_t i = 0U; i < 4U; i++) {
         bool is_active = (g_ui_ctx.code_selected == i);
@@ -1563,7 +1656,9 @@ static CeePewErr_t render_code_entry(void)
             show_digit = (uint8_t)((f / 6U) % 3U) != 2U; /* 2 frames on, 1 off */
         }
         if (show_digit) {
-            hal_ui_text((uint8_t)(cell_x[i] + 7U), (uint8_t)(cell_y + 5U), digit_str, HAL_UI_WHITE);
+            /* Width = 24. Character is 6px wide. Center is: (24 - 6)/2 = 9px offset.
+             * Height = 20. Character is 8px high. Center is: (20 - 8)/2 = 6px offset. */
+            hal_ui_text((uint8_t)(cell_x[i] + 9U), (uint8_t)(cell_y + 6U), digit_str, HAL_UI_WHITE);
         }
     }
 
@@ -1571,18 +1666,27 @@ static CeePewErr_t render_code_entry(void)
     for (uint8_t i = 0U; i < 4U; i++) {
         uint8_t dot_x = (uint8_t)(cell_x[i] + cell_w / 2U);
         if (g_ui_ctx.code_selected == i) {
-            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 2U), .y = 38U, .w = 5U, .h = 5U };
+            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 2U), .y = 39U, .w = 5U, .h = 5U };
             hal_ui_rect_fill(&dot, HAL_UI_WHITE);
         } else if (i < g_ui_ctx.code_selected) {
-            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 1U), .y = 39U, .w = 3U, .h = 3U };
+            HalUIRect_t dot = { .x = (uint8_t)(dot_x - 1U), .y = 40U, .w = 3U, .h = 3U };
             hal_ui_rect_fill(&dot, HAL_UI_WHITE);
         } else {
-            draw_pixel(dot_x, 40U);
+            draw_pixel(dot_x, 41U);
         }
     }
 
-    hal_ui_text(8U, 48U, "short press : next", HAL_UI_WHITE);
-    hal_ui_text(8U, 56U, "long press : enter", HAL_UI_WHITE);
+    /* Center bottom instructions */
+    {
+        const char *inst1 = "short press : next";
+        const char *inst2 = "long press : enter";
+        uint8_t len1 = (uint8_t)strlen(inst1);
+        uint8_t len2 = (uint8_t)strlen(inst2);
+        uint8_t x1 = (uint8_t)(((uint16_t)HAL_UI_WIDTH_PX - (uint16_t)len1 * 6U) / 2U);
+        uint8_t x2 = (uint8_t)(((uint16_t)HAL_UI_WIDTH_PX - (uint16_t)len2 * 6U) / 2U);
+        hal_ui_text(x1, 48U, inst1, HAL_UI_WHITE);
+        hal_ui_text(x2, 56U, inst2, HAL_UI_WHITE);
+    }
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -1590,13 +1694,18 @@ static CeePewErr_t render_code_entry(void)
 
 static CeePewErr_t render_countdown(void)
 {
+    CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(g_ui_ctx.current_state == UI_STATE_PAIRING ||
+                  g_ui_ctx.current_state == UI_STATE_COUNTDOWN, CEEPEW_ERR_PARAM);
+
     hal_ui_clear();
 
-    /* Dedicated pairing stage with an extended window for GATT setup. */
-    if (session_is_active() || transport_ble_handoff_ready()) {
+    /* If session is already active (keys derived), advance straight to
+     * KEYDER — the pairing screen is no longer useful. */
+    if (session_is_active()) {
         g_ui_ctx.anim.frame_count = 0U;
         g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_SUCCESS;
-        (void)ui_manager_transition_to(UI_STATE_PAIRING_SUCCESS);
+        (void)ui_manager_transition_to(UI_STATE_KEYDER);
         g_ui_ctx.transition_ready = true;
         return CEEPEW_OK;
     }
@@ -1619,15 +1728,15 @@ static CeePewErr_t render_countdown(void)
 
     uint32_t elapsed = (now >= g_ui_ctx.pairing_start_ms)
                      ? (now - g_ui_ctx.pairing_start_ms) : 0U;
-    uint32_t total_ms = 45000U;
+    uint32_t total_ms = CEEPEW_PAIRING_COUNTDOWN_MS;
     uint32_t rem_ms   = (elapsed < total_ms) ? (total_ms - elapsed) : 0U;
 
     /* Title */
-    hal_ui_text(34U, 2U, "PAIRING", HAL_UI_WHITE);
+    hal_ui_text(43U, 2U, "PAIRING", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
 
-    /* Show the fixed 4-digit code while the pairing window runs. */
-    const uint8_t code_x[4U] = { 10U, 40U, 70U, 100U };
+    /* Show the fixed 4-digit code while the pairing window runs: symmetrical 12px margin, 16px gap. */
+    const uint8_t code_x[4U] = { 12U, 42U, 72U, 102U };
     const uint8_t code_y = 14U;
     const uint8_t code_w = 14U;
     const uint8_t code_h = 12U;
@@ -1638,19 +1747,20 @@ static CeePewErr_t render_countdown(void)
         hal_ui_text((uint8_t)(code_x[i] + 4U), (uint8_t)(code_y + 2U), digit, HAL_UI_WHITE);
     }
 
-    /* Progress bar — fills as time decreases. (moved up to avoid overflow) */
-    uint32_t fill = (rem_ms * 120U) / total_ms;
-    if (fill > 120U) { fill = 120U; }
-
-    HalUIRect_t border = { .x = 4U, .y = 37U, .w = 120U, .h = 8U };
-    hal_ui_rect(&border, HAL_UI_WHITE);
-    if (fill > 0U) {
-        HalUIRect_t bar = { .x = 6U, .y = 39U, .w = (uint8_t)fill, .h = 4U };
-        hal_ui_rect_fill(&bar, HAL_UI_WHITE);
+    /* Role indicator: show initiator/responder so user knows asymmetry */
+    {
+        bool role = session_get_role();
+        hal_ui_text(4U, 28U, role ? "ROLE: INIT" : "ROLE: RESP", HAL_UI_WHITE);
     }
 
-    /* Bottom status line: keep waiting text anchored to Y_STATUS for consistency */
-    ui_draw_text_wrapped(10U, Y_STATUS, "Waiting for peer", 108U, 8U);
+    /* Color-inverting progress bar with countdown text inside */
+    {
+        uint32_t rem_s = (rem_ms + 999U) / 1000U;
+        char prog_text[24U];
+        (void)snprintf(prog_text, sizeof(prog_text), "PAIRING... %lus", (unsigned long)rem_s);
+        draw_progress_bar_inverted_text(4U, 38U, 120U, 14U,
+                                        (uint8_t)((rem_ms * 100U) / total_ms), prog_text);
+    }
 
     if (rem_ms == 0U) {
         g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
@@ -1668,31 +1778,6 @@ static CeePewErr_t render_syncing(void)
     return render_countdown();
 }
 
-static CeePewErr_t render_pairing_success(void)
-{
-    hal_ui_clear();
-
-    uint32_t f = g_ui_ctx.anim.frame_count;
-    uint8_t blink = (uint8_t)((f / 6U) % 2U);
-
-    hal_ui_text(22U, 2U, "PAIRING OK", HAL_UI_WHITE);
-    draw_hline(0U, 11U, 128U);
-
-    HalUIRect_t ok_box = { .x = 20U, .y = 20U, .w = 88U, .h = 20U };
-    hal_ui_rect(&ok_box, HAL_UI_WHITE);
-    if (blink == 0U) {
-        HalUIRect_t tick = { .x = 96U, .y = 24U, .w = 6U, .h = 6U };
-        hal_ui_rect_fill(&tick, HAL_UI_WHITE);
-    }
-    hal_ui_text(30U, 26U, "Session ready", HAL_UI_WHITE);
-    ui_draw_text_wrapped(10U, 34U, "Moving to key derivation", 108U, 8U);
-    /* Keep the simple waiting prompt in the bottom status area for visibility */
-    ui_draw_text_wrapped(22U, Y_STATUS, "Please wait...", 84U, 8U);
-
-    g_ui_ctx.anim.frame_count++;
-    return CEEPEW_OK;
-}
-
 static CeePewErr_t render_pairing_failed(void)
 {
     hal_ui_clear();
@@ -1700,7 +1785,7 @@ static CeePewErr_t render_pairing_failed(void)
     const char *reason = ui_pairing_result_reason_text(g_ui_ctx.pairing_result_reason);
     const char *detail = ui_pairing_result_detail_text(g_ui_ctx.pairing_result_reason);
 
-    hal_ui_text(16U, 2U, "PAIRING FAILED", HAL_UI_WHITE);
+    ui_draw_centered_text(2U, "PAIRING FAILED");
     draw_hline(0U, 11U, 128U);
 
     ui_draw_centered_text(15U, reason);
@@ -1709,13 +1794,26 @@ static CeePewErr_t render_pairing_failed(void)
     hal_ui_rect(&detail_box, HAL_UI_WHITE);
     ui_draw_text_wrapped(12U, 25U, detail, 102U, 8U);
 
-    if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
-        HalUIRect_t tick = { .x = 112U, .y = 50U, .w = 6U, .h = 6U };
-        hal_ui_rect_fill(&tick, HAL_UI_WHITE);
+    /* Footer: "Press button" + blinking square on the same line */
+    {
+        const char *footer;
+        switch ((PairingResultReason_t)g_ui_ctx.pairing_result_reason) {
+            case UI_PAIRING_RESULT_LINK_FAIL:
+                footer = "Bring closer,";
+                break;
+            case UI_PAIRING_RESULT_TIMED_OUT:
+            case UI_PAIRING_RESULT_COMMITMENT_FAIL:
+            default:
+                footer = "Press button";
+                break;
+        }
+        hal_ui_text(8U, Y_STATUS, footer, HAL_UI_WHITE);
+        /* Blinking filled square aligned after the text */
+        if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
+            HalUIRect_t sq = { .x = 92U, .y = Y_STATUS, .w = 6U, .h = 6U };
+            hal_ui_rect_fill(&sq, HAL_UI_WHITE);
+        }
     }
-    /* Slightly increase spacing between detail box and footer text to improve legibility */
-    draw_hline(8U, 50U, 112U);
-    ui_draw_text_wrapped(12U, Y_STATUS, "System Syncing... Please wait.", 102U, 8U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -1726,34 +1824,60 @@ static CeePewErr_t render_confirm(void)
     hal_ui_clear();
 
     uint32_t f = g_ui_ctx.anim.frame_count;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
 
-    hal_ui_text(22U, 2U, "CONFIRM PAIRING?", HAL_UI_WHITE);
-    draw_hline(0U, 12U, 128U);
+    /* title zone (0-11): CHECKING CODE */
+    ui_draw_centered_text(2U, "CHECKING CODE");
+    draw_hline(0U, 11U, 128U);
 
-    /* Animated concentric rings — shifted upward to avoid the bottom prompt */
-    uint8_t ring_phase = (uint8_t)((f / 3U) % 24U);
-    if (ring_phase > 0U && ring_phase <= 8U) {
-        draw_circle(64, 24, (uint8_t)(ring_phase * 2U));
+    /* code_display zone (12-31): 4-digit code in boxes */
+    const uint8_t code_x[4U] = { 12U, 42U, 72U, 102U };
+    const uint8_t code_y = 14U;
+    const uint8_t code_w = 14U;
+    const uint8_t code_h = 12U;
+    for (uint8_t i = 0U; i < 4U; i++) {
+        HalUIRect_t box = { .x = code_x[i], .y = code_y, .w = code_w, .h = code_h };
+        hal_ui_rect(&box, HAL_UI_WHITE);
+        char digit[2U] = { (char)g_ui_ctx.code_digits[i], '\0' };
+        hal_ui_text((uint8_t)(code_x[i] + 4U), (uint8_t)(code_y + 2U), digit, HAL_UI_WHITE);
     }
 
-    /* Lock icon — simplified: a rect (body) + arc (shackle) */
-    draw_circle(64, 20, 6);                       /* shackle arc (top half) */
-    HalUIRect_t lock_body = { .x = 56U, .y = 22U, .w = 16U, .h = 12U };
-    hal_ui_rect_fill(&lock_body, HAL_UI_WHITE);
-    /* Keyhole would go at (62,33) but we can't clear pixels, so skip */
+    /* status zone (32-47): full peer MAC */
+    char mac_str[18U];
+    (void)snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                   g_ui_ctx.peer_mac[0U], g_ui_ctx.peer_mac[1U],
+                   g_ui_ctx.peer_mac[2U], g_ui_ctx.peer_mac[3U],
+                   g_ui_ctx.peer_mac[4U], g_ui_ctx.peer_mac[5U]);
+    ui_draw_centered_text(36U, mac_str);
 
-    /* Prompt box at bottom — pulses */
-    uint8_t blink = (uint8_t)((f / 8U) % 2U);
-    HalUIRect_t prompt = { .x = 14U, .y = 44U, .w = 100U, .h = 20U };
-    if (blink == 0U) {
-        hal_ui_rect(&prompt, HAL_UI_WHITE);
-        hal_ui_text(18U, 49U, "HOLD BTN TO PAIR", HAL_UI_WHITE);
-        /* Small hint for DIAG users about Info Mode */
-        hal_ui_text(18U, 54U, "Hold for Info", HAL_UI_WHITE);
-        hal_ui_text(80U, 54U, "[DIAG]", HAL_UI_WHITE);
+    /* prompt zone (48-63): verification status */
+    uint32_t elapsed = (now_ms >= g_ui_ctx.pairing_start_ms)
+                     ? (now_ms - g_ui_ctx.pairing_start_ms) : 0U;
+
+    if (g_ble_ctx.commitment_verified) {
+        uint8_t tick_phase = (uint8_t)((f / 6U) % 2U);
+        if (tick_phase == 0U) {
+            ui_draw_centered_text(50U, "\x7e CODE MATCH \x7e");
+        } else {
+            ui_draw_centered_text(50U, "  CODE MATCH  ");
+        }
+
+        if (elapsed >= 1000U) {
+            g_ui_ctx.pairing_start_ms = now_ms;
+            (void)ui_manager_transition_to(UI_STATE_PAIRING);
+            g_ui_ctx.transition_ready = true;
+            return CEEPEW_OK;
+        }
+    } else if (elapsed >= CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS) {
+        g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+        g_ui_ctx.transition_ready = true;
+        return CEEPEW_OK;
     } else {
-        hal_ui_rect_fill(&prompt, HAL_UI_WHITE);
-        /* Invert text — can't truly invert, so just skip text on filled frame */
+        const char *spin = "|/-\\";
+        char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
+        ui_draw_centered_text(50U, "Verifying...");
+        hal_ui_text(10U, 50U, sp, HAL_UI_WHITE);
     }
 
     g_ui_ctx.anim.frame_count++;
@@ -1765,7 +1889,7 @@ static CeePewErr_t render_info(void)
 {
     hal_ui_clear();
     /* Title */
-    hal_ui_text(18U, 2U, "DEVICE INFO (DIAG)", HAL_UI_WHITE);
+    ui_draw_centered_text(2U, "DEVICE INFO (DIAG)");
     draw_hline(0U, 11U, 128U);
 
     /* MAC and firmware */
@@ -1896,6 +2020,14 @@ static CeePewErr_t render_info(void)
 
 static CeePewErr_t render_keyder_anim(void)
 {
+    /* Bail immediately if a state transition is pending (e.g., PAIRING_FAILED
+     * set by task_session after sync timeout). Without this guard the KEYDER
+     * animation draws one stale frame before the deferred next_state→current_state
+     * transition fires in ui_manager_update(). */
+    if (g_ui_ctx.transition_ready && g_ui_ctx.next_state != UI_STATE_KEYDER) {
+        return CEEPEW_OK;
+    }
+
     hal_ui_clear();
 
     uint32_t f = g_ui_ctx.anim.frame_count;
@@ -1934,154 +2066,65 @@ static CeePewErr_t render_keyder_anim(void)
         }
     }
 
-    /* Horizontal scan-bar sweeps down slowly — overlaps matrix */
-    uint8_t scan_y = (uint8_t)((f / 2U) % 52U);
-    draw_hline(0U, scan_y, 128U);
+    /* Horizontal scan-bar sweeps down slowly -- overlaps matrix */
+    uint8_t scan_y = (uint8_t)((f / 2U) % 40U);
+    draw_hline(0U, (uint8_t)(scan_y + 4U), 128U);
 
-    /* Progress bar */
-    /* Progress band moved up to avoid overlapping bottom status/footer */
-    HalUIRect_t pbar_bg = { .x = 0U, .y = 44U, .w = 128U, .h = 10U };
-    hal_ui_rect_fill(&pbar_bg, HAL_UI_WHITE); /* white background strip */
-    /* Draw an inner border to create a progress bar look */
-    HalUIRect_t pbar_border = { .x = 2U, .y = 46U, .w = 124U, .h = 6U };
-    hal_ui_rect(&pbar_border, HAL_UI_WHITE);
-
-    /* Derive animation progress from frame (assume ~150 frames for full derivation) */
-    uint8_t prog_w = (uint8_t)((f < 150U) ? (f * 120U / 150U) : 120U);
-    if (prog_w > 0U) {
-        HalUIRect_t prog = { .x = 4U, .y = 48U, .w = prog_w, .h = 4U };
-        hal_ui_rect_fill(&prog, HAL_UI_WHITE);
+    /* Color-inverting progress bar with text inside.
+     *
+     * Progress stages tied to real backend state:
+     *   0–95%: linear ramp over keyder_frames (~9 s).  This matches the
+     *          actual post-derive sync window; the bar sweeps smoothly from
+     *          left to right across the full timeout.
+     *  100%:   sync_barrier_cleared() — encrypted HELLO/ACK round-trip
+     *          verified, transition to CRYPTOGRAM imminent.
+     *
+     * The old frame-based approach capped at 90 % after 150 frames (~2.25 s)
+     * and stalled there, causing a visible desync between the bar position
+     * and real protocol progress. */
+    uint32_t keyder_frames = CEEPEW_KEYDER_DURATION_MS / CEEPEW_UI_LOOP_DELAY_MS;
+    uint8_t prog_pct;
+    if (session_sync_barrier_cleared()) {
+        prog_pct = 100U;
+    } else if (keyder_frames > 0U) {
+        /* Ramp 0 → 95 % over the full KEYDER window */
+        uint32_t capped = (f < keyder_frames) ? f : keyder_frames;
+        prog_pct = (uint8_t)(capped * 95U / keyder_frames);
+    } else {
+        prog_pct = 0U;
     }
-
-    /* Label above the progress band to avoid conflict with bottom status line */
-    hal_ui_text(24U, 36U, "DERIVING KEY...", HAL_UI_WHITE);
+    draw_progress_bar_inverted_text(4U, 52U, 120U, 12U, prog_pct, "DERIVING KEY...");
 
     g_ui_ctx.anim.frame_count++;
 
-    /* FIX: transition to cryptogram once animation completes (~3 s at 50 ms/frame) */
-    if (g_ui_ctx.anim.frame_count >= 150U) {
+    /* Gate the KEYDER -> CRYPTOGRAM transition on ALL of:
+     *   1. Post-derive encrypted sync round-trip completed (sync_barrier_cleared)
+     *   2. Peer's X25519 key received via BLE (peer_box_pubkey_valid)
+     *   3. Peer's Ed25519 sign key received via BLE (peer_sign_pk_valid)
+     *
+     * All three MUST be true. A session missing any key is cryptographically
+     * broken — we must never advance to chat in a degraded state.
+     *
+     * Safety valve: if the animation timeout elapses without all conditions
+     * met, transition to PAIRING_FAILED. The user must re-pair. The log
+     * identifies exactly which condition(s) did not complete. */
+    uint32_t safety_frames = keyder_frames + (keyder_frames / 2U);
+    bool keys_complete = session_peer_box_pubkey_valid() && session_peer_sign_pk_valid();
+    if (f >= keyder_frames && session_sync_barrier_cleared() && keys_complete) {
         g_ui_ctx.anim.frame_count = 0U;
         (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
         g_ui_ctx.transition_ready = true;
+    } else if (f >= safety_frames) {
+        ESP_LOGE("ui", "KEYDER timeout: sync=%d box_pk=%d sign_pk=%d — aborting to PAIRING_FAILED",
+                 (int)session_sync_barrier_cleared(),
+                 (int)session_peer_box_pubkey_valid(),
+                 (int)session_peer_sign_pk_valid());
+        g_ui_ctx.anim.frame_count = 0U;
+        g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
+        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+        g_ui_ctx.transition_ready = true;
     }
 
-    return CEEPEW_OK;
-}
-
-static CeePewErr_t render_fingerprint(void)
-{
-    hal_ui_clear();
-
-    uint32_t f = g_ui_ctx.anim.frame_count;
-
-    hal_ui_text(4U, 2U, "PEER FINGERPRINT", HAL_UI_WHITE);
-    draw_hline(0U, 11U, 128U);
-
-    /* Build full 32-char hex string from stored fingerprint */
-    char fp_hex[33U];
-    for (uint8_t i = 0U; i < 16U; i++) {
-        uint8_t  b    = g_ui_ctx.fingerprint[i];
-        uint8_t  h    = (b >> 4U) & 0x0FU;
-        uint8_t  l    = b & 0x0FU;
-        fp_hex[i * 2U]       = (h < 10U) ? (char)('0' + h) : (char)('A' + h - 10U);
-        fp_hex[i * 2U + 1U]  = (l < 10U) ? (char)('0' + l) : (char)('A' + l - 10U);
-    }
-    fp_hex[32U] = '\0';
-
-    /* Reveal 2 characters per frame up to full 32 */
-    uint8_t reveal = (uint8_t)((f * 2U < 32U) ? f * 2U : 32U);
-
-    /* Row 1: chars 0–15 at y=16 */
-    char row1[17U];
-    uint8_t r1_len = (reveal < 16U) ? reveal : 16U;
-    (void)memcpy(row1, fp_hex, r1_len);
-    row1[r1_len] = '\0';
-    hal_ui_text(4U, 16U, row1, HAL_UI_WHITE);
-
-    /* Cursor blink after last revealed char in row 1 */
-    if (reveal < 16U) {
-        uint8_t cur_x = (uint8_t)(4U + reveal * 6U);
-        uint8_t cur_on = (uint8_t)((f / 4U) % 2U);
-        if (cur_on == 0U) { draw_vline(cur_x, 16U, 8U); }
-    }
-
-    /* Row 2: chars 16–31 at y=26 */
-    if (reveal > 16U) {
-        char row2[17U];
-        uint8_t r2_len = (uint8_t)(reveal - 16U);
-        (void)memcpy(row2, fp_hex + 16U, r2_len);
-        row2[r2_len] = '\0';
-        hal_ui_text(4U, 26U, row2, HAL_UI_WHITE);
-
-        if (reveal < 32U) {
-            uint8_t cur_x = (uint8_t)(4U + (reveal - 16U) * 6U);
-            uint8_t cur_on = (uint8_t)((f / 4U) % 2U);
-            if (cur_on == 0U) { draw_vline(cur_x, 26U, 8U); }
-        }
-    }
-
-    /* Peer MAC */
-    char mac_str[18U];
-    (void)snprintf(mac_str, sizeof(mac_str), "Peer: %02X%02X%02X%02X",
-                   g_ui_ctx.peer_mac[2U], g_ui_ctx.peer_mac[3U],
-                   g_ui_ctx.peer_mac[4U], g_ui_ctx.peer_mac[5U]);
-    hal_ui_text(4U, 38U, mac_str, HAL_UI_WHITE);
-
-    /* After full reveal: prompt stays within the right-panel width */
-    if (reveal >= 32U) {
-        uint8_t blink = (uint8_t)((f / 8U) % 2U);
-        if (blink == 0U) {
-            ui_draw_text_wrapped(8U, 52U, "Press to confirm", 112U, 8U);
-        }
-        /* Animated bracket markers */
-        draw_hline(0U,  50U, 6U);
-        draw_hline(122U,50U, 6U);
-        draw_vline(0U,  50U, 14U);
-        draw_vline(127U,50U, 14U);
-    }
-
-    g_ui_ctx.anim.frame_count++;
-    return CEEPEW_OK;
-}
-
-static CeePewErr_t render_fingerprint_confirm(void)
-{
-    hal_ui_clear();
-
-    uint32_t f = g_ui_ctx.anim.frame_count;
-    char mac_str[16U];
-    uint8_t blink;
-
-    hal_ui_text(22U, 2U, "VERIFY IDENTITY", HAL_UI_WHITE);
-    draw_hline(0U, 11U, 128U);
-
-    /* Grouped fingerprint rows leave room for the peer MAC and buttons. */
-    ui_draw_hex_rows(g_ui_ctx.fingerprint, 16U, 4U, 14U);
-
-    /* Peer MAC */
-    (void)snprintf(mac_str, sizeof(mac_str), "Peer: %02X%02X",
-                   g_ui_ctx.peer_mac[4U], g_ui_ctx.peer_mac[5U]);
-    hal_ui_text(4U, 36U, mac_str, HAL_UI_WHITE);
-
-    /* Accept / reject buttons — animated outlines */
-    blink = (uint8_t)((f / 6U) % 2U);
-
-    /* ACCEPT button (left) */
-    HalUIRect_t yes = { .x = 4U, .y = 48U, .w = 50U, .h = 14U };
-    hal_ui_rect(&yes, HAL_UI_WHITE);
-    hal_ui_text(12U, 52U, "D=ACCEPT", HAL_UI_WHITE);
-    if (blink == 0U) {
-        /* Pulsing inner highlight on accept */
-        HalUIRect_t yes_hi = { .x = 6U, .y = 50U, .w = 46U, .h = 10U };
-        hal_ui_rect(&yes_hi, HAL_UI_WHITE);
-    }
-
-    /* REJECT button (right) */
-    HalUIRect_t no = { .x = 74U, .y = 48U, .w = 50U, .h = 14U };
-    hal_ui_rect(&no, HAL_UI_WHITE);
-    hal_ui_text(82U, 52U, "S=DENY", HAL_UI_WHITE);
-
-    g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
 }
 
@@ -2135,7 +2178,7 @@ static CeePewErr_t render_chat_thread(void)
 {
     hal_ui_clear();
 
-    hal_ui_text(20U, 1U, "SECURE CHAT", HAL_UI_WHITE);
+    ui_draw_centered_text(1U, "SECURE CHAT");
     draw_hline(0U, 11U, 128U);
 
     uint8_t count = msg_store_count();
@@ -2144,16 +2187,23 @@ static CeePewErr_t render_chat_thread(void)
     hal_ui_text(102U, 1U, badge, HAL_UI_WHITE);
 
     if (count == 0U) {
-        hal_ui_text(22U, 28U, "No messages yet", HAL_UI_WHITE);
-        hal_ui_text(30U, 48U, "BTN=menu", HAL_UI_WHITE);
+        ui_draw_centered_text(28U, "No messages yet");
+        ui_draw_centered_text(48U, "BTN=menu");
         return CEEPEW_OK;
     }
 
-    uint8_t shown = (count < 3U) ? count : 3U;
-    uint8_t start = (count > shown) ? (uint8_t)(count - shown) : 0U;
+    /* Potentiometer-driven scrolling: map pot to top message index.
+     * Visible window is 3 bubbles. Max offset = count - visible (clamped). */
+    uint8_t visible = 3U;
+    uint8_t max_offset = (count > visible) ? (uint8_t)(count - visible) : 0U;
+    uint8_t scroll_top = (uint8_t)(((uint16_t)g_ui_ctx.user_input * (uint16_t)(max_offset + 1U)) / 256U);
+    if (scroll_top > max_offset) { scroll_top = max_offset; }
+
+    uint8_t shown = (count < visible) ? count : visible;
 
     for (uint8_t i = 0U; i < shown; i++) {
-        uint8_t idx = (uint8_t)(start + i);
+        uint8_t idx = (uint8_t)(scroll_top + i);
+        if (idx >= count) { break; }
         const StoredMsg_t *msg = msg_store_get(idx);
         if (msg == NULL) {
             continue;
@@ -2162,7 +2212,21 @@ static CeePewErr_t render_chat_thread(void)
         (void)ui_chat_show_bubble(idx, y, msg->meta.dir);
     }
 
-    hal_ui_text(74U, 54U, "BTN=menu", HAL_UI_WHITE);
+    /* Scrollbar on right edge: thin column showing position */
+    if (count > visible) {
+        uint8_t bar_h = 48U;  /* Y=14 to Y=62 */
+        uint8_t thumb_h = (bar_h * visible) / count;
+        if (thumb_h < 4U) { thumb_h = 4U; }
+        uint8_t thumb_y = (uint8_t)(14U + ((uint16_t)scroll_top * (uint16_t)(bar_h - thumb_h)) / (uint16_t)max_offset);
+        /* Draw track */
+        HalUIRect_t track = { .x = 126U, .y = 14U, .w = 1U, .h = bar_h };
+        hal_ui_rect(&track, HAL_UI_WHITE);
+        /* Draw thumb */
+        HalUIRect_t thumb = { .x = 125U, .y = thumb_y, .w = 3U, .h = thumb_h };
+        hal_ui_rect_fill(&thumb, HAL_UI_WHITE);
+    }
+
+    ui_draw_centered_text(54U, "BTN=menu");
 
     return CEEPEW_OK;
 }
@@ -2300,54 +2364,11 @@ CeePewErr_t ui_crypto_show_confirm(uint8_t countdown_sec)
     HalUIRect_t confirm_box = {.x = 20U, .y = 20U, .w = 88U, .h = 20U};
     hal_ui_rect(&confirm_box, HAL_UI_WHITE);
 
-    /* Display instruction */
-    hal_ui_text(28U, 26U, "Press button", HAL_UI_WHITE);
-
-    /* Display countdown timer */
+    /* Display countdown timer inside the box */
     char countdown_str[16];
     (void)snprintf(countdown_str, sizeof(countdown_str), "%u sec", (unsigned int)countdown_sec);
-    hal_ui_text(40U, 46U, countdown_str, HAL_UI_WHITE);
+    hal_ui_text(40U, 26U, countdown_str, HAL_UI_WHITE);
 
-    return CEEPEW_OK;
-}
-
-/* Helper: render code incorrect (mismatch) screen */
-static CeePewErr_t render_code_incorrect(void)
-{
-    hal_ui_clear();
-    uint32_t f = g_ui_ctx.anim.frame_count;
-
-    hal_ui_text(22U, 8U, "CODE MISMATCH", HAL_UI_WHITE);
-    draw_hline(0U, 18U, 128U);
-
-    /* Instructions */
-    hal_ui_text(8U, 30U, "Codes did not match.", HAL_UI_WHITE);
-    hal_ui_text(8U, 40U, "D=Retry    S=Cancel", HAL_UI_WHITE);
-
-    /* Button handling is done in ui_manager_update() — animate prompt */
-    uint8_t blink = (uint8_t)((f / 8U) % 2U);
-    if (blink == 0U) { draw_hline(8U, 46U, 112U); }
-
-    g_ui_ctx.anim.frame_count++;
-    return CEEPEW_OK;
-}
-
-/* Helper: render code different screen — subtle variant */
-static CeePewErr_t render_code_different(void)
-{
-    hal_ui_clear();
-    uint32_t f = g_ui_ctx.anim.frame_count;
-
-    hal_ui_text(12U, 8U, "CODE DIFFER", HAL_UI_WHITE);
-    draw_hline(0U, 18U, 128U);
-
-    hal_ui_text(8U, 30U, "Remote code differs.", HAL_UI_WHITE);
-    hal_ui_text(8U, 40U, "D=Re-enter  S=Back", HAL_UI_WHITE);
-
-    uint8_t blink = (uint8_t)((f / 6U) % 2U);
-    if (blink == 0U) { draw_hline(8U, 46U, 112U); }
-
-    g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
 }
 
@@ -2356,130 +2377,36 @@ static CeePewErr_t render_cryptogram(void)
     hal_ui_clear();
 
     uint32_t f = g_ui_ctx.anim.frame_count;
-
-    /* Retrieve local commitment */
-    CeePewErr_t err = session_get_commitment(g_ui_ctx.commitment);
-    if (err != CEEPEW_OK) {
-        hal_ui_text(8U, 20U, "Commit error", HAL_UI_WHITE);
-        (void)hal_ui_flush();
-        return err;
-    }
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
 
     /* Title */
-    hal_ui_text(20U, 2U, "COMMITMENT CODE", HAL_UI_WHITE);
+    ui_draw_centered_text(2U, "KEYS VERIFIED");
     draw_hline(0U, 11U, 128U);
-    hal_ui_text(4U, 13U, "SHA-256 / 32B", HAL_UI_WHITE);
 
-    /* Hex rows at original position y=20 to leave room for status text */
-    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 10U, 20U);
+    /* Show both commitments side-by-side */
+    hal_ui_text(4U, 14U, "Local:", HAL_UI_WHITE);
+    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 4U, 22U);
 
-    /* Determine match status */
-    uint8_t status = 0U;
-    if (g_ble_ctx.commitment_verified) {
-        uint8_t match = 1U;
-        for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
-            if (g_ui_ctx.commitment[i] != g_ble_ctx.commitment_digest[i]) {
-                match = 0U; break;
-            }
-        }
-        status = match ? 1U : 2U;
-        g_ui_ctx.commitment_verified = (match == 1U);
+    hal_ui_text(4U, 40U, "Peer:", HAL_UI_WHITE);
+    ui_draw_hex_rows(g_ui_ctx.peer_commitment, CEEPEW_COMMITMENT_BYTES, 4U, 48U);
+
+    /* Large tick mark animation */
+    uint8_t tick_phase = (uint8_t)((f / 6U) % 2U);
+    if (tick_phase == 0U) {
+        ui_draw_centered_text(56U, "\x7e KEYS MATCH \x7e");
     } else {
-        /* FIX C: Early mismatch detection — before waiting, check if peer
-         * commitment has arrived. If so, compare immediately. This prevents
-         * infinite "Waiting for peer" if codes don't match.
-         * Only compare if peer_commitment_len > 0, meaning the write succeeded. */
-        uint8_t peer_has_commitment = 0U;
-        for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
-            peer_has_commitment |= g_ble_ctx.commitment_digest[i];
-        }
-        if (peer_has_commitment != 0U) {
-            uint8_t match = 1U;
-            for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
-                if (g_ui_ctx.commitment[i] != g_ble_ctx.commitment_digest[i]) {
-                    match = 0U; break;
-                }
-            }
-            /* Set status to mismatch (2) if codes differ */
-            status = match ? 1U : 2U;
-        }
+        ui_draw_centered_text(56U, "  KEYS MATCH  ");
     }
 
-    if (status == 0U) {
-        /* Waiting — animated spinner at left, moved to bottom row for visibility */
-        const char *spin = "|/-\\";
-        char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
-        hal_ui_text(4U, Y_STATUS, sp, HAL_UI_WHITE);
-        hal_ui_text(14U, Y_STATUS, "Waiting for peer", HAL_UI_WHITE);
+    /* Auto-advance after CEEPEW_KEYS_VERIFIED_HOLD_MS */
+    uint32_t elapsed = (g_ui_ctx.crypto_confirm_start_ms != 0U &&
+                       now_ms >= g_ui_ctx.crypto_confirm_start_ms)
+                    ? (now_ms - g_ui_ctx.crypto_confirm_start_ms) : 0U;
 
-        /* Check timeout: 30 seconds from pairing_start_ms */
-        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-        uint32_t elapsed = (g_ui_ctx.pairing_start_ms != 0U &&
-                           now_ms >= g_ui_ctx.pairing_start_ms)
-                         ? (now_ms - g_ui_ctx.pairing_start_ms) : 0U;
-        if (elapsed >= 30000U) {
-            /* Timeout: transition to failed state */
-            g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
-            (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-            g_ui_ctx.transition_ready = true;
-            (void)hal_ui_flush();
-            return CEEPEW_OK;
-        }
-
-        /* Sweeping underline (moved down with text) */
-        uint8_t ul_x = (uint8_t)((f * 3U) % 128U);
-        draw_hline(ul_x, 52U, 10U);
-
-    } else if (status == 1U) {
-        /* MATCH — expanding rings from centre of display */
-        hal_ui_text(4U, 40U, "\x7e MATCH \x7e", HAL_UI_WHITE);
-
-        uint8_t ring_r = (uint8_t)((f % 16U) * 2U);
-        if (ring_r > 0U && ring_r < 30U) {
-            draw_circle(64, 44, ring_r);
-        }
-        uint8_t ring2_r = (uint8_t)(((f + 8U) % 16U) * 2U);
-        if (ring2_r > 0U && ring2_r < 30U) {
-            draw_circle(64, 44, ring2_r);
-        }
-
-        /* Confirmation sub-panel: show sync status */
-        uint32_t now_ms   = (uint32_t)(esp_timer_get_time() / 1000LL);
-        uint32_t elapsed  = (g_ui_ctx.crypto_confirm_start_ms != 0U &&
-                             now_ms >= g_ui_ctx.crypto_confirm_start_ms)
-                          ? (now_ms - g_ui_ctx.crypto_confirm_start_ms) : 0U;
-        uint32_t rem_ms   = (elapsed < 30000U) ? (30000U - elapsed) : 0U;
-
-        /* Check peer readiness: both must signal ready before transition */
-        if (transport_ble_both_ready_for_chat()) {
-            char cd_str[20U];
-            (void)snprintf(cd_str, sizeof(cd_str), "Ready! Press btn");
-            hal_ui_text(12U, 54U, cd_str, HAL_UI_WHITE);
-
-            if (g_ui_ctx.button_pressed) {
-                (void)ui_manager_transition_to(UI_STATE_CHAT);
-                g_ui_ctx.transition_ready = true;
-            }
-        } else {
-            /* Waiting for peer to signal ready — show simple text and visual cue */
-            hal_ui_text(20U, 54U, "Syncing...", HAL_UI_WHITE);
-
-            if (rem_ms == 0U) {
-                /* Timeout: transition anyway */
-                (void)ui_manager_transition_to(UI_STATE_CHAT);
-                g_ui_ctx.transition_ready = true;
-            }
-        }
-
-    } else {
-        /* MISMATCH — pulsing X with bracket animation */
-        uint8_t blink = (uint8_t)((f / 5U) % 2U);
-        if (blink == 0U) {
-            hal_ui_text(4U,  48U, ">", HAL_UI_WHITE);
-            hal_ui_text(14U, 48U, "MISMATCH", HAL_UI_WHITE);
-            hal_ui_text(62U, 48U, "<", HAL_UI_WHITE);
-        }
-        hal_ui_text(4U, 56U, "Restart to re-pair", HAL_UI_WHITE);
+    if (elapsed >= CEEPEW_KEYS_VERIFIED_HOLD_MS) {
+        g_ui_ctx.crypto_confirm_start_ms = 0U;
+        (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+        g_ui_ctx.transition_ready = true;
     }
 
     g_ui_ctx.anim.frame_count++;
@@ -2492,7 +2419,7 @@ static CeePewErr_t render_chat_menu(void)
     hal_ui_clear();
 
     /* Title */
-    hal_ui_text(20U, 1U, "SECURE CHAT", HAL_UI_WHITE);
+    ui_draw_centered_text(1U, "SECURE CHAT");
     draw_hline(0U, 11U, 128U);
 
     /* Two options only */
@@ -2524,19 +2451,21 @@ static CeePewErr_t render_chat_menu(void)
     return CEEPEW_OK;
 }
 
-/* Phase 4: Chat compose — cursor-aware editor with selectable commands */
+/* Phase 4: Chat compose — flat character selector with all 66 options */
 static CeePewErr_t render_chat_compose(void)
 {
     CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(g_ui_ctx.compose_length <= 255U, CEEPEW_ERR_BOUNDS);
 
     hal_ui_clear();
+    compose_terminate_buffer();
+
+    /* Flat pot-to-choice mapping across all 66 options (62 chars + DEL/<-/->/SEND) */
     uint8_t choice_idx = (uint8_t)(((uint16_t)g_ui_ctx.user_input * COMPOSE_TOTAL_CHOICES) / 256U);
     if (choice_idx >= COMPOSE_TOTAL_CHOICES) {
         choice_idx = (uint8_t)(COMPOSE_TOTAL_CHOICES - 1U);
     }
     g_ui_ctx.keyboard_col = choice_idx;
-    compose_terminate_buffer();
 
     /* ── Status bar ───────────────────────────────────────────────── */
     char hdr[24U];
@@ -2563,7 +2492,7 @@ static CeePewErr_t render_chat_compose(void)
         hal_ui_text(text_x, 18U, sel_label, HAL_UI_WHITE);
     }
 
-    /* Neighbour hints */
+    /* Neighbour hints around current selection (flat, no category wrapping) */
     if (choice_idx > 0U) {
         char prev_buf[4U];
         const char *prev = compose_choice_label((uint8_t)(choice_idx - 1U), prev_buf);
@@ -2575,26 +2504,14 @@ static CeePewErr_t render_chat_compose(void)
         hal_ui_text(76U, 18U, next, HAL_UI_WHITE);
     }
 
-    const char *cat = (choice_idx < 26U)   ? "A-Z"
-                    : (choice_idx < 36U)   ? "0-9"
-                    : (choice_idx < COMPOSE_CHAR_COUNT) ? "PUNCT"
-                    : (choice_idx == COMPOSE_ACTION_DEL_IDX) ? "DEL"
-                    : (choice_idx == COMPOSE_ACTION_LEFT_IDX) ? "LEFT"
-                    : (choice_idx == COMPOSE_ACTION_RIGHT_IDX) ? "RIGHT"
-                    : "EDIT";
-    char cat_str[16U];
-    (void)snprintf(cat_str, sizeof(cat_str), "[%s]", cat);
-    hal_ui_text(46U, 30U, cat_str, HAL_UI_WHITE);
-
     /* ── Message preview with cursor ─────────────────────────────── */
     draw_hline(0U, 36U, 128U);
     render_compose_preview_line();
 
     /* ── Footer controls ─────────────────────────────────────────── */
     draw_hline(0U, 47U, 128U);
-    hal_ui_text(0U, 48U, "TAP=use sel", HAL_UI_WHITE);
-    hal_ui_text(0U, 56U, "HOLD=send confirm", HAL_UI_WHITE);
-    hal_ui_text(92U, 56U, "DEL/<-/->", HAL_UI_WHITE);
+    ui_draw_centered_text(48U, "TAP=sel");
+    ui_draw_centered_text(56U, "HLD=menu");
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2606,7 +2523,7 @@ static CeePewErr_t render_chat_send_confirm(void)
     g_ui_ctx.chat_send_confirm_selected = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
     compose_terminate_buffer();
 
-    hal_ui_text(20U, 1U, "SEND MESSAGE", HAL_UI_WHITE);
+    ui_draw_centered_text(1U, "SEND MESSAGE");
     draw_hline(0U, 11U, 128U);
     hal_ui_text(4U, 14U, "send message:", HAL_UI_WHITE);
 
@@ -2655,9 +2572,6 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.countdown_start_ms = now_ms;
             g_ui_ctx.pairing_result_start_ms = 0U;
             g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_NONE;
-        } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS) {
-            g_ui_ctx.pairing_result_start_ms = now_ms;
-            g_ui_ctx.button_prev = false;
         } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
             g_ui_ctx.pairing_result_start_ms = now_ms;
             g_ui_ctx.button_prev = false;
@@ -2696,17 +2610,11 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.countdown_start_ms = now_ms;
             g_ui_ctx.pairing_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_KEYDER) {
-            g_ui_ctx.fingerprint_confirmed = false;
-        } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT) {
-            g_ui_ctx.fingerprint_confirmed = false;
-            if (session_get_fingerprint(g_ui_ctx.fingerprint) != CEEPEW_OK) {
-                memset(g_ui_ctx.fingerprint, 0U, sizeof(g_ui_ctx.fingerprint));
-            }
-        } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT_CONFIRM) {
-            g_ui_ctx.fingerprint_confirmed = false;
+            /* Key derivation state - no special init needed */
+        } else if (g_ui_ctx.current_state == UI_STATE_CONFIRM) {
+            /* Auto-verify on entry: start verification timer */
+            g_ui_ctx.pairing_start_ms = now_ms;
             g_ui_ctx.button_prev = false;
-            g_ui_ctx.reject_sequence_start_ms = 0U;
-            g_ui_ctx.error_start_ms = 0U;
         } else if (g_ui_ctx.current_state == UI_STATE_CRYPTOGRAM) {
             /* Initialize cryptogram confirmation context */
             memset(g_ui_ctx.commitment, 0U, CEEPEW_COMMITMENT_BYTES);
@@ -2751,24 +2659,26 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
-    if (g_ui_ctx.current_state == UI_STATE_PAIRING_SUCCESS) {
-        if (g_ui_ctx.pairing_result_start_ms != 0U &&
-            (now_ms - g_ui_ctx.pairing_result_start_ms) >= CEEPEW_PAIRING_SUCCESS_HOLD_MS) {
-            g_ui_ctx.pairing_result_start_ms = 0U;
-            (void)ui_manager_transition_to(UI_STATE_KEYDER);
-            g_ui_ctx.transition_ready = true;
-        }
-    } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
+    if (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
         /* Spec §4: PAIRING_FAILED persists until button press.
          * The user must explicitly acknowledge the failure before the
          * device returns to discovery. The legacy auto-restart timer
          * (CEEPEW_PAIRING_FAILED_HOLD_MS) is removed to match the spec. */
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
+            ESP_LOGI("ui", "PAIRING_FAILED: button press detected — release to acknowledge");
+            (void)rgb_set_pattern(RGB_GREEN_BLINK);
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            ESP_LOGI("ui", "PAIRING_FAILED: button released — acknowledging failure, restarting discovery");
             g_ui_ctx.pairing_result_start_ms = 0U;
             (void)ui_restart_discovery_from_pairing();
             g_ui_ctx.transition_ready = true;
+            /* If peer is still cached after restart, go directly to CODE_ENTRY
+             * for immediate retry instead of waiting for discovery. */
+            if (transport_ble_has_peer_cached()) {
+                (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
+            }
+            (void)rgb_set_pattern(RGB_BLUE_PULSE);
         }
     }
 
@@ -2829,10 +2739,10 @@ CeePewErr_t ui_manager_update(void)
                 now_ms >= g_ui_ctx.code_entry_start_ms &&
                 (now_ms - g_ui_ctx.code_entry_start_ms) >= ENTRY_ARM_MS) {
                 if (transport_ble_has_peer_cached()) {
-                    /* Confirm code and start countdown */
-                    (void)ui_manager_transition_to(UI_STATE_PAIRING);
+                    /* Confirm code and start verification */
+                    memcpy(g_ui_ctx.peer_mac, g_ble_ctx.peer_mac, 6U);
+                    (void)ui_manager_transition_to(UI_STATE_CONFIRM);
                     g_ui_ctx.pairing_start_ms = now_ms;
-                    g_ui_ctx.countdown_start_ms = now_ms;
                     g_ui_ctx.transition_ready = true;
                 } else {
                     ESP_LOGW("ui", "pairing confirm ignored: peer unavailable");
@@ -2846,6 +2756,7 @@ CeePewErr_t ui_manager_update(void)
                 else { /* wrap to first digit */ g_ui_ctx.code_selected = 0U; }
             }
         }
+
     } else if (g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
        /* Button press during discovery: if peer found, connect and transition */
        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
@@ -2853,37 +2764,7 @@ CeePewErr_t ui_manager_update(void)
                (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
                g_ui_ctx.transition_ready = true;
            }
-           /* If peer not yet discovered, ignore button press (no-op) */
-       }
-    } else if (g_ui_ctx.current_state == UI_STATE_CODE_INCORRECT) {
-        /* Code mismatch screen: short press = retry, long hold = cancel */
-        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            g_ui_ctx.button_press_start_ms = now_ms;
-        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
-            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms) ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 1000U) {
-                /* Cancel and return to discovery */
-                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
-                g_ui_ctx.transition_ready = true;
-            } else {
-                /* Retry: go back to code entry */
-                (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
-                g_ui_ctx.transition_ready = true;
-            }
-        }
-    } else if (g_ui_ctx.current_state == UI_STATE_CODE_DIFFERENT) {
-        /* Remote code different: short press = re-enter, long hold = back to discovery */
-        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            g_ui_ctx.button_press_start_ms = now_ms;
-        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
-            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms) ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 1000U) {
-                (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
-                g_ui_ctx.transition_ready = true;
-            } else {
-                (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
-                g_ui_ctx.transition_ready = true;
-            }
+            /* If peer not yet discovered, ignore button press (no-op) */
         }
     } else if (g_ui_ctx.current_state == UI_STATE_PAIRING) {
         /* Pairing countdown: 3 s hold on the button = DEBUG hook that
@@ -2897,7 +2778,7 @@ CeePewErr_t ui_manager_update(void)
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                             ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
             if (dur >= 3000U) {
-                ESP_LOGW("ui", "Pairing screen: 3 s hold detected — triggering debug timeout");
+                ESP_LOGD("ui", "Pairing screen: 3 s hold detected — triggering debug timeout");
                 (void)transport_ble_debug_trigger_timeout();
                 /* Force the visual feedback bridge to re-evaluate immediately
                  * so the LED reflects the recovery state on the very next
@@ -2908,38 +2789,14 @@ CeePewErr_t ui_manager_update(void)
              * the user has confirmed the code. Short press is ignored
              * to avoid accidental state churn. */
         }
-    } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT) {
-        if (g_ui_ctx.diag_mode) {
-            (void)ui_manager_transition_to(UI_STATE_ERROR);
-            g_ui_ctx.reject_sequence_start_ms = now_ms;
-            g_ui_ctx.error_start_ms = now_ms;
-            g_ui_ctx.transition_ready = true;
-        } else if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            (void)ui_manager_transition_to(UI_STATE_FINGERPRINT_CONFIRM);
-            g_ui_ctx.transition_ready = true;
-        }
-    } else if (g_ui_ctx.current_state == UI_STATE_FINGERPRINT_CONFIRM) {
-        if (g_ui_ctx.diag_mode) {
-            (void)ui_manager_transition_to(UI_STATE_ERROR);
-            g_ui_ctx.reject_sequence_start_ms = now_ms;
-            g_ui_ctx.error_start_ms = now_ms;
-            g_ui_ctx.transition_ready = true;
-        } else if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            g_ui_ctx.fingerprint_confirmed = true;
-            (void)ui_manager_transition_to(UI_STATE_CHAT);
-            g_ui_ctx.transition_ready = true;
-        }
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
-        /* Chat thread: short press opens menu, long hold returns to cryptogram */
+        /* Chat thread: long press returns to menu */
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 1500U) {
-                (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
-                g_ui_ctx.transition_ready = true;
-            } else {
+            if (dur >= CEEPEW_CHAT_LONG_PRESS_MS) {
                 (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
                 g_ui_ctx.transition_ready = true;
             }
@@ -2951,9 +2808,9 @@ CeePewErr_t ui_manager_update(void)
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 1500U) {
-                /* Long hold in menu → back to cryptogram to re-check state */
-                (void)ui_manager_transition_to(UI_STATE_CRYPTOGRAM);
+            if (dur >= CEEPEW_CHAT_LONG_PRESS_MS) {
+                /* Long hold in menu -> back to chat thread */
+                (void)ui_manager_transition_to(UI_STATE_CHAT);
                 g_ui_ctx.transition_ready = true;
             } else {
                 /* Short press → act on selected menu option */
@@ -2969,19 +2826,20 @@ CeePewErr_t ui_manager_update(void)
             }
         }
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
-        /* Message compose: tap applies selection, long press opens confirm */
-        g_ui_ctx.keyboard_col = ui_map_pot_to_index(g_ui_ctx.user_input, COMPOSE_TOTAL_CHOICES);
+        /* Flat compose: pot maps across all 66 options, long press → menu */
+        g_ui_ctx.keyboard_col = (uint8_t)(((uint16_t)g_ui_ctx.user_input * COMPOSE_TOTAL_CHOICES) / 256U);
+        if (g_ui_ctx.keyboard_col >= COMPOSE_TOTAL_CHOICES) {
+            g_ui_ctx.keyboard_col = (uint8_t)(COMPOSE_TOTAL_CHOICES - 1U);
+        }
+
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms) ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
             if (dur >= 1800U) {
-                /* Long press: show confirmation screen */
-                if (g_ui_ctx.compose_length > 0U) {
-                    g_ui_ctx.chat_send_confirm_selected = 0U;
-                    (void)ui_manager_transition_to(UI_STATE_CHAT_SEND_CONFIRM);
-                    g_ui_ctx.transition_ready = true;
-                }
+                /* Long press: return to chat menu */
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
             } else {
                 /* Short press: apply selected character/command */
                 CeePewErr_t edit_err = compose_commit_selection(g_ui_ctx.keyboard_col);
@@ -2996,15 +2854,30 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             if (g_ui_ctx.chat_send_confirm_selected == 0U) {
+                /* Obtain the peer MAC from the session FSM (phase-locked, survives
+                 * BLE teardown). Using g_ble_ctx.peer_mac was unreliable because
+                 * transport_ble_deinit() can zero it after key derivation, causing
+                 * hal_radio_set_peer() to fail with CEEPEW_ERR_PARAM (mac_is_zero). */
+                uint8_t session_peer_mac[6] = {0U};
+                if (session_get_peer_device_id(session_peer_mac) != CEEPEW_OK) {
+                    ESP_LOGW("ui", "send: session peer MAC not locked — aborting send");
+                    g_ui_ctx.reject_sequence_start_ms = 0U;
+                    g_ui_ctx.error_start_ms = now_ms;
+                    (void)ui_manager_transition_to(UI_STATE_ERROR);
+                    g_ui_ctx.transition_ready = true;
+                    /* break out of the else-if chain */
+                    goto send_confirm_done;
+                }
                 uint8_t peer_pk[32U];
                 CeePewErr_t peer_err = session_get_peer_public_key(peer_pk);
                 if (peer_err == CEEPEW_OK) {
                     CeePewErr_t send_err = session_send_message(
                         (const uint8_t *)g_ui_ctx.compose_buffer,
                         (uint16_t)g_ui_ctx.compose_length,
-                        g_ble_ctx.peer_mac,
+                        session_peer_mac,
                         peer_pk);
                     ceepew_secure_zero(peer_pk, sizeof(peer_pk));
+
                     if (send_err == CEEPEW_OK) {
                         ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
                         for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
@@ -3034,6 +2907,7 @@ CeePewErr_t ui_manager_update(void)
                 g_ui_ctx.transition_ready = true;
             }
         }
+    send_confirm_done:;
     } else if (g_ui_ctx.current_state == UI_STATE_ERROR ||
                g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
         if (g_ui_ctx.current_state == UI_STATE_ERROR && g_ui_ctx.reject_sequence_start_ms == 0U) {
@@ -3060,7 +2934,7 @@ CeePewErr_t ui_manager_update(void)
                 if (elapsed_ms >= seq_ms) {
                     /* Debounce UI-originated wipes to prevent rapid repeated wipes during transient UI animations */
                     if (now_ms - s_last_ui_wipe_ms > 5000U) {
-                        ESP_LOGW("ui", "session_wipe requested by UI (error timeout) — debounced");
+                        ESP_LOGI("ui", "session_wipe requested by UI (error timeout) — debounced");
                         s_last_ui_wipe_ms = now_ms;
                         session_wipe();
                     }
@@ -3087,7 +2961,7 @@ CeePewErr_t ui_manager_update(void)
          * device can re-advertise/scan and attempt recovery. This prevents
          * repeated secure wipes caused by transient scan/adv gaps. */
         if (now_ms - s_last_ui_wipe_ms > 5000U) {
-            ESP_LOGW("ui", "discovery timeout — aborting pairing and returning to discovery (no wipe)");
+            ESP_LOGI("ui", "discovery timeout — aborting pairing and returning to discovery (no wipe)");
             s_last_ui_wipe_ms = now_ms;
             /* Ensure BLE link is torn down and UI returns to discovery state */
             (void)transport_ble_disconnect();
@@ -3104,7 +2978,7 @@ CeePewErr_t ui_manager_update(void)
         now_s >= g_ble_ctx.pairing_start_ts &&
         (now_s - g_ble_ctx.pairing_start_ts) >= CEEPEW_PAIRING_TIMEOUT_S) {
         if (now_ms - s_last_ui_wipe_ms > 5000U) {
-            ESP_LOGW("ui", "pairing timeout — aborting pairing and returning to discovery (no wipe)");
+            ESP_LOGI("ui", "pairing timeout — aborting pairing and returning to discovery (no wipe)");
             s_last_ui_wipe_ms = now_ms;
             (void)ui_restart_discovery_from_pairing();
         }
@@ -3436,19 +3310,14 @@ CeePewErr_t ui_manager_draw(void)
         case UI_STATE_COUNTDOWN:          err = render_syncing();             break;
         case UI_STATE_PAIRING:            err = render_countdown();           break;
         case UI_STATE_CONFIRM:            err = render_confirm();             break;
-        case UI_STATE_PAIRING_SUCCESS:    err = render_pairing_success();     break;
         case UI_STATE_PAIRING_FAILED:     err = render_pairing_failed();      break;
         case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
-        case UI_STATE_FINGERPRINT:        err = render_fingerprint();         break;
-        case UI_STATE_FINGERPRINT_CONFIRM:err = render_fingerprint_confirm(); break;
         case UI_STATE_CHAT:               err = render_chat_thread();         break;
         case UI_STATE_CHAT_MENU:          err = render_chat_menu();           break;
         case UI_STATE_CHAT_COMPOSE:       err = render_chat_compose();        break;
         case UI_STATE_CHAT_SEND_CONFIRM:  err = render_chat_send_confirm();   break;
         case UI_STATE_CRYPTOGRAM:         err = render_cryptogram();          break;
         case UI_STATE_NONCE_EXHAUSTED:    err = ui_show_nonce_exhausted();    break;
-        case UI_STATE_CODE_INCORRECT:     err = render_code_incorrect();      break;
-        case UI_STATE_CODE_DIFFERENT:     err = render_code_different();      break;
         case UI_STATE_INFO:               err = render_info();                break;
         case UI_STATE_ERROR:              err = render_error();               break;
         default:                          return CEEPEW_ERR_PARAM;
@@ -3496,56 +3365,6 @@ uint8_t ui_manager_get_anim_frame(void)
 /* Phase 4: Fingerprint Confirmation and Nonce Exhausted Screens */
 /* ────────────────────────────────────────────────────────────────────── */
 
-/* Phase 4: Fingerprint confirmation panel.
- * Displays 16-byte fingerprint in hex, peer MAC, and D=Accept/S=Reject prompts.
- */
-CeePewErr_t ui_fingerprint_show_confirm(const uint8_t fingerprint[16],
-                                        const uint8_t peer_mac[6])
-{
-    CEEPEW_ASSERT(fingerprint != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
-
-    hal_ui_clear();
-
-    /* Title */
-    hal_ui_text(0U, 0U, "FINGERPRINT", HAL_UI_WHITE);
-
-    /* Fingerprint hex grouped into 2-byte blocks for readability */
-    ui_draw_hex_rows(fingerprint, 16U, 0U, 14U);
-
-    /* Line 3: Peer MAC */
-    char peer_str[14];
-    (void)snprintf(peer_str, sizeof(peer_str), "Peer: %02X%02X",
-                   peer_mac[4U], peer_mac[5U]);
-    hal_ui_text(0U, 36U, peer_str, HAL_UI_WHITE);
-
-    /* Line 4: Prompt */
-    hal_ui_text(0U, 48U, "D=Yes  S=No", HAL_UI_WHITE);
-
-    /* flush handled by ui_manager_draw() */
-    return CEEPEW_OK;
-}
-
-CeePewErr_t ui_fingerprint_show_display(const uint8_t fingerprint[16],
-                                        const uint8_t peer_mac[6])
-{
-    CEEPEW_ASSERT(fingerprint != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
-
-    hal_ui_clear();
-    hal_ui_text(0U, 0U, "PEER FINGERPRINT", HAL_UI_WHITE);
-
-    ui_draw_hex_rows(fingerprint, 16U, 0U, 16U);
-
-    char peer_str[20];
-    (void)snprintf(peer_str, sizeof(peer_str), "Peer %02X%02X", peer_mac[4U], peer_mac[5U]);
-    hal_ui_text(0U, 40U, peer_str, HAL_UI_WHITE);
-    hal_ui_text(0U, 52U, "Press to confirm", HAL_UI_WHITE);
-
-    /* flush handled by ui_manager_draw() */
-    return CEEPEW_OK;
-}
-
 /* Phase 4: Nonce exhausted error panel.
  * Displays "Session expired — nonce limit hit. Restart to re-pair."
  * with red blink animation.
@@ -3555,12 +3374,12 @@ CeePewErr_t ui_show_nonce_exhausted(void)
     hal_ui_clear();
 
     /* Title */
-    hal_ui_text(0U, 0U, "NONCE EXHAUSTED", HAL_UI_WHITE);
+    ui_draw_centered_text(0U, "NONCE EXHAUSTED");
 
-    /* Error message (multi-line) */
-    hal_ui_text(0U, 16U, "Session expired.", HAL_UI_WHITE);
-    hal_ui_text(0U, 26U, "Nonce limit hit.", HAL_UI_WHITE);
-    hal_ui_text(0U, 36U, "Restart to pair.", HAL_UI_WHITE);
+    /* Error message (multi-line) — centered */
+    ui_draw_centered_text(16U, "Session expired.");
+    ui_draw_centered_text(26U, "Nonce limit hit.");
+    ui_draw_centered_text(36U, "Restart to pair.");
 
     /* Blinking indicator */
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
@@ -3580,11 +3399,11 @@ static CeePewErr_t render_error(void)
 {
     hal_ui_clear();
     bool send_fail = (g_ui_ctx.reject_sequence_start_ms == 0U);
-    hal_ui_text(16U, 8U, send_fail ? "SEND FAILED" : "SECURITY RESET", HAL_UI_WHITE);
-    hal_ui_text(8U, 22U, send_fail ? "Could not send" : "Fingerprint rejected", HAL_UI_WHITE);
-    hal_ui_text(8U, 34U, send_fail ? "Draft kept" : "Wiping session...", HAL_UI_WHITE);
+    ui_draw_centered_text(8U, send_fail ? "SEND FAILED" : "SECURITY RESET");
+    ui_draw_centered_text(22U, send_fail ? "Could not send" : "Fingerprint rejected");
+    ui_draw_centered_text(34U, send_fail ? "Draft kept" : "Wiping session...");
     if (send_fail) {
-        hal_ui_text(4U, 46U, "Tap=retry  Hold=menu", HAL_UI_WHITE);
+        ui_draw_centered_text(46U, "Tap=retry  Hold=menu");
     }
 
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
@@ -3618,13 +3437,11 @@ void ui_manager_reset_to_discovery(void)
     g_ui_ctx.transition_ready = false;
     g_ui_ctx.button_pressed = false;
     g_ui_ctx.button_prev = false;
-    g_ui_ctx.fingerprint_confirmed = false;
     g_ui_ctx.reject_sequence_start_ms = 0U;
     g_ui_ctx.error_start_ms = 0U;
     g_ui_ctx.pairing_result_start_ms = 0U;
     g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_NONE;
     g_ui_ctx.crypto_confirm_start_ms = 0U;
-    memset(g_ui_ctx.fingerprint, 0U, sizeof(g_ui_ctx.fingerprint));
     memset(g_ui_ctx.peer_mac, 0U, sizeof(g_ui_ctx.peer_mac));
 
     if (transport_ble_is_initialised()) {
@@ -3646,7 +3463,7 @@ CeePewErr_t ui_keygen_show_progress(uint8_t frame_index)
     hal_ui_clear();
 
     /* "DERIVING KEY..." label */
-    hal_ui_text(24U, 2U, "DERIVING KEY...", HAL_UI_WHITE);
+    ui_draw_centered_text(2U, "DERIVING KEY...");
     draw_hline(0U, 12U, 128U);
 
     /* Matrix rain — 10 columns, 6 rows, same charset as render_keyder_anim */
@@ -3667,75 +3484,9 @@ CeePewErr_t ui_keygen_show_progress(uint8_t frame_index)
         }
     }
 
-    /* Progress bar — frame_index 0–99 maps to 0–120 px width */
-    HalUIRect_t pbar_bg = { .x = 4U, .y = 46U, .w = 120U, .h = 8U };
-    hal_ui_rect(&pbar_bg, HAL_UI_WHITE);
-    uint8_t prog_w = (uint8_t)((frame_index < 100U) ? (frame_index * 120U / 100U) : 120U);
-    if (prog_w > 0U) {
-        HalUIRect_t prog = { .x = 4U, .y = 46U, .w = prog_w, .h = 8U };
-        hal_ui_rect_fill(&prog, HAL_UI_WHITE);
-    }
-
-    return CEEPEW_OK;
-}
-
-CeePewErr_t ui_keygen_show_fingerprint(bool show_commitment)
-{
-    hal_ui_clear();
-
-    hal_ui_text(4U, 2U, "FINGERPRINT", HAL_UI_WHITE);
-    draw_hline(0U, 11U, 128U);
-
-    /* Build 32-char hex string from 16-byte fingerprint in g_ui_ctx */
-    char fp_hex[33U];
-    for (uint8_t i = 0U; i < 16U; i++) {
-        uint8_t b = g_ui_ctx.fingerprint[i];
-        uint8_t h = (b >> 4U) & 0x0FU;
-        uint8_t l = b & 0x0FU;
-        fp_hex[i * 2U]      = (h < 10U) ? (char)('0' + h) : (char)('A' + h - 10U);
-        fp_hex[i * 2U + 1U] = (l < 10U) ? (char)('0' + l) : (char)('A' + l - 10U);
-    }
-    fp_hex[32U] = '\0';
-
-    /* Row 1: chars 0–15 at y=16 */
-    char row1[17U];
-    (void)memcpy(row1, fp_hex, 16U);
-    row1[16U] = '\0';
-    hal_ui_text(4U, 16U, row1, HAL_UI_WHITE);
-
-    /* Row 2: chars 16–31 at y=26 */
-    char row2[17U];
-    (void)memcpy(row2, fp_hex + 16U, 16U);
-    row2[16U] = '\0';
-    hal_ui_text(4U, 26U, row2, HAL_UI_WHITE);
-
-    /* 8x8 visual grid from fingerprint bytes */
-    for (uint8_t gy = 0U; gy < 8U; gy++) {
-        for (uint8_t gx = 0U; gx < 8U; gx++) {
-            uint8_t byte_idx = gy;
-            uint8_t bit_idx  = 7U - gx;
-            bool filled = (g_ui_ctx.fingerprint[byte_idx] >> bit_idx) & 1U;
-            if (filled) {
-                HalUIRect_t px = {
-                    .x = (uint8_t)(4U + gx * 2U),
-                    .y = (uint8_t)(38U + gy * 2U),
-                    .w = 2U, .h = 2U
-                };
-                hal_ui_rect_fill(&px, HAL_UI_WHITE);
-            }
-        }
-    }
-
-    /* Peer MAC */
-    char mac_str[18U];
-    (void)snprintf(mac_str, sizeof(mac_str), "Peer: %02X%02X%02X%02X",
-                   g_ui_ctx.peer_mac[2U], g_ui_ctx.peer_mac[3U],
-                   g_ui_ctx.peer_mac[4U], g_ui_ctx.peer_mac[5U]);
-    hal_ui_text(24U, 56U, mac_str, HAL_UI_WHITE);
-
-    if (show_commitment) {
-        hal_ui_text(4U, 38U, "COMMIT", HAL_UI_WHITE);
-    }
+    /* Color-inverting progress bar with text inside */
+    uint8_t prog_pct = (uint8_t)((frame_index < 100U) ? frame_index : 100U);
+    draw_progress_bar_inverted_text(4U, 46U, 120U, 10U, prog_pct, "KEYGEN...");
 
     return CEEPEW_OK;
 }

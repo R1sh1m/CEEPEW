@@ -1,15 +1,19 @@
 /* components/ceepew_hal/esp_adc_cal.c
  *
- * ADC Calibration implementation — production-grade stable release.
+ * ADC Calibration implementation — CEE-PEW project-specific wrapper.
  *
- * Implements eFuse vref detection, linearity correction, and diagnostics
- * for ESP32 ADC calibration. Works across ESP-IDF versions (v5.x and v6.0+).
+ * This is NOT a verbatim copy of ESP-IDF's deprecated esp_adc_cal component.
+ * It provides a stable legacy-compatible API (v5.x style) on top of
+ * ESP-IDF v6.0.1's modern esp_adc/adc_cali API, which is used directly
+ * by hal_adc.c via adc_oneshot_*.
  *
- * Key features:
- * - eFuse vref detection with fallback to default (1100 mV)
- * - Linearity correction via stored calibration points
- * - Diagnostics API for production test firmware
- * - No dynamic allocation; all operations are stateless
+ * Kept for:
+ * - Code that may expect the legacy esp_adc_cal_characterize/raw_to_voltage API
+ * - Diagnostic helpers (esp_adc_cal_get_diagnostics) for production testing
+ *
+ * DO NOT modify to match upstream IDF — this is a project-owned abstraction.
+ * If migrating fully to the modern API, remove this file and update callers
+ * to use hal_adc.c / adc_oneshot_* directly.
  */
 
 #include "esp_adc_cal.h"

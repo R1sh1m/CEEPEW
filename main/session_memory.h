@@ -285,6 +285,26 @@ void session_ui_ctx_unlock(void);
  * is cheaper than 7 take/release pairs in a function body. */
 void session_ui_get_state_snapshot(UIState_t *out_state);
 
+/* ── Cross-core session wipe request (Phase 2.C2) ──────────────────────
+ * session_wipe() must run on Core 1 (session task) because it touches
+ * crypto_ctx, region allocator, and pipeline — all owned by Core 1.
+ * When the UI task (Core 0) needs a wipe (error timeout, user abort),
+ * it sets g_session_wipe_requested. The session task polls this flag
+ * once per main-loop tick and executes the actual wipe.
+ *
+ * g_session_wipe_requested is declared volatile and uses a memory
+ * barrier on write to guarantee visibility across cores without
+ * requiring a mutex. */
+extern volatile bool g_session_wipe_requested;
+
+/* Request a session wipe from the UI task (Core 0). The wipe will be
+ * executed by the session task (Core 1) on its next main-loop tick. */
+void session_request_wipe(void);
+
+/* Check and clear the wipe request flag. Called by the session task.
+ * Returns true if a wipe was requested. */
+bool session_check_wipe_requested(void);
+
 #ifdef __cplusplus
 }
 #endif

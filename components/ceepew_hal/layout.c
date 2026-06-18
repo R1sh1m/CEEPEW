@@ -49,14 +49,14 @@ static const LayoutZone_t s_boot_zones[] = {
 };
 
 static const LayoutZone_t s_discovery_zones[] = {
-    { "radar-panel",   { .x = 0U,  .y = 0U, .w = 53U, .h = 64U } },
-    { "info-panel",    { .x = 55U, .y = 0U, .w = 73U, .h = 64U } },
+    { "radar-panel",   { .x = 0U,  .y = 0U, .w = 50U, .h = 64U } },
+    { "info-panel",    { .x = 53U, .y = 0U, .w = 75U, .h = 64U } },
 };
 
 static const LayoutZone_t s_code_entry_zones[] = {
     { "title",         { .x = 0U,  .y = 0U,  .w = 128U, .h = 12U } },
-    { "code-grid",     { .x = 0U,  .y = 12U, .w = 128U, .h = 24U } },
-    { "selector",      { .x = 0U,  .y = 36U, .w = 128U, .h = 12U } },
+    { "code-grid",     { .x = 0U,  .y = 12U, .w = 128U, .h = 26U } },
+    { "selector",      { .x = 0U,  .y = 38U, .w = 128U, .h = 10U } },
     { "footer",        { .x = 0U,  .y = 48U, .w = 128U, .h = 16U } },
 };
 
@@ -75,19 +75,14 @@ static const LayoutZone_t s_pairing_result_zones[] = {
 
 static const LayoutZone_t s_confirm_zones[] = {
     { "title",         { .x = 0U,  .y = 0U,  .w = 128U, .h = 12U } },
-    { "animation",     { .x = 0U,  .y = 12U, .w = 128U, .h = 32U } },
-    { "prompt",        { .x = 0U,  .y = 44U, .w = 128U, .h = 20U } },
+    { "code_display",  { .x = 0U,  .y = 12U, .w = 128U, .h = 20U } },
+    { "status",        { .x = 0U,  .y = 32U, .w = 128U, .h = 16U } },
+    { "prompt",        { .x = 0U,  .y = 48U, .w = 128U, .h = 16U } },
 };
 
 static const LayoutZone_t s_keyder_zones[] = {
-    { "matrix",        { .x = 0U,  .y = 0U,  .w = 128U, .h = 52U } },
-    { "progress",      { .x = 0U,  .y = 52U, .w = 128U, .h = 12U } },
-};
-
-static const LayoutZone_t s_fingerprint_zones[] = {
-    { "title",         { .x = 0U,  .y = 0U,  .w = 128U, .h = 12U } },
-    { "rows",          { .x = 0U,  .y = 12U, .w = 128U, .h = 36U } },
-    { "footer",        { .x = 0U,  .y = 48U, .w = 128U, .h = 16U } },
+    { "matrix",        { .x = 0U,  .y = 0U,  .w = 128U, .h = 50U } },
+    { "progress",      { .x = 0U,  .y = 50U, .w = 128U, .h = 12U } },
 };
 
 static const LayoutZone_t s_chat_zones[] = {
@@ -98,8 +93,8 @@ static const LayoutZone_t s_chat_zones[] = {
 
 static const LayoutZone_t s_chat_compose_zones[] = {
     { "status",        { .x = 0U,  .y = 0U,  .w = 128U, .h = 10U } },
-    { "selector",      { .x = 0U,  .y = 10U, .w = 128U, .h = 26U } },
-    { "preview",       { .x = 0U,  .y = 36U, .w = 128U, .h = 11U } },
+    { "selector",      { .x = 0U,  .y = 10U, .w = 128U, .h = 24U } },
+    { "preview",       { .x = 0U,  .y = 34U, .w = 128U, .h = 13U } },
     { "legend",        { .x = 0U,  .y = 47U, .w = 128U, .h = 17U } },
 };
 
@@ -112,8 +107,8 @@ static const LayoutZone_t s_chat_send_confirm_zones[] = {
 
 static const LayoutZone_t s_cryptogram_zones[] = {
     { "title",         { .x = 0U,  .y = 0U,  .w = 128U, .h = 12U } },
-    { "code",          { .x = 0U,  .y = 12U, .w = 128U, .h = 34U } },
-    { "status",        { .x = 0U,  .y = 46U, .w = 128U, .h = 18U } },
+    { "code",          { .x = 0U,  .y = 12U, .w = 128U, .h = 38U } },
+    { "status",        { .x = 0U,  .y = 50U, .w = 128U, .h = 14U } },
 };
 
 static const LayoutZone_t s_nonce_zones[] = {
@@ -136,12 +131,9 @@ static const LayoutState_t s_states[] = {
     { UI_STATE_DISCOVERY,          "DISCOVERY",          s_discovery_zones,      (uint8_t)(sizeof(s_discovery_zones) / sizeof(s_discovery_zones[0])) },
     { UI_STATE_CODE_ENTRY,         "CODE_ENTRY",         s_code_entry_zones,     (uint8_t)(sizeof(s_code_entry_zones) / sizeof(s_code_entry_zones[0])) },
     { UI_STATE_COUNTDOWN,          "COUNTDOWN",          s_countdown_zones,      (uint8_t)(sizeof(s_countdown_zones) / sizeof(s_countdown_zones[0])) },
-    { UI_STATE_CODE_INCORRECT,     "CODE_INCORRECT",     s_pairing_result_zones, (uint8_t)(sizeof(s_pairing_result_zones) / sizeof(s_pairing_result_zones[0])) },
-    { UI_STATE_CODE_DIFFERENT,     "CODE_DIFFERENT",     s_pairing_result_zones, (uint8_t)(sizeof(s_pairing_result_zones) / sizeof(s_pairing_result_zones[0])) },
+    /* 4U, 5U reserved */
     { UI_STATE_CONFIRM,            "CONFIRM",            s_confirm_zones,        (uint8_t)(sizeof(s_confirm_zones) / sizeof(s_confirm_zones[0])) },
     { UI_STATE_KEYDER,             "KEYDER",             s_keyder_zones,         (uint8_t)(sizeof(s_keyder_zones) / sizeof(s_keyder_zones[0])) },
-    { UI_STATE_FINGERPRINT,        "FINGERPRINT",        s_fingerprint_zones,    (uint8_t)(sizeof(s_fingerprint_zones) / sizeof(s_fingerprint_zones[0])) },
-    { UI_STATE_FINGERPRINT_CONFIRM,"FINGERPRINT_CONFIRM",s_fingerprint_zones,    (uint8_t)(sizeof(s_fingerprint_zones) / sizeof(s_fingerprint_zones[0])) },
     { UI_STATE_CHAT,               "CHAT",               s_chat_zones,           (uint8_t)(sizeof(s_chat_zones) / sizeof(s_chat_zones[0])) },
     { UI_STATE_CHAT_MENU,          "CHAT_MENU",          s_chat_zones,           (uint8_t)(sizeof(s_chat_zones) / sizeof(s_chat_zones[0])) },
     { UI_STATE_CHAT_COMPOSE,       "CHAT_COMPOSE",       s_chat_compose_zones,   (uint8_t)(sizeof(s_chat_compose_zones) / sizeof(s_chat_compose_zones[0])) },
@@ -151,7 +143,6 @@ static const LayoutState_t s_states[] = {
     { UI_STATE_INFO,               "INFO",               s_info_zones,           (uint8_t)(sizeof(s_info_zones) / sizeof(s_info_zones[0])) },
     { UI_STATE_ERROR,              "ERROR",              s_error_zones,          (uint8_t)(sizeof(s_error_zones) / sizeof(s_error_zones[0])) },
     { UI_STATE_PAIRING,            "PAIRING",            s_countdown_zones,      (uint8_t)(sizeof(s_countdown_zones) / sizeof(s_countdown_zones[0])) },
-    { UI_STATE_PAIRING_SUCCESS,    "PAIRING_SUCCESS",    s_pairing_result_zones, (uint8_t)(sizeof(s_pairing_result_zones) / sizeof(s_pairing_result_zones[0])) },
     { UI_STATE_PAIRING_FAILED,     "PAIRING_FAILED",     s_pairing_result_zones, (uint8_t)(sizeof(s_pairing_result_zones) / sizeof(s_pairing_result_zones[0])) },
 };
 

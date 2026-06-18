@@ -1,20 +1,19 @@
 /* components/ceepew_hal/esp_adc_cal.h
  *
- * ADC Calibration abstraction layer — production-grade stable API.
+ * ADC Calibration abstraction layer — CEE-PEW project-specific wrapper.
  *
- * Provides a unified ADC calibration interface across ESP-IDF versions
- * (v5.x legacy esp_adc_cal API vs v6.0+ modern esp_adc API).
+ * This is NOT a verbatim copy of ESP-IDF's deprecated esp_adc_cal component.
+ * It provides a stable legacy-compatible API (v5.x style) on top of
+ * ESP-IDF v6.0.1's modern esp_adc/adc_cali API, which is used directly
+ * by hal_adc.c via adc_oneshot_*.
  *
- * This header defines both:
- * 1. Legacy compatibility types for v5.x codebases
- * 2. Production calibration utilities (eFuse reading, linearity correction)
- * 3. Diagnostic helpers (calibration status reporting)
+ * Kept for:
+ * - Code that may expect the legacy esp_adc_cal_characterize/raw_to_voltage API
+ * - Diagnostic helpers (esp_adc_cal_get_diagnostics) for production testing
  *
- * All functions are constant-time where calibration data is sensitive
- * (vref, eFuse values are NOT secret in CEE-PEW — only keys are secret).
- *
- * THREAD SAFETY: All functions are stateless; no global state modification.
- * Caller responsible for synchronizing calls to the same adc_cali_handle.
+ * DO NOT modify to match upstream IDF — this is a project-owned abstraction.
+ * If migrating fully to the modern API, remove this file and update callers
+ * to use hal_adc.c / adc_oneshot_* directly.
  */
 #ifndef ESP_ADC_CAL_H
 #define ESP_ADC_CAL_H

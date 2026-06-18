@@ -22,24 +22,20 @@ typedef enum {
     UI_STATE_BOOT = 0U,           /* Sprint 8: Boot animation */
     UI_STATE_DISCOVERY = 1U,      /* Sprint 8: Radar/discovery */
     UI_STATE_CODE_ENTRY = 2U,     /* Sprint 9: Code entry grid */
-    UI_STATE_COUNTDOWN = 3U,      /* Sprint 9: Countdown bar */
-    UI_STATE_CODE_INCORRECT = 4U, /* New: Code mismatch UI */
-    UI_STATE_CODE_DIFFERENT = 5U, /* New: Different code UI */
-    UI_STATE_CONFIRM = 6U,        /* Sprint 9: Confirmation */
-    UI_STATE_KEYDER = 7U,         /* Sprint 10: Key derivation anim */
-    UI_STATE_FINGERPRINT = 8U,    /* Sprint 10: Fingerprint display */
-    UI_STATE_FINGERPRINT_CONFIRM = 9U,  /* Phase 4: Confirm fingerprint with D/S */
-    UI_STATE_CHAT = 10U,           /* Sprint 11: Chat bubbles */
-    UI_STATE_CHAT_MENU = 11U,      /* Phase 4: Chat menu (Read/Write/Check) */
-    UI_STATE_CHAT_COMPOSE = 12U,   /* Phase 4: Chat message composition with keyboard */
-    UI_STATE_CRYPTOGRAM = 13U,     /* Sprint 12: Cryptogram panel */
-    UI_STATE_NONCE_EXHAUSTED = 14U, /* Phase 4: Nonce limit exhausted */
-    UI_STATE_INFO = 15U,           /* DIAG-only: Info / diagnostics display */
-    UI_STATE_ERROR = 16U,         /* Phase 4: Generic error display */
-    UI_STATE_PAIRING = 17U,       /* Sprint 9: Pairing countdown state (legacy name) */
-    UI_STATE_PAIRING_SUCCESS = 18U, /* Pairing outcome: success banner */
-    UI_STATE_PAIRING_FAILED = 19U,  /* Pairing outcome: failure banner */
-    UI_STATE_CHAT_SEND_CONFIRM = 20U, /* Phase 4: Confirm composed message before send */
+    UI_STATE_COUNTDOWN = 3U,      /* Sprint 9: Countdown bar (legacy) */
+    /* 4U and 5U reserved — removed CODE_INCORRECT/CODE_DIFFERENT (merged into PAIRING_FAILED) */
+    UI_STATE_CONFIRM = 6U,        /* Code verification screen — auto-verify on entry */
+    UI_STATE_KEYDER = 7U,         /* Key derivation anim (configurable duration) */
+    UI_STATE_CHAT = 8U,           /* Sprint 11: Chat bubbles */
+    UI_STATE_CHAT_MENU = 9U,      /* Phase 4: Chat menu (Write/Read) */
+    UI_STATE_CHAT_COMPOSE = 10U,  /* Phase 4: Chat message composition with keyboard */
+    UI_STATE_CRYPTOGRAM = 11U,    /* Keys verified success screen (tick mark) */
+    UI_STATE_NONCE_EXHAUSTED = 12U, /* Phase 4: Nonce limit exhausted */
+    UI_STATE_INFO = 13U,          /* DIAG-only: Info / diagnostics display */
+    UI_STATE_ERROR = 14U,         /* Phase 4: Generic error display */
+    UI_STATE_PAIRING = 15U,       /* Sprint 9: Pairing countdown state */
+    UI_STATE_PAIRING_FAILED = 16U,  /* Pairing outcome: failure banner */
+    UI_STATE_CHAT_SEND_CONFIRM = 17U, /* Phase 4: Confirm composed message before send */
 } UIState_t;
 
 typedef enum {
@@ -84,10 +80,8 @@ typedef struct {
     uint8_t       peer_commitment[CEEPEW_COMMITMENT_BYTES];   /* Peer commitment from BLE */
     bool          commitment_verified;  /* true = commitments match */
     uint32_t      crypto_confirm_start_ms; /* ms timestamp when confirmation started */
-    /* Phase 4: Fingerprint confirmation and error states */
-    uint8_t       fingerprint[16];      /* Device fingerprint for confirmation */
+    /* Phase 4: Error states */
     uint8_t       peer_mac[6];          /* Peer MAC for display */
-    bool          fingerprint_confirmed; /* true if user confirmed (D button) */
     uint32_t      reject_sequence_start_ms; /* ms when red reject blink started */
     uint32_t      error_start_ms;       /* ms when error state was entered */
     /* Phase 4: Chat menu, compose, and send-confirm context */
@@ -125,13 +119,6 @@ uint8_t ui_manager_get_anim_frame(void);
  * Updates for each frame; caller loops this in render function.
  */
 CeePewErr_t ui_keygen_show_progress(uint8_t frame_index);
-
-/* Sprint 10: Fingerprint display with session ID and visual grid.
- * Renders session_id as 16 hex digits (8x2 layout) plus 8x8 pixel grid.
- * Displays commitment value label if available.
- * param: show_commitment: set to true to display commitment label
- */
-CeePewErr_t ui_keygen_show_fingerprint(bool show_commitment);
 
 /* Sprint 11: Chat message bubble rendering.
  * Displays a single message as a bubble with text preview and status indicator.
@@ -173,22 +160,6 @@ CeePewErr_t ui_crypto_show_status(uint8_t status);
  */
 CeePewErr_t ui_crypto_show_confirm(uint8_t countdown_sec);
 
-/* Phase 4: Fingerprint confirmation panel display.
- * Shows 16-byte fingerprint in grouped hex, peer MAC, and D=Accept/S=Reject prompts.
- * fingerprint: 16 bytes to display (not NULL)
- * peer_mac: 6-byte MAC for identification (not NULL)
- * No dynamic allocation; static hex conversion buffer.
- * Two CEEPEW_ASSERTs for null/bounds checking.
- */
-CeePewErr_t ui_fingerprint_show_confirm(const uint8_t fingerprint[16],
-                                        const uint8_t peer_mac[6]);
-
-/* Phase 4: Fingerprint display panel.
- * Shows 16-byte fingerprint in grouped hex with peer MAC before confirmation.
- */
-CeePewErr_t ui_fingerprint_show_display(const uint8_t fingerprint[16],
-                                        const uint8_t peer_mac[6]);
-
 /* Phase 4: Nonce exhausted error panel.
  * Displays "Session expired — nonce limit hit. Restart to re-pair."
  * with red blink animation.
@@ -212,7 +183,7 @@ void ui_manager_reset_to_discovery(void);
  * (RGB_YELLOW_RED_BLINK) takes precedence over the phase pattern.
  *
  * Called once per UI tick from ui_manager_update() while on the pairing
- * screen. Safe to call repeatedly — only writes the LED when the desired
+ * screen. Safe to call repeatedly -- only writes the LED when the desired
  * pattern changes. */
 void task_ui_update_visual_feedback(void);
 

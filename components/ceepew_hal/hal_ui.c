@@ -318,7 +318,7 @@ CeePewErr_t hal_ui_flush(void)
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
 
     /* Skip the I2C push entirely if nothing changed since the last
-     * flush. Static screens (info, fingerprint-confirm, error, ...)
+     * flush. Static screens (info, error, ...) hit this path
      * hit this path every tick after the first draw, leaving the bus
      * free for BLE. */
     if (!s_framebuffer_dirty) {

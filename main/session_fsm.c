@@ -32,7 +32,7 @@
  *
  * POST-DERIVE SYNC BARRIER (Bug 3 fix):
  *   After HKDF completes locally, the FSM does NOT advance the UI to
- *   PAIRING_SUCCESS. The session task drives session_drive_post_derive_sync(),
+ *   does NOT advance the UI to KEYDER. The session task drives
  *   which initiates a 1-byte encrypted HELLO/ACK round-trip via
  *   session_send_message() on the ESP-NOW link. Only after the ACK is
  *   received and decrypted does the UI transition fire. This prevents
@@ -55,12 +55,14 @@
 #include "crypto_hkdf.h"
 #include "crypto_ecdh.h"
 #include "crypto_hmac_efuse.h"
+#include "ecc_hamming.h"
 #include "session_fsm.h"
 #include "esp_log.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
 #include "esp_timer.h"
+#include "hal_radio.h"
 
 /* Forward declarations of crypto primitives */
 CeePewErr_t crypto_sha256_compute(const uint8_t *in, uint32_t in_len, uint8_t out[32]);
@@ -97,16 +99,17 @@ typedef struct {
     uint8_t  sign_sk[64];                        /* VOLATILE ephemeral private key */
     uint8_t  peer_sign_pk[32];                   /* Peer's ephemeral Ed25519 pub key, set via session_set_peer_public_key */
     bool     peer_sign_pk_valid;                 /* true once peer_sign_pk has been received */
+    uint8_t  device_id_peer_wifi[6];             /* Peer's WiFi STA MAC for ESP-NOW */
+    bool     device_id_peer_wifi_valid;          /* true once device_id_peer_wifi has been set */
     int32_t  peer_uptime_offset_s;               /* peer_uptime_s - local_uptime_s (BLE time-sync) */
     bool     session_active;                     /* true = Phase 3 && authenticated */
     bool     is_initiator;                       /* true if local MAC < peer MAC (lower = initiator) */
     bool     sync_barrier_cleared;               /* true once encrypted post-derive ACK round-trip complete */
     uint64_t sync_started_ms;                    /* when post-derive sync driver was first invoked */
-    uint64_t sync_last_send_ms;                  /* last HELLO retransmit time (initiator only) */
-    /* Phase 4: TTL and fingerprint tracking */
-    uint32_t last_message_time_s;                /* Last message activity timestamp (seconds) */
-    uint8_t  fingerprint[16];                    /* SHA256(peer_pk || device_id)[0:15] */
-    bool     fingerprint_valid;                  /* true if fingerprint has been computed */
+    uint64_t sync_last_send_ms;                  /* last HELLO retransmit time */
+    uint8_t  sync_retry_stage;                   /* exponential backoff stage (0..5) */
+    /* Phase 4: TTL tracking */
+    uint64_t last_message_time_s;                /* Last message activity timestamp (seconds) */
 } SessionCtx_t;
 
 /* Global session context (per-device; single active session at a time) */
@@ -122,8 +125,6 @@ static bool     s_test_nc_set = false;
 static uint64_t s_test_nc     = 0ULL;
 static bool     s_test_commitment_set = false;
 static uint8_t  s_test_commitment[CEEPEW_COMMITMENT_BYTES] = {0U};
-static bool     s_test_fingerprint_set = false;
-static uint8_t  s_test_fingerprint[16] = {0U};
 
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
@@ -203,7 +204,7 @@ static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6])
      * Both devices execute this same comparison algorithm, so both will:
      * 1. Derive the same session_id = SHA256(id_a || id_b || session_code)
      * 2. Produce the same HKDF-SHA256 commitment value
-     * 3. Accept each other's commitment fingerprints on display
+     * 3. Accept each other's commitment values on display
      * 
      * This prevents an attack where one device could claim a different session_id,
      * causing the fingerprint comparison to fail even though both devices agree
@@ -246,7 +247,6 @@ CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
      * to unset it, the next real pairing would use a stale test
      * commitment instead of computing the real one. */
     s_test_commitment_set = false;
-    s_test_fingerprint_set = false;
     s_test_id_set = false;
     s_test_nc_set = false;
 
@@ -271,6 +271,9 @@ CeePewErr_t session_phase1_accept_peer(const uint8_t peer_mac[6]){
 CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     CEEPEW_ASSERT(s_session.phase == 1U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
+    /* Defensive: peer MAC must be set before entering phase 2 */
+    { static const uint8_t zeros[6] = {0};
+      CEEPEW_ASSERT(memcmp(s_session.device_id_peer, zeros, 6U) != 0, CEEPEW_ERR_PARAM); }
 
     /* Entropy validation: reject all-zeros session code */
     uint8_t all_zeros = 1U;
@@ -315,6 +318,14 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     err = crypto_eddsa_seeded_keypair(s_session.sign_pk, s_session.sign_sk, sign_seed);
     ceepew_secure_zero(sign_seed, sizeof(sign_seed));
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
+
+    /* Generate ephemeral X25519 keypair for crypto_box ECDH.
+     * The public key is exchanged with the peer over BLE (M3).
+     * The private key stays in RAM and is securely zeroed on session_end(). */
+    CeePewErr_t ecdh_err = crypto_ecdh_generate_keypair(
+        g_crypto_ctx.box_pubkey, g_crypto_ctx.box_privkey);
+    CEEPEW_ASSERT(ecdh_err == CEEPEW_OK, ecdh_err);
+    g_crypto_ctx.peer_box_pubkey_valid = false;
 
     return CEEPEW_OK;
 }
@@ -369,7 +380,7 @@ CeePewErr_t session_phase2_derive_key(void){
     if (err != CEEPEW_OK) { goto error_cleanup; }
 
     uint8_t hkdf_info_len = 0U;
-    err = crypto_hkdf_build_info(label, label_len, id_a, id_b, commitment, 0U, hkdf_info, &hkdf_info_len);
+    err = crypto_hkdf_build_info(label, label_len, id_a, id_b, commitment, 0U, hkdf_info, sizeof(hkdf_info), &hkdf_info_len);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 
     /* Step 3a: IKM is the raw 32-byte session_code. Both peers must derive
@@ -388,14 +399,6 @@ CeePewErr_t session_phase2_derive_key(void){
     memcpy(g_crypto_ctx.box_seed, hkdf_output + 16U, 32U);
     memcpy(g_crypto_ctx.session_id, hkdf_output + 48U, 8U);
     memcpy(g_crypto_ctx.reserved, hkdf_output + 56U, 8U);
-
-    /* Generate ephemeral X25519 keypair for crypto_box ECDH.
-     * The public key is exchanged with the peer over BLE (M3).
-     * The private key stays in RAM and is securely zeroed on session_end(). */
-    CeePewErr_t ecdh_err = crypto_ecdh_generate_keypair(
-        g_crypto_ctx.box_pubkey, g_crypto_ctx.box_privkey);
-    if (ecdh_err != CEEPEW_OK) { goto error_cleanup; }
-    g_crypto_ctx.peer_box_pubkey_valid = false;
 
     g_crypto_ctx.session_active = true;
 
@@ -421,16 +424,21 @@ CeePewErr_t session_phase2_derive_key(void){
                (unsigned long long)s_session.nonce_counter,
                s_session.is_initiator ? "initiator" : "responder");
 
-    s_session.phase = 3U;
-    s_session.session_active = true;
-    session_init_ttl();  /* Phase 4: Initialize TTL tracking */
-
-    /* Initialize Core 0/1 mutex for g_crypto_ctx access */
+    /* Initialize Core 0/1 mutex for g_crypto_ctx access FIRST */
     CeePewErr_t mutex_err = crypto_mutex_init();
     if (mutex_err != CEEPEW_OK) { goto error_cleanup; }
 
     err = esl_register_callbacks(session_mac_lock_check, session_enforce_nonce_limit);
     if (err != CEEPEW_OK) { goto error_cleanup; }
+
+    /* Initialize session-permuted Hamming FEC using the derived session key */
+    err = ecc_hamming_init_session(s_session.session_key);
+    if (err != CEEPEW_OK) { goto error_cleanup; }
+
+    /* NOW transition to active state */
+    s_session.phase = 3U;
+    s_session.session_active = true;
+    session_init_ttl();  /* Phase 4: Initialize TTL tracking */
 
     /* Success: secure zero all sensitive intermediates */
     ceepew_secure_zero(hkdf_output, sizeof(hkdf_output));
@@ -470,17 +478,17 @@ CeePewErr_t session_enforce_nonce_limit(void){
         return CEEPEW_ERR_NONCE_EXHAUSTED;
     }
 
-    /* Check for 90% warning level — session should warn but can continue briefly */
-    if (s_session.nonce_counter >= CEEPEW_NONCE_WARNING_LIMIT) {
-        s_session.nonce_counter += 2U;
-        return CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED;
-    }
-
     /* Increment by 2 to preserve nonce parity: initiator uses even
      * nonces (0,2,4,...), responder uses odd nonces (1,3,5,...).
      * Both peers start at complementary parity from MAC ordering,
      * so the two nonce sequences are guaranteed disjoint. */
     s_session.nonce_counter += 2U;
+
+    /* Check for 90% warning level — session should warn but can continue briefly */
+    if (s_session.nonce_counter >= CEEPEW_NONCE_WARNING_LIMIT) {
+        return CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED;
+    }
+
     return CEEPEW_OK;
 }
 
@@ -525,7 +533,13 @@ CeePewErr_t session_sign_message(const uint8_t *msg, uint32_t msg_len, uint8_t s
 }
 
 CeePewErr_t session_get_peer_public_key(uint8_t peer_pk[32]){
-    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    if (s_session.phase != 3U) {
+        ESP_LOGE("SESSION", "session_get_peer_public_key: phase=%u (expected 3), "
+                  "active=%d peer_pk_valid=%d init=%d",
+                 s_session.phase, s_session.session_active,
+                 s_session.peer_sign_pk_valid, s_session.is_initiator);
+        return CEEPEW_ERR_PARAM;
+    }
     CEEPEW_ASSERT(peer_pk != NULL, CEEPEW_ERR_NULL_PTR);
 
     /* Peer pubkey must have been received over BLE during the commitment
@@ -562,7 +576,7 @@ CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32])
 
 CeePewErr_t session_get_local_box_pubkey(uint8_t pk_out[32])
 {
-    CEEPEW_ASSERT(s_session.phase >= 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(pk_out != NULL, CEEPEW_ERR_NULL_PTR);
 
     memcpy(pk_out, g_crypto_ctx.box_pubkey, 32U);
@@ -582,6 +596,43 @@ CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32])
 bool session_peer_box_pubkey_valid(void)
 {
     return g_crypto_ctx.peer_box_pubkey_valid;
+}
+
+CeePewErr_t session_set_peer_wifi_mac(const uint8_t wifi_mac[6])
+{
+    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(wifi_mac != NULL, CEEPEW_ERR_NULL_PTR);
+    /* Validate not all zeros */
+    uint8_t all_zero = 1U;
+    for (uint8_t i = 0U; i < 6U; i++) {
+        if (wifi_mac[i] != 0U) { all_zero = 0U; break; }
+    }
+    CEEPEW_ASSERT(!all_zero, CEEPEW_ERR_PARAM);
+    memcpy(s_session.device_id_peer_wifi, wifi_mac, 6U);
+    s_session.device_id_peer_wifi_valid = true;
+    ESP_LOGI("session_fsm", "Peer WiFi MAC registered: %02X:%02X:%02X:%02X:%02X:%02X",
+             wifi_mac[0], wifi_mac[1], wifi_mac[2], wifi_mac[3], wifi_mac[4], wifi_mac[5]);
+    return CEEPEW_OK;
+}
+
+CeePewErr_t session_get_peer_wifi_mac(uint8_t wifi_mac[6])
+{
+    CEEPEW_ASSERT(wifi_mac != NULL, CEEPEW_ERR_NULL_PTR);
+    if (!s_session.device_id_peer_wifi_valid) {
+        return CEEPEW_ERR_PARAM;
+    }
+    memcpy(wifi_mac, s_session.device_id_peer_wifi, 6U);
+    return CEEPEW_OK;
+}
+
+bool session_peer_wifi_mac_valid(void)
+{
+    return s_session.device_id_peer_wifi_valid;
+}
+
+bool session_peer_sign_pk_valid(void)
+{
+    return s_session.peer_sign_pk_valid;
 }
 
 CeePewErr_t session_get_session_code(uint8_t out[32])
@@ -611,9 +662,10 @@ bool session_get_role(void)
 
 CeePewErr_t session_mark_sync_barrier_cleared(void)
 {
-    /* Called by the session task after an encrypted post-derive ACK
-     * round-trip is verified. Idempotent. */
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+
     s_session.sync_barrier_cleared = true;
+    s_session.sync_retry_stage = 0U;
     return CEEPEW_OK;
 }
 
@@ -668,10 +720,18 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
      * sync message (HELLO or ACK) at either end — see
      * session_handle_key_sync_byte(). */
 
-    /* Rate-limit HELLO retransmissions. */
-    if (s_session.sync_last_send_ms != 0ULL &&
-        (now_ms - s_session.sync_last_send_ms) < CEEPEW_KEY_SYNC_RETRY_MS) {
-        return CEEPEW_OK;
+    /* Exponential backoff for HELLO retransmissions: 50, 100, 200, 400ms.
+     * First attempt fires immediately (sync_last_send_ms == 0). */
+    static const uint32_t s_sync_backoff_ms[] = {50U, 100U, 200U, 400U, 400U, 400U};
+    #define CEEPEW_SYNC_BACKOFF_STAGES \
+        (sizeof(s_sync_backoff_ms) / sizeof(s_sync_backoff_ms[0]))
+    if (s_session.sync_last_send_ms != 0ULL) {
+        uint32_t stage = (s_session.sync_retry_stage < (uint8_t)CEEPEW_SYNC_BACKOFF_STAGES)
+                         ? s_session.sync_retry_stage : (uint8_t)(CEEPEW_SYNC_BACKOFF_STAGES - 1U);
+        uint32_t backoff = s_sync_backoff_ms[stage];
+        if ((now_ms - s_session.sync_last_send_ms) < backoff) {
+            return CEEPEW_OK;
+        }
     }
     s_session.sync_last_send_ms = now_ms;
 
@@ -693,6 +753,15 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
     /* Use peer MAC from session context, not own MAC (fix above) */
     memcpy(peer_mac, s_session.device_id_peer, 6U);
 
+    /* Verify ESP-NOW peer is registered before attempting to send.
+     * If not registered, wait — the peer registration happens in task_session.c
+     * after key derivation. If we're here but peer isn't registered yet,
+     * something is wrong and we should not send garbage. */
+    if (!hal_radio_is_peer_registered(peer_mac)) {
+        ESP_LOGW("session_fsm", "post_derive_sync: ESP-NOW peer not registered yet — deferring send");
+        return CEEPEW_OK;  /* defer this tick, will retry on next loop */
+    }
+
     /* Use the peer's X25519 public key for crypto_box ECDH */
     if (!g_crypto_ctx.peer_box_pubkey_valid) {
         /* Peer's X25519 key hasn't arrived yet via BLE sign_pk exchange.
@@ -702,7 +771,11 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
     }
     memcpy(peer_pk, g_crypto_ctx.peer_box_pubkey, 32U);
 
-    return session_send_message(hello_plain, 1U, peer_mac, peer_pk);
+    CeePewErr_t send_err = session_send_message(hello_plain, 1U, peer_mac, peer_pk);
+    if (send_err == CEEPEW_OK && s_session.sync_retry_stage < 255U) {
+        s_session.sync_retry_stage++;
+    }
+    return send_err;
 }
 
 /* Called by the session task's RX path when a 1-byte post-derive sync
@@ -719,6 +792,7 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
             return CEEPEW_ERR_PARAM;
         }
         s_session.sync_barrier_cleared = true;
+        s_session.sync_retry_stage = 0U;
         return CEEPEW_OK;
     } else {
         if (magic_byte != CEEPEW_KEY_SYNC_HELLO_BYTE) {
@@ -730,6 +804,7 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
          * a future retry HELLO would see the barrier already cleared). */
         if (!s_session.sync_barrier_cleared) {
             s_session.sync_barrier_cleared = true;
+            s_session.sync_retry_stage = 0U;
             return CEEPEW_ERR_NEED_TX;  /* signal "send ACK back" */
         }
         return CEEPEW_OK;
@@ -766,6 +841,8 @@ CeePewErr_t session_end(void){
     transport_hop_invalidate_key();
     /* Reset ESL callback registration state to allow re-registration */
     esl_reset_callbacks();
+    /* Reset session-permuted Hamming FEC to prevent stale permutation reuse */
+    (void)ecc_hamming_deinit();
     /* Securely zero X25519 ECDH key material */
     ceepew_secure_zero(g_crypto_ctx.box_privkey, sizeof(g_crypto_ctx.box_privkey));
     ceepew_secure_zero(g_crypto_ctx.peer_box_pubkey, sizeof(g_crypto_ctx.peer_box_pubkey));
@@ -798,6 +875,12 @@ CeePewErr_t session_reset_to_discovery(void)
     CeePewErr_t err = session_get_device_id(local_id);
     if (err != CEEPEW_OK) { return err; }
 
+    ESP_LOGI("session_fsm", "session_reset_to_discovery: phase %u -> 1 (peer=%02X:%02X:%02X:%02X:%02X:%02X)",
+             (unsigned)saved_phase,
+             s_session.device_id_peer[0], s_session.device_id_peer[1],
+             s_session.device_id_peer[2], s_session.device_id_peer[3],
+             s_session.device_id_peer[4], s_session.device_id_peer[5]);
+
     (void)session_end();
 
     /* session_end() calls session_secure_zero_context() which zeroes s_session.
@@ -805,7 +888,6 @@ CeePewErr_t session_reset_to_discovery(void)
     err = session_phase1_init(local_id);
     if (err != CEEPEW_OK) { return err; }
 
-    ESP_LOGI("session_fsm", "session_reset_to_discovery: phase %u -> 1", (unsigned)saved_phase);
     return CEEPEW_OK;
 }
 
@@ -852,16 +934,6 @@ void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]) {
 
 void session_test_unset_commitment(void) {
     s_test_commitment_set = false;
-}
-
-void session_test_set_fingerprint(const uint8_t fp[16]) {
-    if (fp == NULL) { return; }
-    memcpy(s_test_fingerprint, fp, 16U);
-    s_test_fingerprint_set = true;
-}
-
-void session_test_unset_fingerprint(void) {
-    s_test_fingerprint_set = false;
 }
 
 CeePewErr_t session_get_device_id(uint8_t device_id[6])
@@ -940,7 +1012,6 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
              s_session.device_id_self[3], s_session.device_id_self[4], s_session.device_id_self[5],
              s_session.device_id_peer[0], s_session.device_id_peer[1], s_session.device_id_peer[2],
              s_session.device_id_peer[3], s_session.device_id_peer[4], s_session.device_id_peer[5]);
-    ESP_LOGI("session_fsm", "session_get_commitment: code=%.32s", (char*)s_session.session_code);
     ESP_LOGI("session_fsm", "session_get_commitment: local_commit=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
              commitment[0], commitment[1], commitment[2], commitment[3],
              commitment[4], commitment[5], commitment[6], commitment[7],
@@ -965,7 +1036,7 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
     /* ── Advertisement-beacon path (16-byte truncated commitment) ───── */
     /* No signature on the beacon path — the 4-digit code is the primary
      * authentication, and the peer sign_pk is delivered separately over
-     * the 0xFFF3 GATT characteristic for the fingerprint screen. */
+     * the 0xFFF3 GATT characteristic for Ed25519 sign_pk delivery. */
     if (len == CEEPEW_COMMITMENT_ADV_BYTES) {
         uint8_t local_commit[CEEPEW_COMMITMENT_BYTES];
         CeePewErr_t adv_err = session_get_commitment(local_commit);
@@ -1075,7 +1146,7 @@ CeePewErr_t session_get_commitment_with_sig(uint8_t *out_buf, uint8_t *out_len)
 /* Phase 4: Initialize TTL tracking on session start */
 static void session_init_ttl(void)
 {
-    s_session.last_message_time_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    s_session.last_message_time_s = (uint64_t)(esp_timer_get_time() / 1000000LL);
 }
 
 /* Phase 4: Update last message activity timestamp */
@@ -1084,7 +1155,7 @@ CeePewErr_t session_update_last_message_time(void)
     CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
 
-    s_session.last_message_time_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    s_session.last_message_time_s = (uint64_t)(esp_timer_get_time() / 1000000LL);
     return CEEPEW_OK;
 }
 
@@ -1095,56 +1166,11 @@ CeePewErr_t session_get_idle_seconds(uint32_t *idle_seconds)
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(idle_seconds != NULL, CEEPEW_ERR_NULL_PTR);
 
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    *idle_seconds = (now_s > s_session.last_message_time_s) ?
+    uint64_t now_s = (uint64_t)(esp_timer_get_time() / 1000000LL);
+    uint64_t idle = (now_s > s_session.last_message_time_s) ?
                     (now_s - s_session.last_message_time_s) : 0U;
-    return CEEPEW_OK;
-}
-
-/* Phase 4: Compute device fingerprint from peer public key */
-CeePewErr_t session_compute_fingerprint(const uint8_t peer_pk[32],
-                                        const uint8_t device_id[6],
-                                        uint8_t fingerprint_out[16])
-{
-    CEEPEW_ASSERT(peer_pk != NULL && device_id != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(fingerprint_out != NULL, CEEPEW_ERR_NULL_PTR);
-
-    /* Fingerprint = SHA256(peer_public_key || device_id)[0:15] */
-    uint8_t fp_input[32U + 6U];
-    memcpy(fp_input, peer_pk, 32U);
-    memcpy(fp_input + 32U, device_id, 6U);
-
-    uint8_t fp_hash[32];
-    CeePewErr_t err = crypto_sha256_compute(fp_input, (uint32_t)sizeof(fp_input), fp_hash);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
-
-    memcpy(fingerprint_out, fp_hash, 16U);
-    memcpy(s_session.fingerprint, fp_hash, 16U);
-    s_session.fingerprint_valid = true;
-
-    /* Secure zero */
-    ceepew_secure_zero(fp_input, sizeof(fp_input));
-    ceepew_secure_zero(fp_hash, sizeof(fp_hash));
-
-    return CEEPEW_OK;
-}
-
-/* Phase 4: Get stored fingerprint */
-CeePewErr_t session_get_fingerprint(uint8_t fingerprint[16])
-{
-    CEEPEW_ASSERT(fingerprint != NULL, CEEPEW_ERR_NULL_PTR);
-    if (s_test_fingerprint_set) {
-        memcpy(fingerprint, s_test_fingerprint, 16U);
-        return CEEPEW_OK;
-    }
-    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
-
-    if (!s_session.fingerprint_valid) {
-        return CEEPEW_ERR_PARAM;
-    }
-
-    memcpy(fingerprint, s_session.fingerprint, 16U);
+    /* Clamp to UINT32_MAX for backward compatibility with callers */
+    *idle_seconds = (idle > UINT32_MAX) ? UINT32_MAX : (uint32_t)idle;
     return CEEPEW_OK;
 }
 
@@ -1158,6 +1184,9 @@ CeePewErr_t session_wipe(void)
     if (err != CEEPEW_OK) { CEEPEW_LOG("SESSION", "pipeline_deinit failed: %d", err); }
     err = crypto_ctx_destroy();
     if (err != CEEPEW_OK) { CEEPEW_LOG("SESSION", "crypto_ctx_destroy failed: %d", err); }
+
+    /* Reset session-permuted Hamming FEC */
+    (void)ecc_hamming_deinit();
 
     /* Secure zero all key material and stale session state */
     session_secure_zero_context();

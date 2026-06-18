@@ -33,3 +33,4 @@ verify_handoff_fix.ps1
 sdkconfig.production
 skills-lock.json
 logs/
+digest.txt

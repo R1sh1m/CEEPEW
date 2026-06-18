@@ -25,8 +25,8 @@
  *      gate opens — that catches the case where the responder's GATT
  *      server is wedged or the peer signal was lost mid-connection.
  *   4. If the brief GATT exchange fails after CEEPEW_MAX_RECONNECT_ATTEMPTS,
- *      pairing proceeds without sign_pk; the fingerprint screen will be
- *      empty and the first chat frame's signature will be unverifiable.
+     *      pairing proceeds without sign_pk; the first chat frame's
+     *      signature will be unverifiable.
  *   5. Once handoff_ready is set, ESP-NOW takes over for Phase 3 (active
  *      session) and the BLE link is closed.
  *
@@ -100,6 +100,7 @@ typedef struct {
     uint8_t        adv_commitment[CEEPEW_COMMITMENT_ADV_BYTES]; /* cached local copy */
     bool           peer_commitment_via_adv;    /* peer commit arrived via scan beacon */
     bool           sign_pk_received;           /* peer sign_pk delivered over 0xFFF3 */
+    bool           box_pubkey_received;        /* peer box_pubkey delivered over 0xFFF3 */
     bool           is_initiator_role;          /* true = we opened the GATTC connection */
     uint8_t        pending_peer_commitment[CEEPEW_COMMITMENT_ADV_BYTES];
     uint8_t        pending_peer_commitment_len;
@@ -146,8 +147,13 @@ typedef struct {
     uint16_t       gattc_mtu;                   /* Negotiated GATTC MTU (default 23) */
     bool           gattc_sign_pk_mtu_negotiated;/* ESP_GATTC_CFG_MTU_EVT received */
     bool           gattc_sign_pk_write_pending; /* Search-cmpl wrote, awaiting ESP_GATTC_WRITE_CHAR_EVT */
+    bool           pending_sign_pk_write;        /* Deferred write awaiting MTU negotiation */
+    uint8_t        pending_sign_pk_encrypted[80];/* Buffered 80B payload for deferred write */
     bool           reverse_gattc_pending;       /* Responder: reverse GATTC for sign_pk exchange pending */
     bool           initiator_sign_pk_sent;      /* true after our sign_pk has been written to peer */
+    /* GATTS MTU tracking (for responder sign_pk receive) */
+    uint16_t       gatts_mtu;                   /* Negotiated GATTS MTU (default 23) */
+    bool           gatts_sign_pk_mtu_negotiated;/* ESP_GATTS_MTU_EVT received */
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
@@ -185,6 +191,11 @@ bool transport_ble_has_peer_cached(void);
 
 /* Clear cached discovery peer state (used when restarting pairing). */
 void transport_ble_clear_discovery_peer_state(void);
+
+/* Clear only the pending commitment buffer (used when starting a new
+ * pairing attempt to prevent stale beacons from a prior session from
+ * poisoning the new attempt). */
+void transport_ble_clear_pending_commitment(void);
 
 /*
  * Encode `len` bytes of `commitment` into the BLE scan-response payload as a

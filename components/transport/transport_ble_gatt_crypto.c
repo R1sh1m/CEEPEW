@@ -1,7 +1,17 @@
 /* components/transport/transport_ble_gatt_crypto.c
  *
- * Implementation of the Hybrid-GATT sign_pk encryption wrapper.
- * See transport_ble_gatt_crypto.h for the threat model and derivation.
+ * GATT Commitment Exchange Crypto Wrapper (Phase 2 Pairing).
+ *
+ * This is a CRYPTO HELPER for transport_ble.c — NOT a standalone transport.
+ * It provides Ascon-128 AEAD encryption/decryption of the sign_pk payload
+ * exchanged over the brief GATT connection during pairing.
+ *
+ * transport_ble.c: Main BLE transport (advertising, scanning, GATT connection).
+ *   Calls gatt_crypto_encrypt_with_ids() when writing sign_pk as GATT client.
+ *   Calls gatt_crypto_decrypt_with_ids() when reading sign_pk as GATT server.
+ *
+ * After Phase 3 handoff, this module is no longer used.
+ * See transport_espnow.c for the active session transport.
  */
 
 #include "transport_ble_gatt_crypto.h"
@@ -113,7 +123,7 @@ static void gatt_crypto_sort_ids(const uint8_t id_self[6],
 CeePewErr_t gatt_crypto_encrypt_with_ids(const uint8_t session_code[32],
                                           const uint8_t id_self[6],
                                           const uint8_t id_peer[6],
-                                          const uint8_t plaintext[32],
+                                          const uint8_t plaintext[GATT_PLAINTEXT_BYTES],
                                           uint8_t out[GATT_CRYPTO_TOTAL_BYTES])
 {
     CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
@@ -137,13 +147,14 @@ CeePewErr_t gatt_crypto_encrypt_with_ids(const uint8_t session_code[32],
         return err;
     }
 
-    /* Ascon-128 AEAD with no associated data — the plaintext is bound
-     * to the key (derived from session_code) so a hostile device cannot
-     * inject a chosen sign_pk. The wire carries 32B ct + 16B tag = 48B. */
+    /* Ascon-128 AEAD with no associated data — the plaintext (sign_pk ||
+     * box_pubkey || wifi_mac) is bound to the key (derived from session_code) so a
+     * hostile device cannot inject chosen keys. The wire carries 70B ct
+     * + 16B tag = 86B. */
     uint16_t ct_len = GATT_CRYPTO_TOTAL_BYTES;
     err = crypto_ascon_aead_encrypt(key, nonce,
                                     NULL, 0U,
-                                    plaintext, 32U,
+                                    plaintext, GATT_PLAINTEXT_BYTES,
                                     out, &ct_len);
     ceepew_secure_zero(key, sizeof(key));
     ceepew_secure_zero(nonce, sizeof(nonce));
@@ -159,7 +170,7 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
                                           const uint8_t id_self[6],
                                           const uint8_t id_peer[6],
                                           const uint8_t in[GATT_CRYPTO_TOTAL_BYTES],
-                                          uint8_t plaintext_out[32])
+                                          uint8_t plaintext_out[GATT_PLAINTEXT_BYTES])
 {
     CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(id_self != NULL, CEEPEW_ERR_NULL_PTR);
@@ -182,7 +193,7 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
         return err;
     }
 
-    uint16_t pt_len = CEEPEW_ED25519_PUBKEY_BYTES;
+    uint16_t pt_len = GATT_PLAINTEXT_BYTES;
     err = crypto_ascon_aead_decrypt(key, nonce,
                                     NULL, 0U,
                                     in, GATT_CRYPTO_TOTAL_BYTES,
@@ -193,13 +204,13 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
         /* Ascon returns CRYPTO on tag mismatch — re-map to AUTH_FAIL so
          * the caller (GATTS write handler) can react specifically
          * (force disconnect, bump reconnect_attempts). */
-        ceepew_secure_zero(plaintext_out, 32U);
+        ceepew_secure_zero(plaintext_out, GATT_PLAINTEXT_BYTES);
         return CEEPEW_ERR_AUTH_FAIL;
     }
     if (err != CEEPEW_OK) {
-        ceepew_secure_zero(plaintext_out, 32U);
+        ceepew_secure_zero(plaintext_out, GATT_PLAINTEXT_BYTES);
         return err;
     }
-    CEEPEW_ASSERT(pt_len == 32U, CEEPEW_ERR_CRYPTO);
+    CEEPEW_ASSERT(pt_len == GATT_PLAINTEXT_BYTES, CEEPEW_ERR_CRYPTO);
     return CEEPEW_OK;
 }

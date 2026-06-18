@@ -236,8 +236,8 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
-    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    static uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    static uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
     memset(nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
     uint16_t work_len = CRYPTO_BOX_ZEROBYTES;
     uint16_t out_work_len = work_len;

@@ -111,9 +111,8 @@ void ui_manager_selftest_run(void) {
         printf("ui_manager selftest: failed to enter KEYDER (state=%d)\n", (int)g_ui_ctx.current_state);
         return;
     }
-    if (layout_validate_state_entry(UI_STATE_PAIRING_SUCCESS) != CEEPEW_OK ||
-        layout_validate_state_entry(UI_STATE_KEYDER) != CEEPEW_OK) {
-        printf("ui_manager selftest: pairing/keyder layout validation failed\n");
+    if (layout_validate_state_entry(UI_STATE_KEYDER) != CEEPEW_OK) {
+        printf("ui_manager selftest: keyder layout validation failed\n");
         return;
     }
     printf("CEEPEW: ui_manager selftest - KEYDER transition PASS\n");
@@ -137,33 +136,7 @@ void ui_manager_selftest_run(void) {
     }
     printf("CEEPEW: ui_manager selftest - KEYDER rendering PASS\n");
 
-    /* Test 4: Transition to FINGERPRINT when nonce_counter > 0 */
-    uint8_t dummy_fp[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00};
-    session_test_set_fingerprint(dummy_fp);
-    g_ui_ctx.transition_ready = true;
-    (void)ui_manager_transition_to(UI_STATE_FINGERPRINT);
-    (void)ui_manager_update();
-
-    if (g_ui_ctx.current_state != UI_STATE_FINGERPRINT) {
-        printf("ui_manager selftest: failed to enter FINGERPRINT (state=%d)\n", (int)g_ui_ctx.current_state);
-        return;
-    }
-    printf("CEEPEW: ui_manager selftest - FINGERPRINT transition PASS\n");
-
-    /* Test 5: Test ui_keygen_show_fingerprint() rendering */
-    if (ui_keygen_show_fingerprint(false) != CEEPEW_OK) {
-        printf("ui_manager selftest: ui_keygen_show_fingerprint(false) failed\n");
-        return;
-    }
-    printf("CEEPEW: ui_manager selftest - ui_keygen_show_fingerprint(false) PASS\n");
-
-    if (ui_keygen_show_fingerprint(true) != CEEPEW_OK) {
-        printf("ui_manager selftest: ui_keygen_show_fingerprint(true) failed\n");
-        return;
-    }
-    printf("CEEPEW: ui_manager selftest - ui_keygen_show_fingerprint(true) PASS\n");
-
-    /* Test 6: Cryptogram and fingerprint display helpers with grouped hex */
+    /* Test 4: Cryptogram and display helpers with grouped hex */
     uint8_t test_commitment[CEEPEW_COMMITMENT_BYTES] = {
         0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
         0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
@@ -189,58 +162,6 @@ void ui_manager_selftest_run(void) {
         }
     }
     printf("CEEPEW: ui_manager selftest - ui_crypto_show_confirm PASS\n");
-
-    uint8_t test_fingerprint[16] = {
-        0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18,
-        0x29, 0x3A, 0x4B, 0x5C, 0x6D, 0x7E, 0x8F, 0x90
-    };
-    uint8_t test_peer_mac[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34};
-    if (ui_fingerprint_show_display(test_fingerprint, test_peer_mac) != CEEPEW_OK) {
-        printf("ui_manager selftest: ui_fingerprint_show_display() failed\n");
-        return;
-    }
-    if (ui_fingerprint_show_confirm(test_fingerprint, test_peer_mac) != CEEPEW_OK) {
-        printf("ui_manager selftest: ui_fingerprint_show_confirm() failed\n");
-        return;
-    }
-    printf("CEEPEW: ui_manager selftest - fingerprint display helpers PASS\n");
-
-    /* Simulate rendering fingerprint screen */
-    for (uint8_t frame = 0; frame < 10; frame++) {
-        if (ui_manager_draw() != CEEPEW_OK) {
-            printf("ui_manager selftest: ui_manager_draw() failed on FINGERPRINT frame %u\n", frame);
-            return;
-        }
-        (void)ui_manager_update();
-    }
-    printf("CEEPEW: ui_manager selftest - FINGERPRINT rendering PASS\n");
-
-    /* Test 7: Fingerprint screen with button press should transition to FINGERPRINT_CONFIRM and then to CHAT */
-    g_ui_ctx.button_pressed = true;
-    (void)ui_manager_draw();
-    (void)ui_manager_update();
-    g_ui_ctx.button_pressed = false;
-
-    if (g_ui_ctx.next_state != UI_STATE_FINGERPRINT_CONFIRM) {
-        printf("ui_manager selftest: fingerprint button should transition to FINGERPRINT_CONFIRM (next_state=%d)\n", (int)g_ui_ctx.next_state);
-        return;
-    }
-    
-    /* Apply transition to FINGERPRINT_CONFIRM */
-    g_ui_ctx.transition_ready = true;
-    (void)ui_manager_update();
-    
-    /* Press button again to confirm and transition to CHAT */
-    g_ui_ctx.button_pressed = true;
-    (void)ui_manager_draw();
-    (void)ui_manager_update();
-    g_ui_ctx.button_pressed = false;
-    
-    if (g_ui_ctx.next_state != UI_STATE_CHAT) {
-        printf("ui_manager selftest: fingerprint confirm button should transition to CHAT (next_state=%d)\n", (int)g_ui_ctx.next_state);
-        return;
-    }
-    printf("CEEPEW: ui_manager selftest - FINGERPRINT button transition PASS\n");
 
     /* Test 8: Sprint 11 - Transition to CHAT state */
     (void)ui_manager_transition_to(UI_STATE_CHAT);
@@ -706,7 +627,6 @@ void ui_manager_selftest_run(void) {
                (int)stacks_rc);
     }
 
-    session_test_unset_fingerprint();
     (void)session_end();
     memset(&g_ble_ctx, 0, sizeof(g_ble_ctx));
     (void)msg_store_wipe_all();

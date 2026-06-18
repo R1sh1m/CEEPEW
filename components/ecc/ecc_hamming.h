@@ -22,4 +22,7 @@ CeePewErr_t ecc_hamming_encode(const uint8_t *in, uint16_t in_len, uint8_t *out,
  * any single-bit errors were corrected. */
 CeePewErr_t ecc_hamming_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uint16_t *out_len, bool *corrected);
 
+/* Reset FEC session state — call during session_end() to prevent stale permutation reuse */
+CeePewErr_t ecc_hamming_deinit(void);
+
 #endif /* ECC_HAMMING_H */

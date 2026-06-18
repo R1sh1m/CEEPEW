@@ -41,6 +41,9 @@ static TaskHandle_t s_ui_task_handle   = NULL;
 /* Track previous DIAG state so we can log transitions */
 static bool s_diag_prev = false;
 
+/* Rate-limit UI error logging: only warn once per 5 seconds to prevent log floods */
+static TickType_t s_last_ui_warn_tick = 0;
+
 /* --------------------------------------------------------------------------
  * ui_handle_events()
  * -------------------------------------------------------------------------- */
@@ -59,8 +62,8 @@ static CeePewErr_t ui_handle_events(void)
              * not just the one that happened to win the timing race.            */
             ESP_LOGI("UI", "SESSION_ESTABLISHED received");
             if ((g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+                 g_ui_ctx.current_state == UI_STATE_PAIRING ||
                  g_ui_ctx.current_state == UI_STATE_DISCOVERY) &&
-                g_ui_ctx.next_state != UI_STATE_PAIRING_SUCCESS &&
                 g_ui_ctx.next_state != UI_STATE_PAIRING_FAILED) {
                 (void)ui_manager_transition_to(UI_STATE_KEYDER);
                 g_ui_ctx.transition_ready = true;
@@ -189,32 +192,52 @@ void task_ui_run(void *pvParameters)
                         diag_direct);
                 }
             } else {
-                ESP_LOGW("UI", "input_update failed: %d", (int)ierr);
+                TickType_t now = xTaskGetTickCount();
+                if ((now - s_last_ui_warn_tick) >= pdMS_TO_TICKS(5000)) {
+                    ESP_LOGW("UI", "input_update failed: %d", (int)ierr);
+                    s_last_ui_warn_tick = now;
+                }
             }
         }
 
         /* ── 2. Advance state machine ───────────────────────────────── */
         CeePewErr_t err = ui_manager_update();
         if (err != CEEPEW_OK) {
-            ESP_LOGW("UI", "ui_manager_update: %d", (int)err);
+            TickType_t now = xTaskGetTickCount();
+            if ((now - s_last_ui_warn_tick) >= pdMS_TO_TICKS(5000)) {
+                ESP_LOGW("UI", "ui_manager_update: %d", (int)err);
+                s_last_ui_warn_tick = now;
+            }
         }
 
         /* ── 3. Draw current screen ────────────────────────────────── */
         err = ui_manager_draw();
         if (err != CEEPEW_OK) {
-            ESP_LOGW("UI", "ui_manager_draw: %d", (int)err);
+            TickType_t now = xTaskGetTickCount();
+            if ((now - s_last_ui_warn_tick) >= pdMS_TO_TICKS(5000)) {
+                ESP_LOGW("UI", "ui_manager_draw: %d", (int)err);
+                s_last_ui_warn_tick = now;
+            }
         }
 
         /* ── 4. Sync RGB LED pattern from session ──────────────────── */
         err = task_session_sync_visual_state();
         if (err != CEEPEW_OK) {
-            ESP_LOGW("UI", "sync_visual_state: %d", (int)err);
+            TickType_t now = xTaskGetTickCount();
+            if ((now - s_last_ui_warn_tick) >= pdMS_TO_TICKS(5000)) {
+                ESP_LOGW("UI", "sync_visual_state: %d", (int)err);
+                s_last_ui_warn_tick = now;
+            }
         }
 
         /* ── 5. Drain event queue (5 ms timeout) ──────────────────── */
         err = ui_handle_events();
         if (err != CEEPEW_OK) {
-            ESP_LOGW("UI", "ui_handle_events: %d", (int)err);
+            TickType_t now = xTaskGetTickCount();
+            if ((now - s_last_ui_warn_tick) >= pdMS_TO_TICKS(5000)) {
+                ESP_LOGW("UI", "ui_handle_events: %d", (int)err);
+                s_last_ui_warn_tick = now;
+            }
         }
 
         /* ── 6. Sleep until next 30 ms tick ───────────────────────── */
