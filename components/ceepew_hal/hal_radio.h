@@ -33,6 +33,7 @@ typedef struct {
 
 CeePewErr_t hal_radio_init(void);
 CeePewErr_t hal_radio_set_peer(const uint8_t peer_mac[6]);
+CeePewErr_t hal_radio_set_peer_with_lmk(const uint8_t peer_mac[6], const uint8_t lmk[16]);
 CeePewErr_t hal_radio_send(const uint8_t *buf, uint16_t len);
 CeePewErr_t hal_radio_set_recv_cb(esp_now_recv_cb_t cb);
 CeePewErr_t hal_radio_set_channel(uint8_t channel);

@@ -175,3 +175,51 @@ CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_
 
     return CEEPEW_OK;
 }
+
+/* HKDF-Expand only (using a pre-computed PRK).
+ * prk: 32-byte pseudorandom key (output of HKDF-Extract)
+ * info: context info string
+ * info_len: length of info
+ * out: output buffer
+ * out_len: desired output length (<= 64) */
+CeePewErr_t crypto_hkdf_expand(const uint8_t *prk, const uint8_t *info, uint8_t info_len, uint8_t *out, uint8_t out_len)
+{
+    CEEPEW_ASSERT(prk != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(out != NULL && out_len > 0U && out_len <= 64U, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(info != NULL || info_len == 0U, CEEPEW_ERR_NULL_PTR);
+
+    uint8_t t[32U];
+    uint8_t generated = 0U;
+    uint8_t previous_len = 0U;
+    uint8_t nblocks = (uint8_t)((out_len + 31U) / 32U);
+    uint8_t input_buf[160U];
+
+    for (uint8_t block = 0U; block < nblocks; block++) {
+        size_t pos = 0U;
+        if (previous_len > 0U) {
+            memcpy(input_buf + pos, t, previous_len);
+            pos += previous_len;
+        }
+        if (info_len > 0U) {
+            memcpy(input_buf + pos, info, info_len);
+            pos += info_len;
+        }
+        input_buf[pos++] = (uint8_t)(block + 1U);
+
+        CeePewErr_t err = hmac_sha256(prk, 32U, input_buf, pos, t);
+        if (err != CEEPEW_OK) {
+            return err;
+        }
+
+        uint8_t to_copy = (uint8_t)((out_len - generated) < 32U ? (out_len - generated) : 32U);
+        memcpy(out + generated, t, to_copy);
+        generated = (uint8_t)(generated + to_copy);
+        previous_len = 32U;
+    }
+
+    volatile uint8_t *vt = (volatile uint8_t *)t;
+    for (uint32_t i = 0U; i < sizeof(t); i++) { vt[i] = 0U; }
+    __asm__ __volatile__("" ::: "memory");
+
+    return CEEPEW_OK;
+}

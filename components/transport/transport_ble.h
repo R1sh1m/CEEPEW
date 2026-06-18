@@ -241,6 +241,10 @@ void transport_ble_reset_accumulated_conn_ms(void);
 /* Gracefully close BLE connection and move to Phase 3 (ESP-NOW handoff) */
 CeePewErr_t transport_ble_disconnect(void);
 
+/* Send HANDOFF_READY beacon (subtype 0x03) to signal PIN confirmed and ready for ESP-NOW handoff.
+ * This beacon allows both peers to synchronize before tearing down BLE and initializing ESP-NOW. */
+CeePewErr_t transport_ble_send_handoff_ready_beacon(void);
+
 /* Deinit BLE subsystem (call on session end) */
 CeePewErr_t transport_ble_deinit(void);
 
@@ -273,7 +277,8 @@ typedef enum {
     PAIRING_EVENT_NONE = 0U,
     PAIRING_EVENT_SIGN_PK_RECEIVED,     /* Peer's sign_pk delivered over 0xFFF3 */
     PAIRING_EVENT_PHASE_TIMEOUT,        /* Supervisor detected a stall */
-    PAIRING_EVENT_RADIO_RESTART         /* Supervisor forcing radio restart */
+    PAIRING_EVENT_RADIO_RESTART,        /* Supervisor forcing radio restart */
+    PAIRING_EVENT_HANDOFF_READY         /* Peer's HANDOFF_READY beacon received */
 } PairingEventType_t;
 
 typedef struct {

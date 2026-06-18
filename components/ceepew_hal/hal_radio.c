@@ -99,7 +99,14 @@ static void radio_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_statu
     CEEPEW_ASSERT_VOID(tx_info != NULL);
     (void)tx_info;
     
-    const char *status_str = (status == ESP_NOW_SEND_SUCCESS) ? "SUCCESS" : "FAIL";
+    const char *status_str = (status == ESP_NOW_SEND_SUCCESS) ? "OK" : "FAIL";
+    
+    #ifdef CEEPEW_DEBUG_SERIAL
+    ESP_LOGI(TAG, "espnow_send_cb: status=%s peer=%02X:%02X:%02X:%02X:%02X:%02X",
+        status_str,
+        tx_info->des_addr[0], tx_info->des_addr[1], tx_info->des_addr[2],
+        tx_info->des_addr[3], tx_info->des_addr[4], tx_info->des_addr[5]);
+    #endif
     
     if (status == ESP_NOW_SEND_SUCCESS) {
         ESP_LOGI(TAG, "ESP-NOW TX OK -> %02X:%02X:%02X:%02X:%02X:%02X",
@@ -159,6 +166,17 @@ static void radio_recv_cb(const esp_now_recv_info_t *esp_now_info, const uint8_t
     CEEPEW_ASSERT_VOID(esp_now_info != NULL);
     CEEPEW_ASSERT_VOID(esp_now_info->src_addr != NULL && data != NULL);
     CEEPEW_ASSERT_VOID(data_len > 0 && data_len <= ESP_NOW_MAX_DATA_LEN);
+
+    #ifdef CEEPEW_DEBUG_SERIAL
+    int rssi = 0;
+    if (esp_now_info->rx_ctrl != NULL) {
+        rssi = esp_now_info->rx_ctrl->rssi;
+    }
+    ESP_LOGI(TAG, "espnow_recv_cb: from=%02X:%02X:%02X:%02X:%02X:%02X len=%d rssi=%d",
+        esp_now_info->src_addr[0], esp_now_info->src_addr[1], esp_now_info->src_addr[2],
+        esp_now_info->src_addr[3], esp_now_info->src_addr[4], esp_now_info->src_addr[5],
+        data_len, rssi);
+    #endif
 
     /* MAC lock: after pairing, silently discard frames from unknown peers */
     uint8_t peer_mac[6];
@@ -393,6 +411,10 @@ CeePewErr_t hal_radio_set_recv_cb(esp_now_recv_cb_t cb){
 }
 
 CeePewErr_t hal_radio_set_peer(const uint8_t peer_mac[6]){
+    return hal_radio_set_peer_with_lmk(peer_mac, NULL);
+}
+
+CeePewErr_t hal_radio_set_peer_with_lmk(const uint8_t peer_mac[6], const uint8_t lmk[16]){
     CEEPEW_ASSERT(peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(!mac_is_zero(peer_mac), CEEPEW_ERR_PARAM);
 
@@ -417,7 +439,13 @@ CeePewErr_t hal_radio_set_peer(const uint8_t peer_mac[6]){
     memcpy(peer.peer_addr, peer_mac, 6U);
     peer.ifidx   = WIFI_IF_STA;
     peer.channel = (uint8_t)CEEPEW_ESPNOW_CHANNEL;
-    peer.encrypt = false;   /* ESL layer handles encryption above ESP-NOW */
+    
+    if (lmk != NULL) {
+        peer.encrypt = true;
+        memcpy(peer.lmk, lmk, 16U);
+    } else {
+        peer.encrypt = false;   /* ESL layer handles encryption above ESP-NOW */
+    }
 
     esp_err_t rc = esp_now_add_peer(&peer);
     CEEPEW_ASSERT(rc == ESP_OK, CEEPEW_ERR_HW);

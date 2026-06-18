@@ -2,6 +2,7 @@
 
 #include "crypto_ctx.h"
 #include "crypto_sha256.h"
+#include "crypto_hkdf.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_assert.h"
 #include "freertos/FreeRTOS.h"
@@ -99,4 +100,31 @@ CeePewErr_t crypto_mutex_unlock(void)
         return CEEPEW_ERR_PARAM;
     }
     return CEEPEW_OK;
+}
+
+/* Derive a 16-byte ESP-NOW Primary Master Key from the session's HKDF output.
+ * Both devices independently compute the same PMK since they share the session key.
+ * Info label disambiguates from other key derivations in the same session. */
+CeePewErr_t crypto_espnow_derive_pmk(uint8_t pmk_out[16])
+{
+    static const uint8_t INFO[] = "ceepew-espnow-pmk-v1";
+    return crypto_hkdf_expand(
+        g_crypto_ctx.ascon_key,   /* HKDF PRK, 32 bytes */
+        INFO, sizeof(INFO) - 1,
+        pmk_out, 16
+    );
+}
+
+/* Derive a 16-byte ESP-NOW Local Master Key for a specific peer.
+ * Incorporates the peer's WiFi MAC so different peers get different LMKs. */
+CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk_out[16])
+{
+    uint8_t info[6 + 20];
+    memcpy(info, peer_wifi_mac, 6);
+    memcpy(info + 6, "ceepew-espnow-lmk-v1", 20);
+    return crypto_hkdf_expand(
+        g_crypto_ctx.ascon_key,
+        info, sizeof(info),
+        lmk_out, 16
+    );
 }

@@ -706,6 +706,48 @@ CeePewErr_t transport_ble_set_commitment_beacon(const uint8_t *commitment, uint8
     return err;
 }
 
+/* Send HANDOFF_READY beacon (subtype 0x03) to signal PIN confirmed and ready for ESP-NOW handoff.
+ * This beacon allows both peers to synchronize before tearing down BLE and initializing ESP-NOW.
+ * Beacon format: AD name "CEEPEW" + manufacturer AD 0xCEEE subtype 0x03 + magic bytes 0xCE 0xEF 0x03
+ * Total: 8 (name) + 7 (mfr: len=5 + company 2 + subtype 1 + magic 3) = 15 bytes */
+static CeePewErr_t transport_ble_send_handoff_ready_beacon_unlocked(void)
+{
+#ifdef CONFIG_BT_ENABLED
+    uint8_t buf[16U];
+    uint8_t pos = 0U;
+    /* AD: complete local name "CEEPEW" */
+    buf[pos++] = 7U;
+    buf[pos++] = 0x09U;
+    buf[pos++] = 'C'; buf[pos++] = 'E'; buf[pos++] = 'E';
+    buf[pos++] = 'P'; buf[pos++] = 'E'; buf[pos++] = 'W';
+    /* AD: manufacturer-specific handoff ready beacon */
+    buf[pos++] = 5U;                /* length: 2 (company) + 1 (subtype) + 3 (magic) = 6? wait */
+    buf[pos++] = 0xFFU;             /* AD type: manufacturer-specific */
+    buf[pos++] = 0xEEU;             /* company ID low  (0xCEEE) */
+    buf[pos++] = 0xCEU;             /* company ID high */
+    buf[pos++] = 0x03U;             /* subtype: CEEPEW handoff ready */
+    buf[pos++] = 0xCEU;             /* magic byte 1 */
+    buf[pos++] = 0xEFU;             /* magic byte 2 */
+    buf[pos++] = 0x03U;             /* magic byte 3 */
+    
+    /* Fix the length byte */
+    buf[9] = (uint8_t)(pos - 9);  /* len = pos - 9 (after the first 9 bytes) */
+    
+    return transport_ble_configure_data_raw_unlocked(NULL, 0U, buf, pos);
+#else
+    return CEEPEW_OK;
+#endif
+}
+
+CeePewErr_t transport_ble_send_handoff_ready_beacon(void)
+{
+    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    ble_ctx_lock();
+    CeePewErr_t err = transport_ble_send_handoff_ready_beacon_unlocked();
+    ble_ctx_unlock();
+    return err;
+}
+
 CeePewErr_t transport_ble_init(void)
 {
     CEEPEW_ASSERT(!s_ble_initialised, CEEPEW_ERR_BUSY);
@@ -1329,23 +1371,66 @@ CeePewErr_t transport_ble_deinit(void)
 
 #ifdef CONFIG_BT_ENABLED
     esp_err_t err;
-    /* Explicitly stop BLE operations before deinit to free the RF
-     * for WiFi/ESP-NOW coexistence during Phase 3. */
-    err = esp_ble_gap_stop_scanning();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_ble_gap_stop_scanning returned %d", err);
-    }
+    
+    /* 1. Stop advertising/scanning so no new events come in */
     err = esp_ble_gap_stop_advertising();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_ble_gap_stop_advertising returned %d", err);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "gap_stop_adv: %s", esp_err_to_name(err));
     }
-    /* Do NOT call esp_ble_gatts_app_unregister / esp_ble_gattc_app_unregister
-     * here.  They internally trigger bta_dm_disable with a 200 ms
-     * BTA_DISABLE_DELAY that blocks the BT controller task on CPU0 long
-     * enough to trip the Interrupt Watchdog Timer (IWDT).  Since we have
-     * already stopped scanning and advertising the link-layer is idle;
-     * leaving the app registrations in place is harmless and avoids the
-     * crash. */
+    err = esp_ble_gap_stop_scanning();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "gap_stop_scan: %s", esp_err_to_name(err));
+    }
+
+    /* 2. Disconnect any open GATT connections */
+    if (g_ble_ctx.gattc_connected) {
+        esp_ble_gattc_close(g_ble_ctx.gattc_if, g_ble_ctx.conn_id);
+        /* Wait for ESP_GATTS_DISCONNECT_EVT - but we can't block here indefinitely.
+         * Give it a short delay for the disconnect to be processed. */
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (g_ble_ctx.gatts_connected) {
+        esp_ble_gatts_close(g_ble_ctx.gatts_if, g_ble_ctx.conn_id);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    /* 3. Drain the BT event queue — give the stack time to settle */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* 4. Disable and deinit Bluedroid */
+    err = esp_bluedroid_disable();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bluedroid_disable: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bluedroid_disabled");
+    }
+    err = esp_bluedroid_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bluedroid_deinit: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bluedroid_deinitialized");
+    }
+
+    /* 5. Disable and deinit the BT controller */
+    err = esp_bt_controller_disable();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bt_ctrl_disable: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bt_controller_disabled");
+    }
+    err = esp_bt_controller_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bt_ctrl_deinit: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bt_controller_deinitialized");
+    }
+
+    /* 6. Wait for the radio to fully release before WiFi claims it */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_LOGI(TAG, "BLE fully torn down");
+#else
+    ESP_LOGI(TAG, "BLE deinit (CONFIG_BT_ENABLED not set)");
 #endif
 
     memset(&g_ble_ctx, 0U, sizeof(BleContext_t));
@@ -1981,6 +2066,25 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                 /* Equal counter (peer_counter == seen_max) is a normal duplicate
                  * during BLE scanning — the peer re-sends the same beacon on
                  * every SCAN_REQ. Silently ignore without logging. */
+            }
+        }
+
+        /* HANDOFF_READY beacon (subtype 0x03): peer has confirmed PIN and is ready for ESP-NOW handoff.
+         * We push an event so the pairing supervisor can synchronize both sides before BLE teardown. */
+        if (is_ceepew_peer && (cur_phase == 2U || cur_phase == 3U) &&
+            mfr_ptr != NULL && mfr_len >= 4U &&
+            mfr_ptr[0] == 0xEEU &&
+            mfr_ptr[1] == 0xCEU &&
+            mfr_ptr[2] == 0x03U)
+        {
+            /* Verify magic bytes: 0xCE 0xEF 0x03 */
+            if (mfr_len >= 7U &&
+                mfr_ptr[3] == 0xCEU &&
+                mfr_ptr[4] == 0xEFU &&
+                mfr_ptr[5] == 0x03U)
+            {
+                ESP_LOGI(TAG, "HANDOFF_READY beacon received from %s", found_mac);
+                transport_ble_post_event(PAIRING_EVENT_HANDOFF_READY, param->scan_rst.bda, 6U);
             }
         }
     } break;
@@ -2901,6 +3005,15 @@ static CeePewErr_t transport_ble_handle_event_internal(const PairingEvent_t *eve
             ESP_LOGI(TAG, "supervisor: SIGN_PK_RECEIVED — phase=%s handoff=%d sign_pk=%d",
                      transport_ble_phase_name(s_pairing_ctx.phase),
                      g_ble_ctx.handoff_ready, g_ble_ctx.sign_pk_received);
+            break;
+        }
+
+        case PAIRING_EVENT_HANDOFF_READY: {
+            ESP_LOGI(TAG, "supervisor: HANDOFF_READY received from peer");
+            /* Set the peer's handoff ready flag so we know both sides are ready.
+             * The actual BLE teardown and ESP-NOW init is driven by task_session.c
+             * when both local and peer handoff_ready are set. */
+            g_ble_ctx.peer_ready_for_chat = true;
             break;
         }
 

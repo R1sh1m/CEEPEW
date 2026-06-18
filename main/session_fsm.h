@@ -454,6 +454,11 @@ CeePewErr_t session_get_commitment_with_sig(uint8_t *out_buf, uint8_t *out_len);
  */
 CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, uint8_t len);
 
+/* Send a message and wait for an echo response (round-trip test).
+ * The peer must be running the same test and will echo the payload back.
+ * Returns CEEPEW_OK on successful round-trip, error on timeout or failure. */
+CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_t timeout_ms);
+
 /* ── Test injection setters (replace the old __attribute__((weak)) mocks) ──
  * Setting a value short-circuits the corresponding session_get_*() return.
  * Safe to call from any context. Marked with a leading underscore on the

@@ -733,6 +733,44 @@ if (is_initiator && !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected &&
     g_ble_ctx.accumulated_conn_ms = 0U;
     s_ble_commitment_exchanged = false;
 
+    /* HANDOFF SYNC: Both peers must send HANDOFF_READY beacon and receive
+     * the peer's beacon before tearing down BLE. This prevents race where
+     * one side tears down BLE before the other has confirmed the PIN. */
+    if (g_ble_ctx.ready_for_chat && !g_ble_ctx.peer_ready_for_chat) {
+        /* Send HANDOFF_READY beacon if we're ready but haven't received peer's yet */
+        (void)transport_ble_send_handoff_ready_beacon();
+        ESP_LOGI(TAG, "Sent HANDOFF_READY beacon, waiting for peer...");
+    }
+
+    /* Wait for peer's HANDOFF_READY beacon with timeout */
+    const uint32_t handoff_sync_timeout_ms = 5000U;
+    uint32_t handoff_start_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    while (!g_ble_ctx.peer_ready_for_chat) {
+        now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+        if ((now_ms - handoff_start_ms) > handoff_sync_timeout_ms) {
+            ESP_LOGW(TAG, "HANDOFF_READY sync timeout — peer not ready");
+            break;  /* Proceed anyway, peer may have already moved on */
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    /* Both sides ready (or timeout) — send final beacon and proceed */
+    if (g_ble_ctx.peer_ready_for_chat) {
+        ESP_LOGI(TAG, "HANDOFF_READY sync complete — both peers ready");
+    }
+    (void)transport_ble_send_handoff_ready_beacon();  /* Final beacon */
+
+    /* Diagnostic: log peer WiFi MAC before BLE teardown */
+    #ifdef CEEPEW_DEBUG_SERIAL
+    uint8_t debug_wifi_mac[6] = {0};
+    if (session_peer_wifi_mac_valid()) {
+        (void)session_get_peer_wifi_mac(debug_wifi_mac);
+        ESP_LOGI(TAG, "BLE teardown starting, peer_wifi_mac=%02X:%02X:%02X:%02X:%02X:%02X",
+            debug_wifi_mac[0], debug_wifi_mac[1], debug_wifi_mac[2],
+            debug_wifi_mac[3], debug_wifi_mac[4], debug_wifi_mac[5]);
+    }
+    #endif
+
     /* BLE is no longer needed for pairing — deinitialize the BLE stack to free
      * RF and RAM */
     (void)transport_ble_deinit();
@@ -770,10 +808,16 @@ if (is_initiator && !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected &&
     /* Ensure WiFi is fully powered for ESP-NOW post-derive sync.
      * hal_radio_init() is idempotent — safe to call when already up.
      * Re-assert the WiFi channel in case BLE coexistence drifted it. */
+    #ifdef CEEPEW_DEBUG_SERIAL
+    ESP_LOGI(TAG, "Calling hal_radio_init()");
+    #endif
     COEX_LOG("hal_radio_init()");
     (void)hal_radio_init();
     (void)hal_radio_set_power_save(WIFI_PS_NONE);
     (void)hal_radio_set_channel(CEEPEW_ESPNOW_CHANNEL);
+    #ifdef CEEPEW_DEBUG_SERIAL
+    ESP_LOGI(TAG, "ESP-NOW initialized on channel %d", CEEPEW_ESPNOW_CHANNEL);
+    #endif
     vTaskDelay(pdMS_TO_TICKS(100));  /* 100 ms for WiFi/coex stack to settle (was 200) */
 
     /* Register the ESP-NOW peer ONCE after key derivation.
@@ -796,18 +840,32 @@ if (is_initiator && !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected &&
         return peer_err;
     }
 
+    /* Derive ESP-NOW Local Master Key (LMK) for this peer.
+     * LMK is derived from session key + peer WiFi MAC. */
+    uint8_t lmk[16];
+    peer_err = crypto_espnow_derive_lmk(peer_mac, lmk);
+    if (peer_err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "Failed to derive ESP-NOW LMK: %d", (int)peer_err);
+        return peer_err;
+    }
+
     /* Retry peer registration with verification — ESP-NOW peer add can
      * fail transiently due to WiFi/BLE coexistence or timing.
      * Retry up to 3 times with increasing delays. */
     const uint32_t peer_retry_delays_ms[] = {50U, 150U, 300U};
     for (uint8_t attempt = 0; attempt < 3U; attempt++) {
-        COEX_LOG("hal_radio_set_peer() attempt %u", (unsigned)attempt + 1U);
-        peer_err = hal_radio_set_peer(peer_mac);
+        COEX_LOG("hal_radio_set_peer_with_lmk() attempt %u", (unsigned)attempt + 1U);
+        peer_err = hal_radio_set_peer_with_lmk(peer_mac, lmk);
+        ceepew_secure_zero(lmk, sizeof(lmk));
         if (peer_err == CEEPEW_OK) {
             /* Verify the peer was actually added to the ESP-NOW peer list */
             vTaskDelay(pdMS_TO_TICKS(peer_retry_delays_ms[attempt]));
             if (hal_radio_is_peer_registered(peer_mac)) {
                 COEX_LOG("Peer registered and verified (attempt %u)", (unsigned)attempt + 1U);
+                #ifdef CEEPEW_DEBUG_SERIAL
+                ESP_LOGI(TAG, "ESP-NOW peer registered: %02X:%02X:%02X:%02X:%02X:%02X",
+                    peer_mac[0], peer_mac[1], peer_mac[2], peer_mac[3], peer_mac[4], peer_mac[5]);
+                #endif
                 break;
             }
             ESP_LOGW(TAG, "ESP-NOW peer registration reported OK but not verified (attempt %u)", (unsigned)attempt + 1U);

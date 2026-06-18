@@ -43,4 +43,12 @@ CeePewErr_t crypto_mutex_lock(void);
 /* Release the global crypto mutex. */
 CeePewErr_t crypto_mutex_unlock(void);
 
+/* Derive a 16-byte ESP-NOW Primary Master Key from the session's HKDF output.
+ * Both devices independently compute the same PMK since they share the session key. */
+CeePewErr_t crypto_espnow_derive_pmk(uint8_t pmk_out[16]);
+
+/* Derive a 16-byte ESP-NOW Local Master Key for a specific peer.
+ * Incorporates the peer's WiFi MAC so different peers get different LMKs. */
+CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk_out[16]);
+
 #endif /* CRYPTO_CTX_H */

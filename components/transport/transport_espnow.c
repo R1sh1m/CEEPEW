@@ -7,6 +7,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <stdint.h>
+#include "esp_log.h"
+#include "esp_wifi.h"
+
+static const char *TAG = "transport_espnow";
 
 static SemaphoreHandle_t s_send_sem = NULL;
 static esp_now_send_status_t s_last_send_status = ESP_NOW_SEND_FAIL;
@@ -28,6 +32,12 @@ static CeePewErr_t transport_espnow_ensure_sync(void)
 static void transport_send_status_cb(esp_now_send_status_t status)
 {
     s_last_send_status = status;
+    
+    #ifdef CEEPEW_DEBUG_SERIAL
+    ESP_LOGI(TAG, "espnow_send_cb: status=%s", 
+        status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+    #endif
+    
     if (s_send_sem != NULL) {
         BaseType_t rc = xSemaphoreGive(s_send_sem);
         (void)rc;
@@ -59,6 +69,11 @@ CeePewErr_t transport_espnow_send(const uint8_t *peer_mac, const uint8_t *data, 
     if (s_send_sem != NULL) {
         xSemaphoreTake(s_send_sem, 0U);
     }
+
+    #ifdef CEEPEW_DEBUG_SERIAL
+    ESP_LOGI(TAG, "transport_espnow_send: peer=%02X:%02X:%02X:%02X:%02X:%02X len=%d",
+        peer_mac[0], peer_mac[1], peer_mac[2], peer_mac[3], peer_mac[4], peer_mac[5], len);
+    #endif
 
     return hal_radio_send(data, len);
 }

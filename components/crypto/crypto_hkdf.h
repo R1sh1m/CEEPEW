@@ -20,4 +20,12 @@ CeePewErr_t crypto_hkdf_build_info(const uint8_t *label, uint8_t label_len,
                                    uint8_t *out_info, uint8_t out_info_max_len,
                                    uint8_t *out_len);
 
+/* HKDF-Expand only (using a pre-computed PRK).
+ * prk: 32-byte pseudorandom key (output of HKDF-Extract)
+ * info: context info string
+ * info_len: length of info
+ * out: output buffer
+ * out_len: desired output length (<= 64) */
+CeePewErr_t crypto_hkdf_expand(const uint8_t *prk, const uint8_t *info, uint8_t info_len, uint8_t *out, uint8_t out_len);
+
 #endif /* CRYPTO_HKDF_H */
