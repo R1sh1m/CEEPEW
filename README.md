@@ -47,5 +47,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview, three-phase
 ## Security
 See [SECURITY.md](SECURITY.md) for threat model, known limitations, responsible disclosure, and build security notes.
 
-## License
-MIT License — see LICENSE file for details.
+
+//fix the license type, create proper ascii art banner, and add build instructions for Linux in the README. Also add a note about the 4-character PIN providing ~20 bits of brute-force resistance against an active MITM during the pairing window. also need to address the various notes, confusions and design choices etc. doesn't really give detailed insight into the design and implementation, just a high-level overview. need to add more details about the crypto stack, transport stack, memory model, task architecture, and component map. also need to add a section on security considerations, threat model, and known limitations.
+no detailed installs and build explanation, lack of flairs etc for GitHub
