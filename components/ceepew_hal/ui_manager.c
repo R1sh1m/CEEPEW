@@ -2659,6 +2659,113 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
+#ifdef CONFIG_CEEPEW_HEADLESS_MODE
+    /* ── Headless auto-advance ──────────────────────────────────────────
+     * Auto-advances UI through pairing flow without OLED or buttons.
+     * Hardcoded session code "ZZZZ" is used for commitment verification.
+     *
+     * Timing:
+     *   DISCOVERY: wait 3s after peer appears → CODE_ENTRY
+     *   CODE_ENTRY: wait 2s, set ZZZZ → CONFIRM
+     *   CONFIRM → PAIRING: automatic via render_confirm once commitment
+     *                       matches (no action needed here)               */
+    {
+        if (g_ui_ctx.current_state == UI_STATE_DISCOVERY && !g_ui_ctx.diag_mode) {
+            static uint32_t s_disc_entry_ms = 0U;
+            if (s_disc_entry_ms == 0U) {
+                s_disc_entry_ms = now_ms;
+                ESP_LOGW("headless", "DISC timer started at %lu", now_ms);
+            } else if ((now_ms - s_disc_entry_ms) >= 1000U) {
+                bool peer = transport_ble_has_peer_cached();
+                ESP_LOGW("headless", "DISC timer elapsed=%lu peer=%d", now_ms - s_disc_entry_ms, (int)peer);
+                if (peer) {
+                    ESP_LOGW("headless", "DISCOVERY → CODE_ENTRY");
+                    (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
+                    g_ui_ctx.transition_ready = true;
+                    s_disc_entry_ms = 0U;
+                } else {
+                    s_disc_entry_ms = now_ms;
+                }
+            }
+        } else if (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY) {
+            uint32_t elapsed = (now_ms >= g_ui_ctx.code_entry_start_ms)
+                             ? (now_ms - g_ui_ctx.code_entry_start_ms) : 0U;
+            ESP_LOGW("headless", "CODE_ENTRY elapsed=%lu", elapsed);
+            /* Set ZZZZ once after 2s minimum */
+            if (elapsed >= 2000U && g_ui_ctx.code_digits[0] != (uint8_t)'Z') {
+                session_ui_ctx_lock();
+                g_ui_ctx.code_digits[0] = (uint8_t)'Z';
+                g_ui_ctx.code_digits[1] = (uint8_t)'Z';
+                g_ui_ctx.code_digits[2] = (uint8_t)'Z';
+                g_ui_ctx.code_digits[3] = (uint8_t)'Z';
+                session_ui_ctx_unlock();
+                ESP_LOGW("headless", "CODE_ENTRY ZZZZ set at %lu", now_ms);
+            }
+            /* Poll peer after ZZZZ is set; transition as soon as peer appears */
+            if (g_ui_ctx.code_digits[0] == (uint8_t)'Z') {
+                if (transport_ble_has_peer_cached()) {
+                    memcpy(g_ui_ctx.peer_mac, g_ble_ctx.peer_mac, 6U);
+                    (void)ui_manager_transition_to(UI_STATE_CONFIRM);
+                    g_ui_ctx.pairing_start_ms = now_ms;
+                    g_ui_ctx.transition_ready = true;
+                    ESP_LOGW("headless", "CODE_ENTRY → CONFIRM (code=ZZZZ) peer=%02x:%02x:%02x:%02x:%02x:%02x",
+                             g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1], g_ble_ctx.peer_mac[2],
+                             g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
+                } else {
+                    ESP_LOGW("headless", "CODE_ENTRY waiting for peer (elapsed=%lu)", elapsed);
+                }
+            }
+        } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
+            static uint32_t s_pfail_entry_ms = 0U;
+            if (s_pfail_entry_ms == 0U) {
+                s_pfail_entry_ms = now_ms;
+                ESP_LOGW("headless", "PAIR_FAIL entered at %lu", now_ms);
+            } else if ((now_ms - s_pfail_entry_ms) >= 2000U) {
+                ESP_LOGW("headless", "PAIR_FAIL auto-acknowledge, restarting discovery");
+                s_pfail_entry_ms = 0U;
+                (void)ui_restart_discovery_from_pairing();
+                g_ui_ctx.transition_ready = true;
+                if (transport_ble_has_peer_cached()) {
+                    (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
+                }
+                (void)rgb_set_pattern(RGB_BLUE_PULSE);
+            }
+        } else if (g_ui_ctx.current_state == UI_STATE_CONFIRM) {
+            /* Auto-advance from CONFIRM once commitment is verified.
+             * The render_confirm() function handles this for the display
+             * path, but in headless mode we must drive it explicitly. */
+            static uint32_t s_confirm_entry_ms = 0U;
+            if (s_confirm_entry_ms == 0U) {
+                s_confirm_entry_ms = now_ms;
+                ESP_LOGW("headless", "CONFIRM entered at %lu", now_ms);
+            }
+            if (g_ble_ctx.commitment_verified) {
+                ESP_LOGW("headless", "CONFIRM → PAIRING (commitment verified at %lu)",
+                         now_ms);
+                s_confirm_entry_ms = 0U;
+                (void)ui_manager_transition_to(UI_STATE_PAIRING);
+                g_ui_ctx.pairing_start_ms = now_ms;
+                g_ui_ctx.transition_ready = true;
+            } else if ((now_ms - s_confirm_entry_ms) >= CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS) {
+                ESP_LOGW("headless", "CONFIRM → PAIRING_FAILED (timeout %lu ms at %lu)",
+                         (unsigned long)CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS, now_ms);
+                s_confirm_entry_ms = 0U;
+                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
+                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                g_ui_ctx.transition_ready = true;
+            } else if ((now_ms % 5000U) < 50U) {
+                ESP_LOGW("headless", "state=%d (waiting for commitment, elapsed=%lu)",
+                         (int)g_ui_ctx.current_state,
+                         (unsigned long)(now_ms - s_confirm_entry_ms));
+            }
+        } else {
+            if ((now_ms % 5000U) < 50U) {
+                ESP_LOGW("headless", "state=%d", (int)g_ui_ctx.current_state);
+            }
+        }
+    }
+#endif
+
     if (g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED) {
         /* Spec §4: PAIRING_FAILED persists until button press.
          * The user must explicitly acknowledge the failure before the
@@ -2859,8 +2966,8 @@ CeePewErr_t ui_manager_update(void)
                  * transport_ble_deinit() can zero it after key derivation, causing
                  * hal_radio_set_peer() to fail with CEEPEW_ERR_PARAM (mac_is_zero). */
                 uint8_t session_peer_mac[6] = {0U};
-                if (session_get_peer_device_id(session_peer_mac) != CEEPEW_OK) {
-                    ESP_LOGW("ui", "send: session peer MAC not locked — aborting send");
+                if (session_get_peer_wifi_mac(session_peer_mac) != CEEPEW_OK) {
+                    ESP_LOGW("ui", "send: session peer WiFi MAC not locked — aborting send");
                     g_ui_ctx.reject_sequence_start_ms = 0U;
                     g_ui_ctx.error_start_ms = now_ms;
                     (void)ui_manager_transition_to(UI_STATE_ERROR);
@@ -3344,6 +3451,12 @@ CeePewErr_t ui_manager_draw(void)
 CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
     CEEPEW_ASSERT(next_state <= UI_STATE_CHAT_SEND_CONFIRM, CEEPEW_ERR_PARAM);
+    if (next_state == UI_STATE_PAIRING_FAILED) {
+        ESP_LOGW("ui_transition", "→ PAIRING_FAILED (was %u)", g_ui_ctx.current_state);
+    }
+    if (next_state == UI_STATE_PAIRING) {
+        ESP_LOGI("ui_transition", "→ PAIRING (was %u)", g_ui_ctx.current_state);
+    }
     g_ui_ctx.next_state = next_state;
     return CEEPEW_OK;
 }

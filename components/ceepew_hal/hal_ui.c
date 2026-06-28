@@ -34,6 +34,7 @@ static ceepew_oled_t *s_oled;       /* the panel device handle           */
 static bool           s_ui_initialised;  /* hal_ui_init completed    */
 static bool           s_sh1106_mode;     /* SH1106 +2 col offset    */
 static bool           s_framebuffer_dirty; /* fast-path: anything dirty? */
+static bool           s_display_absent;       /* true → no OLED connected, all ops are no-ops */
 static uint32_t       s_last_flush_diag_ms;
 static bool           s_nonzero_flush_seen;
 
@@ -88,6 +89,11 @@ static void hal_ui_clear_tile_dirty(void)
 
 static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
 {
+    /* Force digital IOMUX on SDA/SCL to clear any RTC domain mux conflict
+     * (GPIO 26/27 are RTC-domain on ESP32 — the RTC peripheral may hold
+     * them in analog mode after WiFi/BT init). */
+    gpio_reset_pin(sda);
+    gpio_reset_pin(scl);
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_dev_handle_t dev = NULL;
     esp_err_t rc = ceepew_oled_bus_init(&bus, &dev, sda, scl, freq, addr);
@@ -125,6 +131,8 @@ static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t f
 
 static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
 {
+    gpio_reset_pin(sda);
+    gpio_reset_pin(scl);
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_dev_handle_t dev = NULL;
     esp_err_t rc = ceepew_oled_bus_init(&bus, &dev, sda, scl, freq, addr);
@@ -172,6 +180,16 @@ static CeePewErr_t ssd1306_bringup(void)
         return CEEPEW_OK;
     }
 
+    /* Try Configuration 2b: Primary pins, Primary address, Fallback frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    /* Try Configuration 2c: Primary pins, Fallback address, Fallback frequency */
+    if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
     /* Try Configuration 3: Fallback pins, Primary address, Primary frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
         return CEEPEW_OK;
@@ -200,6 +218,14 @@ static CeePewErr_t ssd1306_bringup(void)
     }
 
     if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
+        return CEEPEW_OK;
+    }
+
+    if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
@@ -279,12 +305,16 @@ CeePewErr_t hal_ui_init(void)
     ESP_LOGI(TAG, "hal_ui_init (in-house ceepew_oled, I2C only)");
     s_sh1106_mode        = false;
     s_framebuffer_dirty   = true;   /* initial flush below is non-redundant */
+    s_display_absent      = false;
     s_nonzero_flush_seen  = false;
     s_last_flush_diag_ms  = 0U;
 
     CeePewErr_t err = ssd1306_bringup();
     if (err != CEEPEW_OK) {
-        return err;
+        ESP_LOGW(TAG, "OLED init failed — continuing headless; all display ops are no-ops");
+        s_display_absent    = true;
+        s_ui_initialised    = true;
+        return CEEPEW_OK;
     }
 
     /* Zero the framebuffer so a first flush shows a clean screen even
@@ -295,11 +325,9 @@ CeePewErr_t hal_ui_init(void)
 
     CeePewErr_t flush_err = ssd1306_display_push();
     if (flush_err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "Initial flush failed");
-        s_ui_initialised = false;
-        return flush_err;
+        ESP_LOGW(TAG, "Initial display flush failed — continuing headless");
+        s_display_absent = true;
     }
-
 
     return CEEPEW_OK;
 }
@@ -307,6 +335,7 @@ CeePewErr_t hal_ui_init(void)
 CeePewErr_t hal_ui_clear(void)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     (void)memset(s_fb, 0, ceepew_oled_get_buffer_size(s_oled));
     hal_ui_clear_tile_dirty();
     s_framebuffer_dirty = true;
@@ -316,6 +345,7 @@ CeePewErr_t hal_ui_clear(void)
 CeePewErr_t hal_ui_flush(void)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
 
     /* Skip the I2C push entirely if nothing changed since the last
      * flush. Static screens (info, error, ...) hit this path
@@ -398,6 +428,7 @@ static inline void fb_pixel(uint8_t x, uint8_t y, bool on)
 CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(x < HAL_UI_WIDTH_PX && y < HAL_UI_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
 
     switch (color) {
@@ -419,6 +450,7 @@ CeePewErr_t hal_ui_pixel(uint8_t x, uint8_t y, HalUIColor_t color)
 CeePewErr_t hal_ui_hline(uint8_t x0, uint8_t x1, uint8_t y, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(y < HAL_UI_HEIGHT_PX, CEEPEW_ERR_BOUNDS);
 
     if (x0 > x1) { uint8_t tmp = x0; x0 = x1; x1 = tmp; }
@@ -431,6 +463,7 @@ CeePewErr_t hal_ui_hline(uint8_t x0, uint8_t x1, uint8_t y, HalUIColor_t color)
 CeePewErr_t hal_ui_vline(uint8_t x, uint8_t y0, uint8_t y1, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(x < HAL_UI_WIDTH_PX, CEEPEW_ERR_BOUNDS);
 
     if (y0 > y1) { uint8_t tmp = y0; y0 = y1; y1 = tmp; }
@@ -443,12 +476,14 @@ CeePewErr_t hal_ui_vline(uint8_t x, uint8_t y0, uint8_t y1, HalUIColor_t color)
 CeePewErr_t hal_ui_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     return ceepew_oled_gfx_line(s_oled, x0, y0, x1, y1, color);
 }
 
 CeePewErr_t hal_ui_rect(const HalUIRect_t *r, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
     return ceepew_oled_gfx_rect(s_oled, r, color);
 }
@@ -456,6 +491,7 @@ CeePewErr_t hal_ui_rect(const HalUIRect_t *r, HalUIColor_t color)
 CeePewErr_t hal_ui_rect_fill(const HalUIRect_t *r, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
     return ceepew_oled_gfx_rect_fill(s_oled, r, color);
 }
@@ -463,18 +499,21 @@ CeePewErr_t hal_ui_rect_fill(const HalUIRect_t *r, HalUIColor_t color)
 CeePewErr_t hal_ui_circle(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     return ceepew_oled_gfx_circle(s_oled, cx, cy, radius, color);
 }
 
 CeePewErr_t hal_ui_circle_fill(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     return ceepew_oled_gfx_circle_fill(s_oled, cx, cy, radius, color);
 }
 
 CeePewErr_t hal_ui_text(uint8_t x, uint8_t y, const char *str, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(str != NULL, CEEPEW_ERR_NULL_PTR);
     return ceepew_oled_gfx_text(s_oled, x, y, str, color);
 }
@@ -482,6 +521,7 @@ CeePewErr_t hal_ui_text(uint8_t x, uint8_t y, const char *str, HalUIColor_t colo
 CeePewErr_t hal_ui_char(uint8_t x, uint8_t y, char c, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
+    if (s_display_absent) { return CEEPEW_OK; }
 
     uint8_t idx;
     if ((uint8_t)c < 32U || (uint8_t)c > 126U) {

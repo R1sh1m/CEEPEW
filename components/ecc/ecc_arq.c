@@ -8,6 +8,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_random.h"
+#include "esp_timer.h"
+#include "../ceepew_hal/hal_radio.h"
 
 #define CEEPEW_ARQ_SEQ_BYTES 1U
 
@@ -18,6 +20,10 @@
  */
 #define CEEPEW_ARQ_BACKOFF_BASE_MS 100U
 #define CEEPEW_ARQ_JITTER_PERCENT 10U
+
+/* Hop synchronization state */
+static volatile bool s_arq_hop_paused = false;
+static uint32_t s_arq_pause_start_ms = 0U;
 
 /* Calculate exponential backoff time with ±jitter_percent deviation.
  *
@@ -55,13 +61,49 @@ static uint16_t ecc_arq_compute_backoff_ms(uint8_t attempt) {
     return actual_wait_ms;
 }
 
+/* Hop synchronization callbacks — called from hal_radio hop task.
+ * pre_hop: Pause ARQ retransmit timer ~10ms before channel change.
+ * post_hop: Resume ARQ retransmit timer ~10ms after channel change.
+ * These must be fast and non-blocking (hop task context). */
+static void ecc_arq_pre_hop_cb(void)
+{
+    s_arq_hop_paused = true;
+    s_arq_pause_start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+static void ecc_arq_post_hop_cb(void)
+{
+    s_arq_hop_paused = false;
+    s_arq_pause_start_ms = 0U;
+}
+
+/* Initialize ARQ hop synchronization — register callbacks with hal_radio.
+ * Call once after hal_radio_init() and before starting channel hopping. */
+CeePewErr_t ecc_arq_init_hop_sync(void)
+{
+    return hal_radio_set_hop_sync_callbacks(ecc_arq_pre_hop_cb, ecc_arq_post_hop_cb);
+}
+
 static uint16_t s_tx_seq = 0U;
 static uint16_t s_expected_rx_seq = 0U;
 static bool s_rx_init = false;
 
+/* Reset ARQ engine state — zeroes sequence counters for clean slate chat.
+ * Called from session_clear_sync_barrier_internal() at the instant the
+ * post-derive sync barrier is verified. This ensures no stale sequence
+ * numbers from the pairing exchange contaminate the active session. */
+CeePewErr_t ecc_arq_reset(void)
+{
+    s_tx_seq = 0U;
+    s_expected_rx_seq = 0U;
+    s_rx_init = false;
+    return CEEPEW_OK;
+}
+
 /* Forward-declare transport functions provided elsewhere */
 CeePewErr_t transport_espnow_send(const uint8_t *peer_mac, const uint8_t *data, uint16_t len);
 CeePewErr_t transport_wait_ack(const uint8_t *peer_mac, uint16_t seq, uint32_t timeout_ms);
+CeePewErr_t transport_espnow_rendezvous_drive(void);
 
 CeePewErr_t ecc_arq_encode(const uint8_t *in, uint16_t in_len, uint8_t *out, uint16_t *out_len, uint16_t max_out_len){
     CEEPEW_ASSERT(in != NULL || in_len == 0U, CEEPEW_ERR_NULL_PTR);
@@ -125,6 +167,13 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
     uint16_t seq = s_tx_seq - 1;  /* Last sequence used by encode */
 
     for (uint8_t attempt = 0U; attempt < CEEPEW_ARQ_MAX_RETRIES; attempt++){
+        /* Wait if a channel hop is in progress (paused by pre_hop_cb).
+         * This prevents transmitting during the ~20ms window when the radio
+         * is switching channels, which would cause unnecessary retries. */
+        while (s_arq_hop_paused) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+
         err = transport_espnow_send(peer_mac, frame, frame_len);
         if (err != CEEPEW_OK){ return err; }
 
@@ -136,10 +185,17 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
         else if (ack_err == CEEPEW_ERR_TIMEOUT){
             /* Timeout: apply exponential backoff with jitter before retry.
              * Skip delay on final attempt (all retries exhausted after this loop).
-             */
+             * Also respect hop pauses during backoff. */
             if (attempt < CEEPEW_ARQ_MAX_RETRIES - 1U) {
                 uint16_t backoff_ms = ecc_arq_compute_backoff_ms(attempt);
-                vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+                uint32_t backoff_start = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                while ((uint32_t)(esp_timer_get_time() / 1000ULL) - backoff_start < backoff_ms) {
+                    if (s_arq_hop_paused) {
+                        /* Extend backoff by pause duration */
+                        backoff_start += 2;  /* Small adjustment */
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
             }
             continue;
         }

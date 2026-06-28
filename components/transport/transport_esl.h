@@ -3,9 +3,9 @@
  * CEE-PEW ESP-NOW Security Layer (ESL)
  * Implements CRC, timestamp validation, replay window, and MAC locking.
  *
- * SECURITY CRITICAL: Receive pipeline must enforce strict ordering:
+ * SECURITY CRITICAL: Receive pipeline order:
  *   DoS → MAC lock → CRC → FEC → timestamp → replay → decrypt → verify
- * All crypto failures result in SILENT DISCARD (no response).
+ * All crypto failures = SILENT DISCARD (no response).
  */
 
 #ifndef TRANSPORT_ESL_H
@@ -19,57 +19,90 @@
 typedef CeePewErr_t (*EslMacCheckFn)(const uint8_t mac[6]);
 typedef CeePewErr_t (*EslNonceFn)(void);
 
-/* Register session callbacks used by ESL without introducing a hard
- * transport->session dependency. Both callbacks must be non-NULL.
- */
+/* Register session callbacks. Both must be non-NULL. */
 CeePewErr_t esl_register_callbacks(EslMacCheckFn mac_cb, EslNonceFn nonce_cb);
 
-/* Reset ESL callback registration state. Must be called from session_end()
- * so that a subsequent session can re-register callbacks without hitting
- * the "Cannot re-register" assertion. */
+/* Reset callback state. Call from session_end() for re-registration. */
 void esl_reset_callbacks(void);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Wrap plaintext with ESL header + CRC for transmission.
- * On input, frame contains payload; on output, frame = header + payload + CRC.
- * 
- * PARAMETERS:
- *   frame: Payload buffer (will be repositioned to make room for header)
- *   len: In/out: payload length → full frame length
- *   max_len: Maximum allowed frame length
- *
- * RETURNS:
- *   CEEPEW_OK — Frame wrapped successfully
- *   CEEPEW_ERR_NULL_PTR — frame or len is NULL
- *   CEEPEW_ERR_BOUNDS — Output would exceed max_len or payload too large
- */
+/* Wrap payload with ESL header + CRC. frame buffer must have headroom for header. */
 CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len);
 CeePewErr_t transport_esl_get_last_nonce_counter(uint64_t *nonce_counter_out);
 
 /* Process incoming ESL frame with full security pipeline.
- * Implements: DoS check → MAC lock → CRC → FEC → timestamp → replay → crypto verify.
- * 
- * SECURITY: Auth/replay/decrypt failures produce SILENT DISCARD (no response).
- * Only CRC failures (transport errors) may produce retransmission requests.
- *
- * PARAMETERS:
- *   frame: Received frame with header + payload + CRC (will be stripped on success)
- *   len: In/out: frame length → payload length (header + CRC removed)
- *   peer_mac: Source MAC address from ESP-NOW header (6 bytes)
- *   queue_depth: Current RX queue depth (for DoS threshold detection)
- *
- * RETURNS:
- *   CEEPEW_OK — Frame valid and authenticated; payload extracted
- *   CEEPEW_ERR_TRANSPORT — CRC mismatch or protocol violation (may NACK)
- *   CEEPEW_ERR_REPLAY — Duplicate or out-of-window sequence (silent fail)
- *   CEEPEW_ERR_AUTH_FAIL — Ascon or Ed25519 failure (silent fail)
- *   CEEPEW_ERR_PARAM — Frame too short or invalid peer_mac
- *   CEEPEW_ERR_NULL_PTR — frame, len, or peer_mac is NULL
+ * SECURITY: Auth/replay/decrypt failures = SILENT DISCARD. CRC failures may NACK. */
+CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len,
+                                           const uint8_t peer_mac[6], uint32_t queue_depth);
+
+/* PFS (Perfect Forward Secrecy) handshake frame types */
+#define CEEPEW_ESL_MSG_TYPE_MASK       0x0FU
+#define CEEPEW_ESL_MSG_TYPE_DATA       0x00U
+#define CEEPEW_ESL_MSG_TYPE_PFS_INIT   0x01U  /* PFS public key from initiator */
+#define CEEPEW_ESL_MSG_TYPE_PFS_RESP   0x02U  /* PFS public key from responder */
+
+/* Rendezvous phase frame types — sent on static baseline channel before hopping */
+#define CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ  0x03U  /* Initiator → Responder: contains uptime */
+#define CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_ACK  0x04U  /* Responder → Initiator: contains uptime diff */
+
+/* Extract message type from ESL frame payload (first byte after header) */
+CeePewErr_t transport_esl_peek_msg_type(const uint8_t *frame, uint16_t len, uint8_t *msg_type_out);
+
+/* Reset the WireGuard-style 64-bit replay window. Called from
+ * session_reset_to_discovery() at the start of each new pairing session
+ * so stale seq numbers from prior sessions don't poison the window. */
+void transport_replay_reset(void);
+
+/* Process PFS handshake frame — bypasses normal crypto pipeline.
+ * Returns CEEPEW_OK on success, peer PFS public key in peer_pfs_pubkey_out.
+ * The caller must then call session_pfs_process_peer_key(). */
+CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *frame, uint16_t len,
+                                                 const uint8_t peer_mac[6],
+                                                 uint8_t peer_pfs_pubkey_out[32]);
+
+/* Build PFS handshake frame (initiator or responder).
+ * pfs_pubkey: local PFS public key to send.
+ * is_initiator: true for PFS_INIT, false for PFS_RESP.
+ * frame buffer must have headroom for ESL header + 1 byte type + 32 bytes pubkey + CRC. */
+CeePewErr_t transport_esl_build_pfs_handshake(uint8_t *frame, uint16_t *len, uint16_t max_len,
+                                               const uint8_t pfs_pubkey[32], bool is_initiator);
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Rendezvous Phase (Static Channel Sync before Channel Hopping)         */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/* Rendezvous frame payload (no ESL header — plaintext on static channel):
+ *   REQ:  [0x03][uptime_us_lo][uptime_us_hi] = 1 + 4 + 4 = 9 bytes
+ *   ACK:  [0x04][uptime_us_lo][uptime_us_hi][offset_us_lo][offset_us_hi] = 1 + 4 + 4 + 4 + 4 = 17 bytes
+ * These are sent as raw ESP-NOW frames on the fixed CEEPEW_ESPNOW_CHANNEL
+ * before channel hopping starts. No encryption, no ESL framing.
  */
-CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const uint8_t peer_mac[6], uint32_t queue_depth);
+
+/* Build rendezvous request frame (initiator).
+ * frame: output buffer (min 9 bytes)
+ * len: output length written
+ * max_len: capacity of frame buffer
+ * Returns CEEPEW_OK on success. */
+CeePewErr_t transport_esl_build_rendezvous_req(uint8_t *frame, uint16_t *len, uint16_t max_len);
+
+/* Build rendezvous ACK frame (responder).
+ * req_uptime: uptime from received REQ frame (microseconds)
+ * frame: output buffer (min 17 bytes)
+ * len: output length written
+ * max_len: capacity of frame buffer
+ * Returns CEEPEW_OK on success. */
+CeePewErr_t transport_esl_build_rendezvous_ack(uint64_t req_uptime, uint8_t *frame, uint16_t *len, uint16_t max_len);
+
+/* Parse rendezvous request frame.
+ * Returns CEEPEW_OK on success, uptime in req_uptime_out (microseconds). */
+CeePewErr_t transport_esl_parse_rendezvous_req(const uint8_t *frame, uint16_t len, uint64_t *req_uptime_out);
+
+/* Parse rendezvous ACK frame.
+ * Returns CEEPEW_OK on success, uptime diff in offset_us_out (microseconds). */
+CeePewErr_t transport_esl_parse_rendezvous_ack(const uint8_t *frame, uint16_t len, int64_t *offset_us_out);
 
 #ifdef __cplusplus
 }

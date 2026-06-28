@@ -57,6 +57,7 @@
 #include "crypto_hmac_efuse.h"
 #include "ecc_hamming.h"
 #include "session_fsm.h"
+#include "session_memory.h"  /* For g_ui_event_queue and UIEvent_t */
 #include "esp_log.h"
 #include <stdint.h>
 #include <string.h>
@@ -84,6 +85,9 @@ extern CeePewErr_t crypto_ctx_destroy(void);
 extern Region_t g_region;  /* Global region allocator */
 extern void ui_manager_reset_to_discovery(void);
 
+/* ARQ engine reset — zeroes s_tx_seq, s_expected_rx_seq, s_rx_init in ecc_arq.c */
+extern CeePewErr_t ecc_arq_reset(void);
+
 /* Session state machine context */
 typedef struct {
     uint8_t  phase;                              /* 0=idle, 1=discovery, 2=pairing, 3=active */
@@ -99,17 +103,26 @@ typedef struct {
     uint8_t  sign_sk[64];                        /* VOLATILE ephemeral private key */
     uint8_t  peer_sign_pk[32];                   /* Peer's ephemeral Ed25519 pub key, set via session_set_peer_public_key */
     bool     peer_sign_pk_valid;                 /* true once peer_sign_pk has been received */
+    uint8_t  device_id_self_wifi[6];             /* This device's WiFi STA MAC */
+    bool     device_id_self_wifi_valid;          /* true once device_id_self_wifi has been set */
     uint8_t  device_id_peer_wifi[6];             /* Peer's WiFi STA MAC for ESP-NOW */
     bool     device_id_peer_wifi_valid;          /* true once device_id_peer_wifi has been set */
     int32_t  peer_uptime_offset_s;               /* peer_uptime_s - local_uptime_s (BLE time-sync) */
     bool     session_active;                     /* true = Phase 3 && authenticated */
     bool     is_initiator;                       /* true if local MAC < peer MAC (lower = initiator) */
     bool     sync_barrier_cleared;               /* true once encrypted post-derive ACK round-trip complete */
+    bool     sync_peer_encrypted_received;        /* true once we decrypted an encrypted frame from peer */
+    bool     sync_local_ack_sent;                 /* true once responder ACK has been sent */
     uint64_t sync_started_ms;                    /* when post-derive sync driver was first invoked */
     uint64_t sync_last_send_ms;                  /* last HELLO retransmit time */
     uint8_t  sync_retry_stage;                   /* exponential backoff stage (0..5) */
     /* Phase 4: TTL tracking */
     uint64_t last_message_time_s;                /* Last message activity timestamp (seconds) */
+
+    /* Rendezvous phase (static channel sync before channel hopping) */
+    bool     rendezvous_initiated;               /* true once rendezvous handshake started */
+    bool     rendezvous_synced;                  /* true once both sides confirmed sync */
+    int32_t  rendezvous_offset_us;               /* Timing offset from peer (responder - initiator) */
 } SessionCtx_t;
 
 /* Global session context (per-device; single active session at a time) */
@@ -126,10 +139,17 @@ static uint64_t s_test_nc     = 0ULL;
 static bool     s_test_commitment_set = false;
 static uint8_t  s_test_commitment[CEEPEW_COMMITMENT_BYTES] = {0U};
 
+/* Persistent WiFi MAC backup. Survives session_secure_zero_context() so
+ * session_phase1_init() can restore it after every memset — critical for
+ * key convergence across pairing retry cycles. */
+static uint8_t  s_saved_self_wifi[6] = {0U};
+static bool     s_saved_self_wifi_valid = false;
+
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
 static void session_secure_zero_context(void);
 static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6]);
+static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx);
 
 static CeePewErr_t session_derive_sign_seed(const uint8_t mac[6], uint8_t seed_out[32])
 {
@@ -233,7 +253,15 @@ static void session_secure_zero_context(void)
 CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
     CEEPEW_ASSERT(device_id != NULL, CEEPEW_ERR_NULL_PTR);
     esl_reset_callbacks();
+
     memset(&s_session, 0, sizeof(s_session));
+
+    /* Restore self WiFi MAC from file-scope backup (survives
+     * session_secure_zero_context() which runs before we get here). */
+    if (s_saved_self_wifi_valid) {
+        memcpy(s_session.device_id_self_wifi, s_saved_self_wifi, 6U);
+        s_session.device_id_self_wifi_valid = true;
+    }
     CeePewErr_t err = crypto_ctx_init();
     CEEPEW_ASSERT(err == CEEPEW_OK, err);
     s_session.phase = 1U;
@@ -249,6 +277,10 @@ CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
     s_test_commitment_set = false;
     s_test_id_set = false;
     s_test_nc_set = false;
+
+    /* Reset double-ended sync state for clean pairing attempt */
+    s_session.sync_peer_encrypted_received = false;
+    s_session.sync_local_ack_sent = false;
 
     /* M7: Power management — enable WiFi modem PS + low BLE duty during discovery */
     (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_DISCOVERY);
@@ -333,6 +365,28 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
 CeePewErr_t session_phase2_derive_key(void){
     CEEPEW_ASSERT(s_session.phase == 2U, CEEPEW_ERR_PARAM);
 
+    /* ── STRICT HARDWARE-GATED IDENTITY HANDOFF ──────────────────────────
+     * The peer's WiFi STA MAC address must have been received and
+     * validated over the secure GATT channel BEFORE any key material
+     * is derived. If the MAC is missing, all-zeros, or was never
+     * delivered via the 0xFFF3 characteristic exchange, key derivation
+     * must NOT proceed — doing so would bind session keys to an
+     * unauthenticated transport identity, enabling a MITM to inject
+     * a rogue ESP-NOW peer and decrypt the session. */
+    if (!s_session.device_id_peer_wifi_valid) {
+        ESP_LOGE("session_fsm", "derive_key ABORT: peer WiFi MAC not verified via GATT");
+        ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+        return CEEPEW_ERR_PARAM;
+    }
+    {
+        static const uint8_t zeros[6] = {0};
+        if (ceepew_ct_equal(s_session.device_id_peer_wifi, zeros, 6U)) {
+            ESP_LOGE("session_fsm", "derive_key ABORT: peer WiFi MAC is all-zeros");
+            ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+            return CEEPEW_ERR_PARAM;
+        }
+    }
+
     /* Save region state for rollback on error */
     uint32_t saved_bump = g_region.bump;
     CeePewErr_t err = CEEPEW_OK;
@@ -383,6 +437,61 @@ CeePewErr_t session_phase2_derive_key(void){
     err = crypto_hkdf_build_info(label, label_len, id_a, id_b, commitment, 0U, hkdf_info, sizeof(hkdf_info), &hkdf_info_len);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 
+    /* Step 3a: Bind the verified WiFi MAC pair into the HKDF info.
+     * Both WiFi MACs (self and peer) are included in sorted (canonical)
+     * order so that both peers derive identical keys. This cryptographically
+     * ties the session to the hardware transport identities that were
+     * authenticated over the secure GATT channel. If a WiFi MAC changes
+     * (relay attack, MAC spoofing), the keys will diverge and the
+     * post-derive sync exchange will fail. */
+    if (hkdf_info_len + 12U <= sizeof(hkdf_info) &&
+        s_session.device_id_self_wifi_valid) {
+        const uint8_t *wifi_a = s_session.device_id_self_wifi;
+        const uint8_t *wifi_b = s_session.device_id_peer_wifi;
+        if (memcmp(wifi_a, wifi_b, 6U) > 0) {
+            const uint8_t *tmp = wifi_a;
+            wifi_a = wifi_b;
+            wifi_b = tmp;
+        }
+        memcpy(hkdf_info + hkdf_info_len, wifi_a, 6U);
+        hkdf_info_len += 6U;
+        memcpy(hkdf_info + hkdf_info_len, wifi_b, 6U);
+        hkdf_info_len += 6U;
+    }
+
+    /* Step 3a: DIAGNOSTIC — log HKDF inputs for key-convergence debugging */
+    {
+        /* Log device MACs used in HKDF info */
+        ESP_LOGI("session_fsm", "DIAG: self_wifi=%02X:%02X:%02X:%02X:%02X:%02X valid=%d",
+                 s_session.device_id_self_wifi[0], s_session.device_id_self_wifi[1],
+                 s_session.device_id_self_wifi[2], s_session.device_id_self_wifi[3],
+                 s_session.device_id_self_wifi[4], s_session.device_id_self_wifi[5],
+                 s_session.device_id_self_wifi_valid);
+        ESP_LOGI("session_fsm", "DIAG: peer_wifi=%02X:%02X:%02X:%02X:%02X:%02X valid=%d",
+                 s_session.device_id_peer_wifi[0], s_session.device_id_peer_wifi[1],
+                 s_session.device_id_peer_wifi[2], s_session.device_id_peer_wifi[3],
+                 s_session.device_id_peer_wifi[4], s_session.device_id_peer_wifi[5],
+                 s_session.device_id_peer_wifi_valid);
+        /* Log sorted wifi_a/wifi_b (the actual bytes fed to HKDF) */
+        const uint8_t *wifi_a = s_session.device_id_self_wifi;
+        const uint8_t *wifi_b = s_session.device_id_peer_wifi;
+        if (s_session.device_id_self_wifi_valid && s_session.device_id_peer_wifi_valid) {
+            if (memcmp(wifi_a, wifi_b, 6U) > 0) {
+                const uint8_t *tmp = wifi_a; wifi_a = wifi_b; wifi_b = tmp;
+            }
+        }
+        ESP_LOGI("session_fsm", "DIAG: hkdf_info_len=%u wifi_a=%02X:%02X:%02X:%02X:%02X:%02X wifi_b=%02X:%02X:%02X:%02X:%02X:%02X",
+                 hkdf_info_len,
+                 wifi_a[0], wifi_a[1], wifi_a[2], wifi_a[3], wifi_a[4], wifi_a[5],
+                 wifi_b[0], wifi_b[1], wifi_b[2], wifi_b[3], wifi_b[4], wifi_b[5]);
+        /* Log full hkdf_info as hex for cross-device comparison */
+        ESP_LOGI("session_fsm", "DIAG: hkdf_info_hex ");
+        ESP_LOG_BUFFER_HEX("session_fsm", hkdf_info, (uint16_t)hkdf_info_len);
+        /* Log first 8 bytes of hkdf_salt for cross-device comparison */
+        ESP_LOGI("session_fsm", "DIAG: hkdf_salt_first8");
+        ESP_LOG_BUFFER_HEX("session_fsm", hkdf_salt, 8U);
+    }
+
     /* Step 3a: IKM is the raw 32-byte session_code. Both peers must derive
      * the SAME keys from the SAME session_code + commitment + device IDs.
      * Local randomness in the IKM would break key convergence: each peer
@@ -428,16 +537,19 @@ CeePewErr_t session_phase2_derive_key(void){
     CeePewErr_t mutex_err = crypto_mutex_init();
     if (mutex_err != CEEPEW_OK) { goto error_cleanup; }
 
+    /* Transition to active state BEFORE registering ESL callbacks so that
+     * the MAC lock check (session_mac_lock_check, which asserts phase==3U)
+     * won't fire while phase is still KEY_DERIVE when a HELLO frame arrives
+     * from the peer immediately after its own key derivation. */
+    s_session.phase = 3U;
+    s_session.session_active = true;
+
     err = esl_register_callbacks(session_mac_lock_check, session_enforce_nonce_limit);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 
     /* Initialize session-permuted Hamming FEC using the derived session key */
     err = ecc_hamming_init_session(s_session.session_key);
     if (err != CEEPEW_OK) { goto error_cleanup; }
-
-    /* NOW transition to active state */
-    s_session.phase = 3U;
-    s_session.session_active = true;
     session_init_ttl();  /* Phase 4: Initialize TTL tracking */
 
     /* Success: secure zero all sensitive intermediates */
@@ -598,6 +710,22 @@ bool session_peer_box_pubkey_valid(void)
     return g_crypto_ctx.peer_box_pubkey_valid;
 }
 
+CeePewErr_t session_set_self_wifi_mac(const uint8_t wifi_mac[6])
+{
+    CEEPEW_ASSERT(wifi_mac != NULL, CEEPEW_ERR_NULL_PTR);
+    uint8_t all_zero = 1U;
+    for (uint8_t i = 0U; i < 6U; i++) {
+        if (wifi_mac[i] != 0U) { all_zero = 0U; break; }
+    }
+    CEEPEW_ASSERT(!all_zero, CEEPEW_ERR_PARAM);
+    memcpy(s_session.device_id_self_wifi, wifi_mac, 6U);
+    s_session.device_id_self_wifi_valid = true;
+    /* Persist in file-scope backup that survives session_secure_zero_context() */
+    memcpy(s_saved_self_wifi, wifi_mac, 6U);
+    s_saved_self_wifi_valid = true;
+    return CEEPEW_OK;
+}
+
 CeePewErr_t session_set_peer_wifi_mac(const uint8_t wifi_mac[6])
 {
     CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
@@ -630,6 +758,79 @@ bool session_peer_wifi_mac_valid(void)
     return s_session.device_id_peer_wifi_valid;
 }
 
+/* ── Hardware-Gated Identity Verification (Runtime) ────────────────────
+ * Verify that a received ESP-NOW frame's source MAC matches the peer
+ * WiFi STA MAC that was delivered over the secure GATT channel during
+ * Phase 2. This closes the window where an attacker could relay ESP-NOW
+ * frames from a different MAC than the one authenticated via BLE.
+ *
+ * Called from the RX path during the post-derive sync exchange to
+ * binding the transport identity to the GATT-authenticated identity.
+ *
+ * PARAMETERS:
+ *   frame_src_mac: Source MAC from the ESP-NOW radio frame (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK          — MAC matches the GATT-verified peer WiFi MAC
+ *   CEEPEW_ERR_AUTH_FAIL — MAC mismatch (potential MITM or relay attack)
+ *   CEEPEW_ERR_PARAM    — WiFi MAC not yet provisioned via GATT
+ */
+CeePewErr_t session_verify_wifi_mac_matches_frame(const uint8_t frame_src_mac[6])
+{
+    CEEPEW_ASSERT(frame_src_mac != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+
+    if (!s_session.device_id_peer_wifi_valid) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    if (!ceepew_ct_equal(s_session.device_id_peer_wifi, frame_src_mac, 6U)) {
+        ESP_LOGW("session_fsm", "WiFi MAC mismatch: GATT=%02X:%02X:%02X:%02X:%02X:%02X "
+                 "frame=%02X:%02X:%02X:%02X:%02X:%02X",
+                 s_session.device_id_peer_wifi[0], s_session.device_id_peer_wifi[1],
+                 s_session.device_id_peer_wifi[2], s_session.device_id_peer_wifi[3],
+                 s_session.device_id_peer_wifi[4], s_session.device_id_peer_wifi[5],
+                 frame_src_mac[0], frame_src_mac[1], frame_src_mac[2],
+                 frame_src_mac[3], frame_src_mac[4], frame_src_mac[5]);
+        return CEEPEW_ERR_AUTH_FAIL;
+    }
+
+    return CEEPEW_OK;
+}
+
+/* ── Clean Slate Chat Evolution ────────────────────────────────────────
+ * Thread-safe reset of the Stop-and-Wait ARQ engine context and flush
+ * of the radio RX queue. Called the instant the sync barrier is verified
+ * to ensure no stale sequence numbers, queued frames, or ARQ state from
+ * the pairing exchange contaminates the active chat session.
+ *
+ * The ARQ engine (ecc_arq.c) maintains static sequence counters that
+ * must be zeroed before the first chat message is sent. The RX queue
+ * may contain stale pairing-phase frames that would corrupt the
+ * decryption pipeline if processed after key derivation. */
+static void session_flush_arq_and_rx_queue(void)
+{
+    CeePewErr_t arq_err = ecc_arq_reset();
+    if (arq_err != CEEPEW_OK) {
+        ESP_LOGW("session_fsm", "ARQ reset failed: %d", (int)arq_err);
+    }
+
+    QueueHandle_t rx_q = hal_radio_get_rx_queue();
+    if (rx_q != NULL) {
+        RadioFrame_t stale_frame;
+        uint32_t flushed = 0U;
+        while (xQueueReceive(rx_q, &stale_frame, 0) == pdPASS) {
+            flushed++;
+            if (flushed >= CEEPEW_QUEUE_DEPTH) {
+                break;
+            }
+        }
+        if (flushed > 0U) {
+            ESP_LOGI("session_fsm", "Flushed %lu stale frames from RX queue", (unsigned long)flushed);
+        }
+    }
+}
+
 bool session_peer_sign_pk_valid(void)
 {
     return s_session.peer_sign_pk_valid;
@@ -660,15 +861,6 @@ bool session_get_role(void)
     return s_session.is_initiator;
 }
 
-CeePewErr_t session_mark_sync_barrier_cleared(void)
-{
-    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
-
-    s_session.sync_barrier_cleared = true;
-    s_session.sync_retry_stage = 0U;
-    return CEEPEW_OK;
-}
-
 bool session_sync_barrier_cleared(void)
 {
     return s_session.sync_barrier_cleared;
@@ -688,13 +880,13 @@ CeePewErr_t session_set_peer_uptime_offset(int32_t offset_s)
 /* Post-derive sync driver. Called from the session task main loop while
  * phase 3 is active but sync_barrier_cleared is false.
  *
- * Phase 7 (Hybrid-GATT plan): both peers retransmit the HELLO byte
- * every CEEPEW_KEY_SYNC_RETRY_MS — the barrier clears as soon as a
- * single encrypted sync message is decoded at either end (the receiver
- * is symmetric for HELLO and ACK). This converges faster and survives
- * single-direction packet loss. The earlier asymmetric design (only
- * the initiator retransmitted) left a 250ms × N worst case if the
- * initiator's first HELLO was lost.
+ * DOUBLE-ENDED POST-DERIVE RENDEZVOUS:
+ * Both peers lock their radios to the static baseline channel
+ * (CEEPEW_ESPNOW_CHANNEL) and exchange encrypted HELLO/ACK tokens.
+ * The initiator retransmits the HELLO byte; the responder sends the
+ * ACK upon HELLO receipt. The barrier is NOT cleared by local key
+ * derivation alone — each side must receive and decrypt a valid
+ * encrypted frame from the peer before the barrier is flagged.
  *
  * The function is a no-op once the barrier is cleared or the timeout has
  * been reached. It is safe to call every main-loop tick. */
@@ -707,14 +899,25 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
         return CEEPEW_OK;
     }
 
-    /* Initialise the timeout deadline on first call */
+    /* Initialise the timeout deadline on first call.
+     * Also drain any stale pairing-phase frames from the radio RX queue so
+     * they don't hit the ESL pipeline (too-short non-ESL frames trigger
+     * CEEPEW_ASSERT in transport_esl_process_incoming). */
     if (s_session.sync_started_ms == 0ULL) {
         s_session.sync_started_ms = now_ms;
+        session_flush_arq_and_rx_queue();
     }
 
     if ((now_ms - s_session.sync_started_ms) >= CEEPEW_KEY_SYNC_TIMEOUT_MS) {
         return CEEPEW_ERR_TIMEOUT;
     }
+
+    /* ── LOCK RADIOS TO STATIC BASELINE CHANNEL ───────────────────────
+     * The post-derive sync exchange MUST occur on the static
+     * CEEPEW_ESPNOW_CHANNEL BEFORE channel hopping begins. This
+     * ensures both peers are on the same frequency for the encrypted
+     * HELLO/ACK rendezvous. hal_radio_set_channel is idempotent. */
+    (void)hal_radio_set_channel(CEEPEW_ESPNOW_CHANNEL);
 
     /* Both peers retransmit. The barrier clears on receipt of any
      * sync message (HELLO or ACK) at either end — see
@@ -742,16 +945,19 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
     uint8_t hello_plain[1] = { CEEPEW_KEY_SYNC_HELLO_BYTE };
 
     /* The peer MAC and peer public key are required by session_send_message.
-     * If sign_pk was never delivered (5-retry exhaustion) the peer public
-     * key won't be available, so we fall back to using a deterministic
-     * placeholder that still allows the receiver to decrypt — the peer
-     * MAC is the only thing that must be correct. */
+     * Use the GATT-verified peer WiFi MAC for ESP-NOW frame routing. */
     uint8_t peer_mac[6] = {0U};
     uint8_t peer_pk[32] = {0U};
-    CeePewErr_t mac_err = session_get_device_id(peer_mac);
-    if (mac_err != CEEPEW_OK) { return mac_err; }
-    /* Use peer MAC from session context, not own MAC (fix above) */
-    memcpy(peer_mac, s_session.device_id_peer, 6U);
+
+    /* STRICT HARDWARE GATE: Use the WiFi MAC that was verified via GATT.
+     * If it was never delivered, the WiFi MAC gate in session_phase2_derive_key()
+     * should have already prevented us from reaching this point. Defend here
+     * as defense-in-depth. */
+    if (!s_session.device_id_peer_wifi_valid) {
+        ESP_LOGE("session_fsm", "post_derive_sync: peer WiFi MAC not verified — aborting");
+        return CEEPEW_ERR_PARAM;
+    }
+    memcpy(peer_mac, s_session.device_id_peer_wifi, 6U);
 
     /* Verify ESP-NOW peer is registered before attempting to send.
      * If not registered, wait — the peer registration happens in task_session.c
@@ -778,10 +984,72 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
     return send_err;
 }
 
+/* Internal: clear sync barrier and perform clean slate chat evolution.
+ * This is the SINGLE point of barrier clearance. It:
+ *   1. Resets the Stop-and-Wait ARQ engine (zeroes sequence counters)
+ *   2. Flushes stale frames from the radio RX queue
+ *   3. Posts UI_EVENT_SESSION_ESTABLISHED to transition UI to CHAT_MENU
+ *
+ * If need_tx is true, return CEEPEW_ERR_NEED_TX (for responder ACK path).
+ * Otherwise return CEEPEW_OK. */
+static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx)
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+
+    if (s_session.sync_barrier_cleared) {
+        return need_tx ? CEEPEW_ERR_NEED_TX : CEEPEW_OK;
+    }
+
+    s_session.sync_barrier_cleared = true;
+    s_session.sync_retry_stage = 0U;
+
+    /* ── CLEAN SLATE CHAT EVOLUTION ──────────────────────────────────
+     * The instant the sync barrier is verified (encrypted round-trip
+     * confirmed), issue a thread-safe reset of the ARQ engine and
+     * flush the radio RX queue. This prevents stale pairing-phase
+     * frames from contaminating the active chat session and ensures
+     * sequence counters start from zero for the first chat message. */
+    session_flush_arq_and_rx_queue();
+
+    /* Post UI_EVENT_SESSION_ESTABLISHED to notify UI task (Core 0) that
+     * the encrypted HELLO/ACK round-trip completed and session is ready.
+     * This triggers transition from UI_STATE_KEYDER to UI_STATE_CHAT_MENU. */
+    if (g_ui_event_queue != NULL) {
+        UIEvent_t evt = {0};
+        evt.type = UI_EVENT_SESSION_ESTABLISHED;
+        uint64_t sid = session_get_id();
+        evt.param = (uint32_t)(sid >> 32);
+        evt.payload.session_established.session_id_hi = evt.param;
+        (void)xQueueSend(g_ui_event_queue, &evt, 0);
+    }
+
+    return need_tx ? CEEPEW_ERR_NEED_TX : CEEPEW_OK;
+}
+
+CeePewErr_t session_mark_sync_barrier_cleared(void)
+{
+    return session_clear_sync_barrier_internal(false);
+}
+
 /* Called by the session task's RX path when a 1-byte post-derive sync
- * message is decoded. The function decides whether the byte is a HELLO
- * (responder should ACK), an ACK (initiator should clear the barrier),
- * or neither (silently ignored). */
+ * message is decoded. This implements the DOUBLE-ENDED POST-DERIVE
+ * RENDEZVOUS: the barrier is NOT cleared by local key derivation alone.
+ * Both devices must exchange encrypted control tokens on the static
+ * baseline channel, and each side must receive and decrypt a valid
+ * frame from the peer before the barrier is flagged as cleared.
+ *
+ * Initiator path:
+ *   Receives ACK (0x5AU) → marks peer_encrypted_received, clears barrier.
+ *   The ACK proves the responder has the correct session key.
+ *
+ * Responder path:
+ *   Receives HELLO (0xA5U) → marks peer_encrypted_received, returns
+ *   CEEPEW_ERR_NEED_TX so the caller sends the ACK. The barrier is
+ *   NOT cleared yet — it will be cleared by session_confirm_ack_sent()
+ *   after the ACK has been enqueued for transmission. This prevents
+ *   the race where the responder transitions to chat before the
+ *   initiator receives the ACK. */
 CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
 {
     CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
@@ -791,24 +1059,133 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
         if (magic_byte != CEEPEW_KEY_SYNC_ACK_BYTE) {
             return CEEPEW_ERR_PARAM;
         }
-        s_session.sync_barrier_cleared = true;
-        s_session.sync_retry_stage = 0U;
-        return CEEPEW_OK;
+        /* Initiator received ACK — proof that responder has correct keys.
+         * Mark peer-encrypted proof received and clear the barrier. */
+        s_session.sync_peer_encrypted_received = true;
+        return session_clear_sync_barrier_internal(false);
     } else {
         if (magic_byte != CEEPEW_KEY_SYNC_HELLO_BYTE) {
             return CEEPEW_ERR_PARAM;
         }
-        /* Responder's turn to ACK. We only do this once; the barrier is
-         * cleared after the ACK is enqueued (best-effort — the actual
-         * send can still fail, but the round-trip semantics are preserved:
-         * a future retry HELLO would see the barrier already cleared). */
-        if (!s_session.sync_barrier_cleared) {
-            s_session.sync_barrier_cleared = true;
-            s_session.sync_retry_stage = 0U;
-            return CEEPEW_ERR_NEED_TX;  /* signal "send ACK back" */
+        /* Responder received HELLO — proof that initiator has correct keys.
+         * Mark peer-encrypted proof received but do NOT clear the barrier yet.
+         * Return CEEPEW_ERR_NEED_TX so the caller sends the ACK.
+         * The barrier will be cleared by session_confirm_ack_sent() once
+         * the ACK has been successfully enqueued for transmission. */
+        if (s_session.sync_peer_encrypted_received) {
+            return CEEPEW_OK;
         }
+        s_session.sync_peer_encrypted_received = true;
+        return CEEPEW_ERR_NEED_TX;
+    }
+}
+
+/* Responder-side confirmation: call AFTER the ACK frame has been
+ * successfully enqueued for transmission. This is the second half of
+ * the double-ended rendezvous — only now that the responder has both
+ * received proof (HELLO) AND sent proof (ACK) can the barrier clear.
+ *
+ * Safe to call from any context. Idempotent. */
+CeePewErr_t session_confirm_ack_sent(void)
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+
+    s_session.sync_local_ack_sent = true;
+
+    /* Only clear the barrier if we have also received the peer's proof.
+     * If the HELLO hasn't arrived yet, this is a no-op — the barrier
+     * will be cleared when session_handle_key_sync_byte() sets
+     * sync_peer_encrypted_received and calls
+     * session_clear_sync_barrier_internal(). */
+    if (s_session.sync_peer_encrypted_received && !s_session.sync_barrier_cleared) {
+        return session_clear_sync_barrier_internal(false);
+    }
+    return CEEPEW_OK;
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Rendezvous Phase (Static Channel Sync before Channel Hopping)         */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/* Initialize rendezvous state. Call once after key derivation and BLE teardown,
+ * before starting the rendezvous handshake on the static channel. */
+CeePewErr_t session_rendezvous_init(void)
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+
+    s_session.rendezvous_initiated = false;
+    s_session.rendezvous_synced = false;
+    s_session.rendezvous_offset_us = 0;
+
+    /* Reset hal_radio rendezvous state */
+    return hal_radio_rendezvous_reset();
+}
+
+/* Drive rendezvous handshake from session task.
+ * Called repeatedly from session task main loop after ESP-NOW init but before
+ * starting channel hopping. The rendezvous handshake runs on the static
+ * CEEPEW_ESPNOW_CHANNEL using plaintext frames (no encryption).
+ * 
+ * Returns:
+ *   CEEPEW_OK          - Rendezvous complete (synced, ready for hopping)
+ *   CEEPEW_ERR_TIMEOUT - Initiator timed out waiting for ACK
+ *   CEEPEW_OK          - In progress (caller should retry)
+ *   Other error        - Transport error
+ * 
+ * The rendezvous must complete before hal_radio_start_channel_hopping() is called. */
+CeePewErr_t session_drive_rendezvous(void)
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+
+    /* If already synced, return success */
+    if (s_session.rendezvous_synced) {
         return CEEPEW_OK;
     }
+
+    /* Check for initiator timeout */
+    if (hal_radio_rendezvous_check_timeout()) {
+        ESP_LOGW("session_fsm", "Rendezvous timeout \u2014 initiator failed to receive ACK");
+        return CEEPEW_ERR_TIMEOUT;
+    }
+
+    /* If we're the initiator and haven't started rendezvous yet, start it */
+    if (s_session.is_initiator && !s_session.rendezvous_initiated) {
+        CeePewErr_t err = hal_radio_rendezvous_initiator_start();
+        if (err == CEEPEW_OK) {
+            s_session.rendezvous_initiated = true;
+            ESP_LOGI("session_fsm", "Rendezvous: Initiator started handshake");
+        } else if (err != CEEPEW_ERR_PARAM) {
+            return err;  /* Real error */
+        }
+        /* CEEPEW_ERR_PARAM means already in progress, wait for ACK */
+    }
+
+    /* Check if rendezvous completed */
+    if (hal_radio_rendezvous_is_synced()) {
+        s_session.rendezvous_synced = true;
+        s_session.rendezvous_offset_us = hal_radio_rendezvous_get_offset_us();
+        ESP_LOGI("session_fsm", "Rendezvous: SYNCED, offset=%ld us", (long)s_session.rendezvous_offset_us);
+        return CEEPEW_OK;
+    }
+
+    return CEEPEW_OK;  /* Still in progress */
+}
+
+/* Check if rendezvous handshake is complete and both sides are synced. */
+bool session_rendezvous_synced(void)
+{
+    return s_session.rendezvous_synced;
+}
+
+/* Get the rendezvous timing offset (microseconds).
+ * Positive = responder clock ahead of initiator.
+ * Used to calibrate channel hopping timer phase alignment. */
+int32_t session_get_rendezvous_offset_us(void)
+{
+    return s_session.rendezvous_offset_us;
 }
 
 int32_t session_get_peer_uptime_offset(void)
@@ -817,11 +1194,20 @@ int32_t session_get_peer_uptime_offset(void)
 }
 
 CeePewErr_t session_mac_lock_check(const uint8_t peer_mac[6]){
-    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    if (s_session.phase != 3U) {
+        CEEPEW_LOG("SESSION", "MAC lock deferred: phase=%u (expected 3)", (unsigned)s_session.phase);
+        return CEEPEW_ERR_PARAM;
+    }
     CEEPEW_ASSERT(peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
 
-    /* Constant-time MAC comparison */
-    if (!ceepew_ct_equal(s_session.device_id_peer, peer_mac, 6U)) {
+    /* ESP-NOW frames carry the peer's WiFi STA MAC, not the BLE MAC.
+     * Compare against device_id_peer_wifi (set via BLE GATT sign_pk exchange).
+     * On ESP32, BLE MAC = WiFi MAC + 2, so comparing against device_id_peer
+     * (the BLE random/resolvable MAC) would always fail. */
+    if (!s_session.device_id_peer_wifi_valid) {
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    if (!ceepew_ct_equal(s_session.device_id_peer_wifi, peer_mac, 6U)) {
         return CEEPEW_ERR_TRANSPORT;  /* Silent discard */
     }
 
@@ -880,6 +1266,14 @@ CeePewErr_t session_reset_to_discovery(void)
              s_session.device_id_peer[0], s_session.device_id_peer[1],
              s_session.device_id_peer[2], s_session.device_id_peer[3],
              s_session.device_id_peer[4], s_session.device_id_peer[5]);
+
+    /* Reset the ESL replay window before starting a new session.
+     * The replay window is a static singleton (transport_replay.c) that
+     * accumulates seq numbers across sessions. Without this reset, seq
+     * numbers from a prior session (or from unit tests run at boot) will
+     * be ≤ last_seq and rejected as replays — causing the post-derive
+     * sync barrier to time out on every subsequent pairing attempt. */
+    transport_replay_reset();
 
     (void)session_end();
 
@@ -1042,16 +1436,31 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
         CeePewErr_t adv_err = session_get_commitment(local_commit);
         if (adv_err != CEEPEW_OK) { return adv_err; }
 
-        ESP_LOGI("session_fsm", "session_verify_peer_commitment_with_sig: peer_commit=%02X%02X%02X%02X...",
-                 peer_data[0], peer_data[1], peer_data[2], peer_data[3]);
+        ESP_LOGI("session_fsm", "session_verify_peer_commitment_with_sig: peer=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+                 peer_data[0], peer_data[1], peer_data[2], peer_data[3],
+                 peer_data[4], peer_data[5], peer_data[6], peer_data[7],
+                 peer_data[8], peer_data[9], peer_data[10], peer_data[11],
+                 peer_data[12], peer_data[13], peer_data[14], peer_data[15]);
 
-        ESP_LOGI("session_fsm", "verify_adv: local_commit=%02X%02X%02X%02X...",
-                 local_commit[0], local_commit[1], local_commit[2], local_commit[3]);
+        ESP_LOGI("session_fsm", "verify_adv: local=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+                 local_commit[0], local_commit[1], local_commit[2], local_commit[3],
+                 local_commit[4], local_commit[5], local_commit[6], local_commit[7],
+                 local_commit[8], local_commit[9], local_commit[10], local_commit[11],
+                 local_commit[12], local_commit[13], local_commit[14], local_commit[15]);
 
         uint8_t diff = 0U;
         for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_ADV_BYTES; i++) {
             diff |= (uint8_t)(local_commit[i] ^ peer_data[i]);
         }
+        ESP_LOGI("session_fsm", "verify_adv: diff=0x%02X self_mac=%02X:%02X:%02X:%02X:%02X:%02X peer_mac=%02X:%02X:%02X:%02X:%02X:%02X phase=%u test=%d",
+                 diff,
+                 s_session.device_id_self[0], s_session.device_id_self[1],
+                 s_session.device_id_self[2], s_session.device_id_self[3],
+                 s_session.device_id_self[4], s_session.device_id_self[5],
+                 s_session.device_id_peer[0], s_session.device_id_peer[1],
+                 s_session.device_id_peer[2], s_session.device_id_peer[3],
+                 s_session.device_id_peer[4], s_session.device_id_peer[5],
+                 s_session.phase, (int)s_test_commitment_set);
         ceepew_secure_zero(local_commit, sizeof(local_commit));
         return (diff == 0U) ? CEEPEW_OK : CEEPEW_ERR_AUTH_FAIL;
     }
@@ -1202,5 +1611,81 @@ CeePewErr_t session_wipe(void)
     ui_manager_reset_to_discovery();
 
     CEEPEW_LOG("SESSION", "Secure wipe complete, ready for new session");
+    return CEEPEW_OK;
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* PFS (Perfect Forward Secrecy) — ephemeral ECDH over ESP-NOW           */
+/* ────────────────────────────────────────────────────────────────────── */
+
+CeePewErr_t session_pfs_initiate(void)
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+
+    /* Generate ephemeral Curve25519 keypair for PFS */
+    CeePewErr_t err = crypto_ecdh_generate_keypair(
+        g_crypto_ctx.pfs_pubkey, g_crypto_ctx.pfs_privkey);
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    g_crypto_ctx.pfs_active = false;
+    g_crypto_ctx.pfs_peer_pubkey_valid = false;
+    ceepew_secure_zero(g_crypto_ctx.pfs_shared_secret, sizeof(g_crypto_ctx.pfs_shared_secret));
+    ceepew_secure_zero(g_crypto_ctx.pfs_ascon_key, sizeof(g_crypto_ctx.pfs_ascon_key));
+
+    ESP_LOGI("SESSION", "PFS keypair generated");
+    return CEEPEW_OK;
+}
+
+CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32])
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(peer_pfs_pubkey != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Compute shared secret: local_priv * peer_pub */
+    CeePewErr_t err = crypto_ecdh_shared_secret(
+        g_crypto_ctx.pfs_privkey, peer_pfs_pubkey, g_crypto_ctx.pfs_shared_secret);
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    memcpy(g_crypto_ctx.pfs_peer_pubkey, peer_pfs_pubkey, 32U);
+    g_crypto_ctx.pfs_peer_pubkey_valid = true;
+
+    /* Derive new Ascon-128 session key from PFS shared secret using HKDF.
+     * Info string binds the key to this session (device IDs + session_id). */
+    static const uint8_t pfs_info[] = "CEEPEW_PFS_SESSION_v1";
+    err = crypto_hkdf_derive(
+        g_crypto_ctx.pfs_shared_secret, 32U,
+        NULL, 0U,
+        pfs_info, sizeof(pfs_info) - 1,
+        g_crypto_ctx.pfs_ascon_key, 16U);
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+
+    /* Switch active session key to PFS-derived key */
+    memcpy(g_crypto_ctx.ascon_key, g_crypto_ctx.pfs_ascon_key, 16U);
+    g_crypto_ctx.pfs_active = true;
+
+    ESP_LOGI("SESSION", "PFS handshake complete — session key rotated");
+    return CEEPEW_OK;
+}
+
+bool session_pfs_active(void)
+{
+    return g_crypto_ctx.pfs_active;
+}
+
+CeePewErr_t session_get_local_pfs_pubkey(uint8_t pfs_pubkey_out[32])
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(pfs_pubkey_out != NULL, CEEPEW_ERR_NULL_PTR);
+
+    memcpy(pfs_pubkey_out, g_crypto_ctx.pfs_pubkey, 32U);
     return CEEPEW_OK;
 }

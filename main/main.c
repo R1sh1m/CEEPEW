@@ -105,17 +105,16 @@ void app_main(void){
 
     /* Single init for both the panel and the UI layer. The previous
      * hal_oled_init() / hal_ui_init() pair is now collapsed into one call
-     * because the UI layer wraps the in-house ceepew_oled panel handle. */
+     * because the UI layer wraps the in-house ceepew_oled panel handle.
+     *
+     * If the OLED does not ACK (missing or busy), hal_ui_init returns OK
+     * with s_display_absent set; all subsequent hal_ui_* calls become
+     * no-ops and log warnings. The rest of the firmware continues normally
+     * so BLE, ESP-NOW, crypto, and the session FSM can be tested without
+     * a working display panel. */
     err = hal_ui_init();
     if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "hal_ui_init failed: %d", (int)err);
-#if CONFIG_CEEPEW_BUILD_TESTS
-        ESP_LOGI(TAG, "Display init failed — continuing headless for diagnostic tests");
-#else
-        ESP_LOGE(TAG, "Display bring-up failed; restarting to avoid headless run");
-        vTaskDelay(pdMS_TO_TICKS(2000U));
-        esp_restart();
-#endif
+        ESP_LOGE(TAG, "hal_ui_init failed: %d — continuing headless", (int)err);
     }
 
 
@@ -171,6 +170,12 @@ void app_main(void){
              local_mac[3], local_mac[4], local_mac[5]);
 
     err = session_phase1_init(local_mac);
+
+    uint8_t local_wifi_mac[6] = {0};
+    esp_err_t wifi_mac_err = esp_read_mac(local_wifi_mac, ESP_MAC_WIFI_STA);
+    if (wifi_mac_err == ESP_OK) {
+        session_set_self_wifi_mac(local_wifi_mac);
+    }
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "session_phase1_init failed: %d", (int)err);
         return;
@@ -238,6 +243,13 @@ void app_main(void){
         ESP_LOGE(TAG, "session_phase1_init post-test failed: %d", (int)err);
         return;
     }
+    /* Re-set self WiFi MAC — tests overwrote s_saved_self_wifi with test
+     * MACs, so the real WiFi MAC must be restored for the GATT sign_pk
+     * exchange and subsequent HW-gated identity check. */
+    wifi_mac_err = esp_read_mac(local_wifi_mac, ESP_MAC_WIFI_STA);
+    if (wifi_mac_err == ESP_OK) {
+        session_set_self_wifi_mac(local_wifi_mac);
+    }
 
     /* Now initialize BLE for normal operation after tests complete */
     err = transport_ble_init();
@@ -284,6 +296,14 @@ void app_main(void){
         return;
     }
     ESP_LOGI(TAG, "Session task launched on Core 1");
+
+#if CONFIG_CEEPEW_BUILD_TESTS
+    /* Two-device automated pairing + messaging integration test.
+     * Creates a monitor task that tracks session FSM milestones and
+     * exchanges a test message. See tests/main/integration_test_pairing_e2e.c */
+    extern void integration_test_pairing_e2e_run(void);
+    integration_test_pairing_e2e_run();
+#endif
 
     ESP_LOGI(TAG, "=== CEE-PEW Ready ===");
 

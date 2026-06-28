@@ -222,7 +222,7 @@ static CeePewErr_t dos_verify_cookie(const uint8_t sender_mac[6], uint32_t times
 
 CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len) {
     CEEPEW_ASSERT(frame != NULL && len != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(*len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= CEEPEW_PACKET_MAX_BYTES, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(max_len >= (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES), CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= max_len, CEEPEW_ERR_BOUNDS);
 
@@ -253,7 +253,9 @@ CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16
 
 CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const uint8_t peer_mac[6], uint32_t queue_depth) {
     CEEPEW_ASSERT(frame != NULL && len != NULL && peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(*len >= (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES), CEEPEW_ERR_PARAM);
+    if (*len < (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES)) {
+        return CEEPEW_ERR_PARAM;
+    }
 
     if (!s_dos_ctx_initialized) { dos_init(); }
 
@@ -366,68 +368,13 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
         return CEEPEW_ERR_TRANSPORT;  /* Silent fail */
     }
 
-    /* ═ STEP 7: Ascon-128 AEAD Decrypt ═ */
-    /* Extract nonce from header.nonce_counter */
-    uint8_t ascon_nonce[16];
-    memset(ascon_nonce, 0U, sizeof(ascon_nonce));
-    memcpy(ascon_nonce, &hdr.nonce_counter, sizeof(uint64_t));
-
-    /* Ciphertext starts after header, possibly after cookie */
-    uint16_t ct_offset = CEEPEW_ESL_HEADER_BYTES;
+    /* ═ STEP 7: Strip ESL header — payload follows ═ */
+    uint16_t payload_offset = CEEPEW_ESL_HEADER_BYTES;
     if (dos_load_high && ((hdr.flags & CEEPEW_ESL_FLAG_HAS_COOKIE) != 0U)) {
-        ct_offset = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_COOKIE_BYTES);
+        payload_offset = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_COOKIE_BYTES);
     }
-    uint16_t ct_len = payload_len;
-
-    /* Ascon-128 output buffer: temp plaintext. Sized to the actual maximum
-     * plaintext (CEEPEW_MAX_MSG_BYTES). Previously a 24 KB stack buffer —
-     * far larger than needed and silently smashed the 8 KB session task
-     * stack on the very first received frame. */
-    static uint8_t s_pt_buf[CEEPEW_MAX_MSG_BYTES];
-    uint16_t pt_len = 0U;
-
-    /* Copy Ascon key under mutex protection */
-    uint8_t ascon_key_copy[CEEPEW_SESSION_KEY_BYTES];
-    CeePewErr_t mutex_err = crypto_mutex_lock();
-    if (mutex_err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "ESL discard: crypto mutex lock failed (err=%d)", (int)mutex_err);
-        return CEEPEW_ERR_CRYPTO;
-    }
-    memcpy(ascon_key_copy, g_crypto_ctx.ascon_key, CEEPEW_SESSION_KEY_BYTES);
-    mutex_err = crypto_mutex_unlock();
-    if (mutex_err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "ESL discard: crypto mutex unlock failed (err=%d)", (int)mutex_err);
-        return CEEPEW_ERR_CRYPTO;
-    }
-
-    CeePewErr_t ascon_err = crypto_ascon_aead_decrypt(
-        ascon_key_copy,             /* key: 16 bytes from HKDF (copy under lock) */
-        ascon_nonce,                /* nonce: 16 bytes from session_id + nonce_counter */
-        (const uint8_t *)&hdr,      /* AD: header for authenticity binding */
-        (uint16_t)sizeof(EslHeader_t),
-        frame + ct_offset,          /* ciphertext */
-        ct_len,
-        s_pt_buf,                   /* plaintext output (static, sized to MAX_MSG_BYTES) */
-        &pt_len
-    );
-    ceepew_secure_zero(ascon_key_copy, sizeof(ascon_key_copy));
-    if (ascon_err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "ESL discard: Ascon AEAD auth failed (err=%d ct=%u)",
-                 (int)ascon_err, (unsigned)ct_len);
-        return CEEPEW_ERR_CRYPTO;  /* Silent fail — authentication failure */
-    }
-
-    /* ═ STEP 8: Copy plaintext back to frame and return ═ */
-    /* Plaintext now in s_pt_buf, copy it back to frame. The static buffer
-     * is bounded to CEEPEW_MAX_MSG_BYTES; an Ascon output that exceeds
-     * that is either a bug in the encryptor or a forged packet — reject. */
-    if (pt_len > CEEPEW_MAX_MSG_BYTES) {
-        ESP_LOGW(TAG, "ESL discard: plaintext exceeds max (%u > %u)",
-                 (unsigned)pt_len, (unsigned)CEEPEW_MAX_MSG_BYTES);
-        return CEEPEW_ERR_BOUNDS;
-    }
-    memmove(frame, s_pt_buf, pt_len);
-    *len = pt_len;
+    memmove(frame, frame + payload_offset, payload_len);
+    *len = payload_len;
     return CEEPEW_OK;
 }
 
@@ -435,5 +382,172 @@ CeePewErr_t transport_esl_get_last_nonce_counter(uint64_t *nonce_counter_out)
 {
     CEEPEW_ASSERT(nonce_counter_out != NULL, CEEPEW_ERR_NULL_PTR);
     *nonce_counter_out = s_last_nonce_counter;
+    return CEEPEW_OK;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* PFS Handshake Support                                                       */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+CeePewErr_t transport_esl_peek_msg_type(const uint8_t *frame, uint16_t len, uint8_t *msg_type_out)
+{
+    CEEPEW_ASSERT(frame != NULL && msg_type_out != NULL, CEEPEW_ERR_NULL_PTR);
+    if (len < CEEPEW_ESL_HEADER_BYTES + 1U) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    /* Validate ESL magic and version first */
+    if (frame[0] != CEEPEW_ESL_MAGIC0 || frame[1] != CEEPEW_ESL_MAGIC1 || frame[2] != CEEPEW_ESL_VERSION) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    *msg_type_out = frame[CEEPEW_ESL_HEADER_BYTES] & CEEPEW_ESL_MSG_TYPE_MASK;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *frame, uint16_t len,
+                                                 const uint8_t peer_mac[6],
+                                                 uint8_t peer_pfs_pubkey_out[32])
+{
+    CEEPEW_ASSERT(frame != NULL && peer_pfs_pubkey_out != NULL, CEEPEW_ERR_NULL_PTR);
+    if (len < CEEPEW_ESL_HEADER_BYTES + 1U + 32U + CEEPEW_ESL_CRC_BYTES) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    /* Verify CRC first */
+    uint32_t rx_crc = 0U;
+    memcpy(&rx_crc, frame + len - CEEPEW_ESL_CRC_BYTES, sizeof(rx_crc));
+    uint32_t calc_crc = esp_crc32_le(0U, frame, (size_t)(len - CEEPEW_ESL_CRC_BYTES));
+    if (rx_crc != calc_crc) {
+        ESP_LOGW("ESL", "PFS handshake CRC mismatch");
+        return CEEPEW_ERR_TRANSPORT;
+    }
+
+    /* Validate magic and version */
+    if (frame[0] != CEEPEW_ESL_MAGIC0 || frame[1] != CEEPEW_ESL_MAGIC1 || frame[2] != CEEPEW_ESL_VERSION) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    /* Extract message type */
+    uint8_t msg_type = frame[CEEPEW_ESL_HEADER_BYTES] & CEEPEW_ESL_MSG_TYPE_MASK;
+    if (msg_type != CEEPEW_ESL_MSG_TYPE_PFS_INIT && msg_type != CEEPEW_ESL_MSG_TYPE_PFS_RESP) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    /* Extract 32-byte PFS public key */
+    memcpy(peer_pfs_pubkey_out, frame + CEEPEW_ESL_HEADER_BYTES + 1U, 32U);
+
+    ESP_LOGI("ESL", "PFS handshake received: type=%u", (unsigned)msg_type);
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_build_pfs_handshake(uint8_t *frame, uint16_t *len, uint16_t max_len,
+                                               const uint8_t pfs_pubkey[32], bool is_initiator)
+{
+    CEEPEW_ASSERT(frame != NULL && len != NULL && pfs_pubkey != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(max_len >= CEEPEW_ESL_HEADER_BYTES + 1U + 32U + CEEPEW_ESL_CRC_BYTES, CEEPEW_ERR_BOUNDS);
+
+    uint8_t msg_type = is_initiator ? CEEPEW_ESL_MSG_TYPE_PFS_INIT : CEEPEW_ESL_MSG_TYPE_PFS_RESP;
+    uint16_t payload_len = 1U + 32U;  /* 1 byte type + 32 bytes pubkey */
+
+    EslHeader_t hdr = {
+        .magic0       = CEEPEW_ESL_MAGIC0,
+        .magic1       = CEEPEW_ESL_MAGIC1,
+        .version      = CEEPEW_ESL_VERSION,
+        .flags        = 0U,
+        .timestamp_s  = (uint32_t)(esp_timer_get_time() / 1000000LL),
+        .seq          = s_tx_seq++,
+        .nonce_counter = 0U,  /* PFS handshake uses nonce_counter = 0 (outside normal sequence) */
+    };
+
+    memcpy(frame, &hdr, sizeof(hdr));
+    frame[CEEPEW_ESL_HEADER_BYTES] = msg_type;
+    memcpy(frame + CEEPEW_ESL_HEADER_BYTES + 1U, pfs_pubkey, 32U);
+
+    uint32_t crc = esp_crc32_le(0U, frame, (size_t)(CEEPEW_ESL_HEADER_BYTES + payload_len));
+    memcpy(frame + CEEPEW_ESL_HEADER_BYTES + payload_len, &crc, sizeof(crc));
+    *len = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + payload_len + CEEPEW_ESL_CRC_BYTES);
+
+    return CEEPEW_OK;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* Rendezvous Phase (Static Channel Sync before Channel Hopping)               */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+/* Rendezvous frames are sent as RAW ESP-NOW frames on the static baseline
+ * channel (CEEPEW_ESPNOW_CHANNEL). They are NOT encrypted, NOT wrapped in ESL.
+ * Format:
+ *   REQ: [0x03][uptime_us_lo][uptime_us_mid][uptime_us_hi][uptime_us_xhi] = 1 + 4 = 5 bytes (32-bit uptime)
+ *   ACK: [0x04][req_uptime_lo][req_uptime_mid][req_uptime_hi][req_uptime_xhi][offset_lo][offset_mid][offset_hi][offset_xhi] = 1 + 4 + 4 = 9 bytes
+ * Using 32-bit uptime (microseconds) - wraps every ~71 minutes, sufficient for sync. */
+
+CeePewErr_t transport_esl_build_rendezvous_req(uint8_t *frame, uint16_t *len, uint16_t max_len)
+{
+    CEEPEW_ASSERT(frame != NULL && len != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(max_len >= 5U, CEEPEW_ERR_BOUNDS);
+
+    uint32_t uptime_us = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFFULL);
+
+    frame[0] = CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ;
+    frame[1] = (uint8_t)(uptime_us & 0xFFU);
+    frame[2] = (uint8_t)((uptime_us >> 8U) & 0xFFU);
+    frame[3] = (uint8_t)((uptime_us >> 16U) & 0xFFU);
+    frame[4] = (uint8_t)((uptime_us >> 24U) & 0xFFU);
+
+    *len = 5U;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_build_rendezvous_ack(uint64_t req_uptime, uint8_t *frame, uint16_t *len, uint16_t max_len)
+{
+    CEEPEW_ASSERT(frame != NULL && len != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(max_len >= 9U, CEEPEW_ERR_BOUNDS);
+
+    uint32_t req_uptime_32 = (uint32_t)req_uptime;
+    uint32_t now_us = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFFULL);
+    int32_t offset_us = (int32_t)(now_us - req_uptime_32);
+
+    frame[0] = CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_ACK;
+    frame[1] = (uint8_t)(req_uptime_32 & 0xFFU);
+    frame[2] = (uint8_t)((req_uptime_32 >> 8U) & 0xFFU);
+    frame[3] = (uint8_t)((req_uptime_32 >> 16U) & 0xFFU);
+    frame[4] = (uint8_t)((req_uptime_32 >> 24U) & 0xFFU);
+    frame[5] = (uint8_t)(offset_us & 0xFFU);
+    frame[6] = (uint8_t)((offset_us >> 8U) & 0xFFU);
+    frame[7] = (uint8_t)((offset_us >> 16U) & 0xFFU);
+    frame[8] = (uint8_t)((offset_us >> 24U) & 0xFFU);
+
+    *len = 9U;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_parse_rendezvous_req(const uint8_t *frame, uint16_t len, uint64_t *req_uptime_out)
+{
+    CEEPEW_ASSERT(frame != NULL && req_uptime_out != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len >= 5U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(frame[0] == CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ, CEEPEW_ERR_PARAM);
+
+    uint32_t uptime_us = ((uint32_t)frame[1] |
+                          ((uint32_t)frame[2] << 8U) |
+                          ((uint32_t)frame[3] << 16U) |
+                          ((uint32_t)frame[4] << 24U));
+
+    *req_uptime_out = uptime_us;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_parse_rendezvous_ack(const uint8_t *frame, uint16_t len, int64_t *offset_us_out)
+{
+    CEEPEW_ASSERT(frame != NULL && offset_us_out != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len >= 9U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(frame[0] == CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_ACK, CEEPEW_ERR_PARAM);
+
+    int32_t offset_us = ((int32_t)frame[5] |
+                         ((int32_t)frame[6] << 8U) |
+                         ((int32_t)frame[7] << 16U) |
+                         ((int32_t)frame[8] << 24U));
+
+    *offset_us_out = offset_us;
     return CEEPEW_OK;
 }

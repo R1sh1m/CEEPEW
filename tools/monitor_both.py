@@ -47,7 +47,7 @@ def monitor_port(port_name, prefix):
         while not stop_event.is_set():
             try:
                 if ser.in_waiting:
-                    line = ser.readline().decode('utf-8', errors='ignore').strip()
+                    line = ser.readline().decode('utf-8', errors='ignore').rstrip('\n\r')
                     if line:
                         print(f"[{prefix}] {line}")
                         write_log(f"[{prefix}] {line}")
@@ -76,6 +76,7 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     script_dir = os.path.dirname(os.path.realpath(__file__))
     log_filename = os.path.join(script_dir, f"monitor_both_{timestamp}.txt")
+    global log_file
     log_file = open(log_filename, "w", encoding="utf-8", buffering=1)
     print(f"Logging session to: {log_filename}")
     print(f"Monitoring {port_a} (DEVICE_A) and {port_b} (DEVICE_B) for {duration_seconds} seconds")
@@ -96,22 +97,22 @@ def main():
         elapsed += interval
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nMonitoring interrupted by user. Stopping...")
+    finally:
+        stop_event.set()
+        if 't1' in locals():
+            t1.join(timeout=2.0)
+        if 't2' in locals():
+            t2.join(timeout=2.0)
+        with log_lock:
+            if log_file is not None:
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
+                log_file = None
 
-except KeyboardInterrupt:
-    print("\nMonitoring interrupted by user. Stopping...")
-finally:
-    stop_event.set()
-    if 't1' in locals():
-        t1.join(timeout=2.0)
-    if 't2' in locals():
-        t2.join(timeout=2.0)
-    with log_lock:
-        if log_file is not None:
-            try:
-                log_file.close()
-            except Exception:
-                pass
-            log_file = None
-
-print("Monitoring finished.")
+    print("Monitoring finished.")

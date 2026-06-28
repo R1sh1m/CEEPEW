@@ -57,16 +57,24 @@ static CeePewErr_t ui_handle_events(void)
         switch (event.type) {
 
         case UI_EVENT_SESSION_ESTABLISHED:
-            /* Session established on Core 1 → drive UI to key-derivation screen.
-             * This ensures BOTH devices reliably enter the secure-chat flow,
-             * not just the one that happened to win the timing race.            */
-            ESP_LOGI("UI", "SESSION_ESTABLISHED received");
+            /* Session established on Core 1 → drive UI to chat menu.
+             * The encrypted HELLO/ACK round-trip completed, keys are converged,
+             * and the rendezvous handshake synchronized hop timers.
+             * Transition directly to CHAT_MENU to enable messaging input. */
+            ESP_LOGI("UI", "SESSION_ESTABLISHED received — transitioning to CHAT_MENU");
             if ((g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
                  g_ui_ctx.current_state == UI_STATE_PAIRING ||
+                 g_ui_ctx.current_state == UI_STATE_CONFIRM ||
+                 g_ui_ctx.current_state == UI_STATE_KEYDER ||
+                 g_ui_ctx.current_state == UI_STATE_CRYPTOGRAM ||
                  g_ui_ctx.current_state == UI_STATE_DISCOVERY) &&
                 g_ui_ctx.next_state != UI_STATE_PAIRING_FAILED) {
-                (void)ui_manager_transition_to(UI_STATE_KEYDER);
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
                 g_ui_ctx.transition_ready = true;
+                /* Reset chat menu selection to "Write" (0) */
+                g_ui_ctx.chat_menu_selected = 0U;
+                g_ui_ctx.compose_length = 0U;
+                g_ui_ctx.compose_cursor = 0U;
             }
             break;
 

@@ -14,6 +14,7 @@ if(CONFIG_CEEPEW_BUILD_TESTS)
     list(APPEND test_srcs
         "main/integration_test_e2e.c"
         "main/integration_test_pairing_ui.c"
+        "main/integration_test_pairing_e2e.c"
         "main/test_arq_backoff.c"
         "main/test_hop.c"
         "main/test_pipeline_memory.c"

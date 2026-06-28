@@ -221,6 +221,20 @@ CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32]);
  * Returns false until session_set_peer_box_pubkey() has been called. */
 bool session_peer_box_pubkey_valid(void);
 
+/* Store this device's own WiFi STA MAC address (6 bytes).
+ * Must be called before session_phase2_derive_key() to enable transport
+ * identity binding. The local and peer WiFi MACs are sorted and bound
+ * into the HKDF info for symmetric key convergence.
+ *
+ * PARAMETERS:
+ *   wifi_mac: 6-byte local WiFi STA MAC address (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored
+ *   CEEPEW_ERR_NULL_PTR — wifi_mac is NULL
+ */
+CeePewErr_t session_set_self_wifi_mac(const uint8_t wifi_mac[6]);
+
 /* Store the peer's WiFi STA MAC address (6 bytes), received over BLE during
  * the Phase 2 commitment exchange (GATT sign_pk+box_pk+wifi_mac payload).
  * Must be called before session_get_peer_wifi_mac() will return a valid MAC.
@@ -329,6 +343,50 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms);
  *   CEEPEW_KEY_SYNC_ACK_BYTE   → mark cleared, return CEEPEW_OK
  *   anything else              → return CEEPEW_ERR_PARAM (ignored) */
 CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte);
+
+/* Responder-side confirmation: call AFTER the ACK frame has been
+ * successfully enqueued for transmission following a HELLO receipt.
+ * This completes the double-ended rendezvous — the barrier is only
+ * cleared when both peer proof (HELLO received) and local proof
+ * (ACK sent) are confirmed. Idempotent. */
+CeePewErr_t session_confirm_ack_sent(void);
+
+/* Verify that a received ESP-NOW frame's source MAC matches the peer
+ * WiFi STA MAC that was delivered over the secure GATT channel.
+ * Returns CEEPEW_OK on match, CEEPEW_ERR_AUTH_FAIL on mismatch.
+ * Used during the post-derive sync exchange for transport binding. */
+CeePewErr_t session_verify_wifi_mac_matches_frame(const uint8_t frame_src_mac[6]);
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Rendezvous Phase (Static Channel Sync before Channel Hopping)         */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/* Initialize rendezvous state. Call once after key derivation and BLE teardown,
+ * before starting the rendezvous handshake on the static channel.
+ * Returns CEEPEW_OK on success. */
+CeePewErr_t session_rendezvous_init(void);
+
+/* Drive rendezvous handshake from session task.
+ * Called repeatedly from session task main loop after ESP-NOW init but before
+ * starting channel hopping. The rendezvous handshake runs on the static
+ * CEEPEW_ESPNOW_CHANNEL using plaintext frames (no encryption).
+ * 
+ * Returns:
+ *   CEEPEW_OK          - Rendezvous complete (synced, ready for hopping)
+ *   CEEPEW_ERR_TIMEOUT - Initiator timed out waiting for ACK
+ *   CEEPEW_OK          - In progress (caller should retry)
+ *   Other error        - Transport error
+ * 
+ * The rendezvous must complete before hal_radio_start_channel_hopping() is called. */
+CeePewErr_t session_drive_rendezvous(void);
+
+/* Check if rendezvous handshake is complete and both sides are synced. */
+bool session_rendezvous_synced(void);
+
+/* Get the rendezvous timing offset (microseconds).
+ * Positive = responder clock ahead of initiator.
+ * Used to calibrate channel hopping timer phase alignment. */
+int32_t session_get_rendezvous_offset_us(void);
 
 /* Read the currently-applied peer-uptime offset (seconds).
  * Returns 0 if no offset has been set.
@@ -458,6 +516,27 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
  * The peer must be running the same test and will echo the payload back.
  * Returns CEEPEW_OK on successful round-trip, error on timeout or failure. */
 CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_t timeout_ms);
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* PFS (Perfect Forward Secrecy) — ephemeral ECDH over ESP-NOW           */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/* Generate local ephemeral PFS keypair and store in crypto context.
+ * Called once after ESP-NOW link is established (post LMK peer registration).
+ * The public key will be sent to the peer via a dedicated PFS handshake frame. */
+CeePewErr_t session_pfs_initiate(void);
+
+/* Process peer's PFS public key and derive shared secret + session Ascon key.
+ * Called when a PFS handshake frame is received from the peer.
+ * On success, the PFS-derived Ascon key becomes the active session key. */
+CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32]);
+
+/* Check if PFS handshake is complete and PFS-derived key is active. */
+bool session_pfs_active(void);
+
+/* Get the PFS ephemeral public key to send to peer.
+ * Must be called after session_pfs_initiate() returns success. */
+CeePewErr_t session_get_local_pfs_pubkey(uint8_t pfs_pubkey_out[32]);
 
 /* ── Test injection setters (replace the old __attribute__((weak)) mocks) ──
  * Setting a value short-circuits the corresponding session_get_*() return.

@@ -12,15 +12,12 @@
 extern "C" {
 #endif
 
-/* Derive the current ESP-NOW channel for the active session using a
- * PRG-derived permutation of BASE_CHANNELS. Deterministic given same
- * crypto context, session key, and nonce state. */
+/* Get current hopped channel for session. Deterministic from crypto ctx + nonce. */
 CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx,
                                          uint64_t nonce_counter,
                                          uint8_t *channel_out);
 
-/* Invalidate the cached hop key. Must be called when session ends
- * (session_wipe / session_end) to prevent key material reuse. */
+/* Invalidate cached hop key. Call on session end/wipe to prevent key reuse. */
 void transport_hop_invalidate_key(void);
 
 #ifdef __cplusplus

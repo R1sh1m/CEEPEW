@@ -167,6 +167,10 @@ static void test_session_phase2_pairing(void){
     uint8_t phase = session_get_phase();
     test_assert_eq_u32(2U, phase, "phase after initiate");
 
+    /* Simulate GATT WiFi MAC verification */
+    test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
+    test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
+
     /* Derive key */
     err = session_phase2_derive_key();
     test_assert_ok(err, "session_phase2_derive_key");
@@ -206,6 +210,10 @@ static void test_nonce_enforcement(void){
      * with the correct parity (initiator=even, responder=odd). */
     session_set_role(true);
 
+    /* Simulate GATT WiFi MAC verification */
+    test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
+    test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
+
     err = session_phase2_derive_key();
     test_assert_ok(err, "session_phase2_derive_key");
 
@@ -244,6 +252,9 @@ static void test_mac_lock_check(void){
     err = session_phase2_initiate(SESSION_CODE);
     test_assert_ok(err, "session_phase2_initiate");
 
+    test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
+    test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
+
     err = session_phase2_derive_key();
     test_assert_ok(err, "session_phase2_derive_key");
 
@@ -280,6 +291,9 @@ static void test_session_termination(void){
 
     err = session_phase2_initiate(SESSION_CODE);
     test_assert_ok(err, "session_phase2_initiate");
+
+    test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
+    test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
 
     err = session_phase2_derive_key();
     test_assert_ok(err, "session_phase2_derive_key");

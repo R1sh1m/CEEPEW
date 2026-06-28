@@ -34,3 +34,5 @@ sdkconfig.production
 skills-lock.json
 logs/
 digest.txt
+tools/
+*.log

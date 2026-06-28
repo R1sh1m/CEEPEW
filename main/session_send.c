@@ -142,11 +142,13 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
 
     /* ── End of crypto critical section ─────────────────────────────── */
 
-    CEEPEW_ASSERT((uint32_t)box_ct_len + 64U <= sizeof(local_payload), CEEPEW_ERR_BOUNDS);
-    memcpy(local_payload, local_box_ct, box_ct_len);
-    memcpy(local_payload + box_ct_len, local_sig, 64U);
+    uint16_t payload_len = (uint16_t)(2U + box_ct_len + 64U);
+    CEEPEW_ASSERT((uint32_t)payload_len <= sizeof(local_payload), CEEPEW_ERR_BOUNDS);
+    local_payload[0] = (uint8_t)(box_ct_len & 0xFFU);
+    local_payload[1] = (uint8_t)((box_ct_len >> 8U) & 0xFFU);
+    memcpy(local_payload + 2U, local_box_ct, box_ct_len);
+    memcpy(local_payload + 2U + box_ct_len, local_sig, 64U);
 
-    uint16_t payload_len = (uint16_t)(box_ct_len + 64U);
     uint16_t fec_len = (uint16_t)sizeof(local_fec_buf);
     err = ecc_hamming_encode(local_payload, payload_len, local_fec_buf, &fec_len);
     if (err != CEEPEW_OK) { goto cleanup; }
@@ -204,7 +206,7 @@ CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_
 
     /* Get peer MAC */
     uint8_t peer_mac[6];
-    CeePewErr_t err = session_get_peer_device_id(peer_mac);
+    CeePewErr_t err = session_get_peer_wifi_mac(peer_mac);
     if (err != CEEPEW_OK) {
         return err;
     }

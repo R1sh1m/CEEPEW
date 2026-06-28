@@ -98,8 +98,9 @@
  * ASCII chat text typed by the user. */
 #define CEEPEW_KEY_SYNC_HELLO_BYTE       0xA5U   /* initiator → responder */
 #define CEEPEW_KEY_SYNC_ACK_BYTE         0x5AU   /* responder → initiator */
-#define CEEPEW_KEY_SYNC_TIMEOUT_MS       10000U  /* Give up → PAIRING_FAILED */
+#define CEEPEW_KEY_SYNC_TIMEOUT_MS       20000U  /* Give up → PAIRING_FAILED */
 #define CEEPEW_KEY_SYNC_RETRY_MS         250U    /* Initiator retransmit cadence */
+#define CEEPEW_PFS_RETRY_INTERVAL_MS     3000U   /* PFS retransmit interval */
 
 /* -------------------------------------------------------------------------- */
 /* Session                                                                     */
@@ -111,7 +112,7 @@
 #define CEEPEW_PAIRING_TIMEOUT_S         30U
 #define CEEPEW_T_ROUND_S                 8U     /* Phase 2 commitment window  */
 #define CEEPEW_PAIRING_COUNTDOWN_MS      45000U /* UI countdown bar total (ms) */
-#define CEEPEW_KEYDER_DURATION_MS        9000U  /* Key derivation animation (ms) */
+#define CEEPEW_KEYDER_DURATION_MS        20000U  /* Key derivation animation (ms) */
 #define CEEPEW_KEYS_VERIFIED_HOLD_MS     3000U  /* "Keys Verified" screen hold (ms) */
 #define CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS 15000U /* CONFIRM verification timeout (ms) */
 #define CEEPEW_CHAT_LONG_PRESS_MS        1500U  /* Long press to return to menu (ms) */
@@ -264,7 +265,17 @@
 /* SECURITY: Even when CEEPEW_DEBUG_SERIAL is defined, the following are      */
 /* NEVER printed: key material, plaintext content, peer MAC during pairing.   */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_DEBUG_SERIAL   /* Uncomment for development builds ONLY  */
+// #define CEEPEW_DEBUG_SERIAL   /* Commented for manual testing */
+
+/* Headless mode: auto-advances the UI through the pairing flow (DISCOVERY
+ * → CODE_ENTRY → CONFIRM → PAIRING) without requiring button presses or
+ * OLED interaction. Uses hardcoded session code "ZZZZ". Intended for
+ * bring-up and CI testing on devices without a working OLED panel.
+ *
+ * The CONFIRM → PAIRING transition is already automatic once
+ * commitment_verified is set by the BLE transport; this define bridges
+ * the earlier interaction gaps that normally need a button press. */
+// #define CEEPEW_HEADLESS_MODE  1   /* uncomment for headless auto-advance */
 
 #ifdef CEEPEW_DEBUG_SERIAL
     #define CEEPEW_LOG(tag, fmt, ...) \

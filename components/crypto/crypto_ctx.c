@@ -119,12 +119,17 @@ CeePewErr_t crypto_espnow_derive_pmk(uint8_t pmk_out[16])
  * Incorporates the peer's WiFi MAC so different peers get different LMKs. */
 CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk_out[16])
 {
-    uint8_t info[6 + 20];
-    memcpy(info, peer_wifi_mac, 6);
-    memcpy(info + 6, "ceepew-espnow-lmk-v1", 20);
+    /* IMPORTANT: DO NOT include peer_wifi_mac in the HKDF info — both
+     * devices must derive the SAME LMK. Including the peer MAC caused
+     * each side to derive a different LMK (COM5 uses COM6's MAC, COM6
+     * uses COM5's MAC), so encrypted ESP-NOW frames were silently dropped
+     * at the receiver (decrypt-failed → no recv callback). The session
+     * key (ascon_key) already uniquely binds this LMK to the session. */
+    (void)peer_wifi_mac;
+    uint8_t info[] = "ceepew-espnow-lmk-v1";
     return crypto_hkdf_expand(
         g_crypto_ctx.ascon_key,
-        info, sizeof(info),
+        info, (uint8_t)(sizeof(info) - 1U),
         lmk_out, 16
     );
 }

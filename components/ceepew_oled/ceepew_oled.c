@@ -406,6 +406,12 @@ esp_err_t ceepew_oled_init_panel(ceepew_oled_t *dev,
     dev->fast_failed  = false;
     (void)memset(dev->buffer, 0, CEEPEW_OLED_BUF_SIZE);
 
+    /* Power-up delay: SSD1306/SH1106 datasheets require >=100 ms from
+     * VDD stable to first command.  Without this, the panel may miss
+     * the init stream if the 3.3V rail ramps slowly or the module's
+     * internal POR (power-on reset) hasn't completed. */
+    vTaskDelay(pdMS_TO_TICKS(100U));
+
     esp_err_t rc = send_init_stream(dev);
     if (rc == ESP_OK) {
         dev->initialised = true;
@@ -431,6 +437,8 @@ esp_err_t ceepew_oled_init_panel_sh1106(ceepew_oled_t *dev,
     dev->fast_active  = false;
     dev->fast_failed  = false;
     (void)memset(dev->buffer, 0, CEEPEW_OLED_BUF_SIZE);
+
+    vTaskDelay(pdMS_TO_TICKS(100U));
 
     esp_err_t rc = send_init_stream_sh1106(dev);
     if (rc == ESP_OK) {

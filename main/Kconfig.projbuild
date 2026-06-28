@@ -18,6 +18,16 @@ menu "CEE-PEW Build Options"
             time, instead of probing for it reactively. Useful in
             production for known-good wiring; off by default.
 
+    config CEEPEW_HEADLESS_MODE
+        bool "Headless Mode (auto-advance UI for headless testing)"
+        default n
+        help
+            Auto-advances the UI through the pairing flow (DISCOVERY →
+            CODE_ENTRY → CONFIRM → PAIRING) without requiring button presses
+            or OLED interaction. Uses hardcoded session code "ZZZZ". Intended
+            for bring-up and CI testing on devices without a working OLED panel.
+            Also sets the CEEPEW_HEADLESS_MODE preprocessor define.
+
     config CEEPEW_EFUSE_HMAC_KEY
         bool "Enable eFuse HMAC device identity key"
         default n

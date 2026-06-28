@@ -24,6 +24,7 @@
 #include "ui_manager.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_config.h"
+#include "crypto_sha256.h"
 #include "ceepew_assert.h"
 #include <string.h>
 #include <stdio.h>
@@ -112,10 +113,10 @@ static esp_bt_uuid_t s_sign_pk_char_uuid = {
     .uuid = { .uuid16 = BLE_SIGN_PK_CHAR_UUID }
 };
 
-/* 80-byte attribute value buffer for the sign_pk characteristic.
- * Must accommodate 64B ciphertext + 16B tag = 80B total.
+/* Attribute value buffer for the sign_pk characteristic (matches GATT_CRYPTO_TOTAL_BYTES).
+ * Must accommodate 70B ciphertext + 16B tag = 86B total.
  * Explicit max_length ensures GATT write succeeds for full payload. */
-static uint8_t s_sign_pk_attr_val[80] = {0};
+static uint8_t s_sign_pk_attr_val[GATT_CRYPTO_TOTAL_BYTES] = {0};
 
 static esp_attr_value_t s_sign_pk_attr_val_cfg = {
     .attr_max_len = sizeof(s_sign_pk_attr_val),
@@ -162,6 +163,12 @@ static const char *transport_ble_state_name(BleState_t state);
 
 #define CEEPEW_RESTART_DEBOUNCE_MS  2000U
 #define CEEPEW_SCAN_STUCK_TIMEOUT_MS 15000U
+
+/* GATT connection parameters for reliability during pairing */
+#define CEEPEW_GATTC_CONN_INT_MIN        0x18    /* 30ms */
+#define CEEPEW_GATTC_CONN_INT_MAX        0x28    /* 50ms */
+#define CEEPEW_GATTC_CONN_LATENCY        0       /* No slave latency during pairing */
+#define CEEPEW_GATTC_SUPERVISION_TIMEOUT 0x1F4   /* 5s */
 static uint32_t s_last_restart_ms              = 0U;
 static uint32_t s_scan_retry_after_ms          = 0U;
 static bool     s_scan_requested               = false;
@@ -169,6 +176,7 @@ static bool s_adv_data_set                 = false;
 static bool s_scan_rsp_set                 = false;
 static bool s_adv_starting                 = false;
 static bool s_scan_start_failed            = false;
+static bool s_scan_start_pending           = false; /* deferred until GAP idle */
 
 static uint8_t s_pending_scan_rsp_buf[64U];
 static uint8_t s_pending_scan_rsp_len = 0U;
@@ -216,6 +224,17 @@ static inline void ble_ctx_unlock(void)
     s_ble_ctx_lock_owner = NULL;
     s_ble_ctx_lock_held_since_ms = 0U;
     xSemaphoreGive(s_ble_ctx_mutex);
+}
+
+/* Public wrappers for external callers (e.g., task_session.c) */
+bool transport_ble_ctx_lock(void)
+{
+    return ble_ctx_lock();
+}
+
+void transport_ble_ctx_unlock(void)
+{
+    ble_ctx_unlock();
 }
 
 /* ========================================================================== */
@@ -289,14 +308,21 @@ CeePewErr_t transport_ble_restart_discovery_session(void)
     }
     s_last_restart_ms = now_ms;
 
-    /* Re-initialize BLE if it was deinitialized (Phase 3 exit/recovery) */
-    if (!s_ble_initialised) {
-        ESP_LOGI(TAG, "restart_discovery: BLE was deinitialized, re-initializing stack");
-        CeePewErr_t init_err = transport_ble_init();
-        if (init_err != CEEPEW_OK) {
-            ESP_LOGE(TAG, "Failed to re-initialize BLE: %d", (int)init_err);
-            return init_err;
-        }
+    /* Force full BLE teardown and re-init every cycle. The Bluedroid MTU
+     * exchange only works on the first connection after GATTS service
+     * creation; preserving GATTS across cycles causes the MTU exchange to
+     * silently fail (no CFG_MTU_EVT fires), which blocks the 86-byte
+     * sign_pk write (MTU >= 90 required).  A fresh BLE init ensures a
+     * fresh GATTS service and a working MTU exchange. */
+    if (s_ble_initialised) {
+        ESP_LOGI(TAG, "restart_discovery: tearing down BLE for fresh GATTS creation");
+        (void)transport_ble_deinit();
+    }
+    ESP_LOGI(TAG, "restart_discovery: re-initializing BLE stack");
+    CeePewErr_t init_err = transport_ble_init();
+    if (init_err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "Failed to re-initialize BLE: %d", (int)init_err);
+        return init_err;
     }
 
     uint8_t local_device_id[CEEPEW_DEVICE_ID_BYTES] = {0U};
@@ -322,9 +348,9 @@ CeePewErr_t transport_ble_restart_discovery_session(void)
     s_scan_rsp_set = false;
     s_adv_starting = false;
     (void)transport_ble_start_advertising();
-    (void)transport_ble_start_scan();
+    s_scan_start_pending = true;
     s_discovery_restart_pending = false;
-    ESP_LOGI(TAG, "transport_ble: discovery restarted (adv + scan requested)");
+    ESP_LOGI(TAG, "transport_ble: discovery restarted (adv + scan pending)");
 
     return CEEPEW_OK;
 }
@@ -373,7 +399,13 @@ static void transport_ble_clear_discovery_peer_state_unlocked(void)
     g_ble_ctx.sign_pk_received         = false;
     g_ble_ctx.box_pubkey_received      = false;
     ceepew_secure_zero(g_ble_ctx.adv_commitment, sizeof(g_ble_ctx.adv_commitment));
-    g_ble_ctx.gatts_sign_pk_char_handle = 0U;
+    /* NOTE: gatts_sign_pk_char_handle is NOT cleared here — it is assigned by
+     * the BLE stack via ESP_GATTS_ADD_CHAR_EVT during transport_ble_init().
+     * Clearing it here on a subsequent restart_discovery that does NOT re-init
+     * BLE (because the stack is already alive) would orphan the handle: the
+     * ESP_GATTS_ADD_CHAR_EVT callback only fires once per service creation and
+     * will never restore it.  The handle is stable across connections. */
+    // g_ble_ctx.gatts_sign_pk_char_handle = 0U;
     g_ble_ctx.gattc_sign_pk_char_handle = 0U;
     g_ble_ctx.reconnect_attempts   = 0U;
     g_ble_ctx.connecting           = false;
@@ -805,8 +837,15 @@ CeePewErr_t transport_ble_init(void)
     g_ble_ctx.pending_sign_pk_write = false;
     memset(g_ble_ctx.pending_sign_pk_encrypted, 0U, sizeof(g_ble_ctx.pending_sign_pk_encrypted));
     memset(g_ble_ctx.pending_peer_commitment, 0U, sizeof(g_ble_ctx.pending_peer_commitment));
+    /* Diagnostics (Phase 8) */
+    g_ble_ctx.gattc_open_attempts = 0U;
+    g_ble_ctx.mtu_negotiation_attempts = 0U;
+    g_ble_ctx.sign_pk_write_attempts = 0U;
+    g_ble_ctx.last_disconnect_reason = 0U;
+    g_ble_ctx.last_metrics_log_ms = 0U;
 
     s_scan_requested = false;
+    s_scan_start_pending = false;
     s_adv_data_set = false;
     s_scan_rsp_set = false;
     s_scan_peer_dedupe_valid = false;
@@ -829,7 +868,11 @@ CeePewErr_t transport_ble_init(void)
     ESP_LOGI(TAG, "transport_ble_init: Starting BLE initialization");
 
     esp_err_t err;
-    if (s_stack_needs_full_init) {
+    /* Also force full init if bluedroid is uninitialised regardless of the
+     * cached flag — diagnostic tests may tear down BLE without resetting
+     * s_stack_needs_full_init, leaving it false on the second call. */
+    if (s_stack_needs_full_init ||
+        esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
         esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
         err = esp_bt_controller_init(&bt_cfg);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -861,6 +904,23 @@ CeePewErr_t transport_ble_init(void)
         ESP_LOGI(TAG, "esp_bluedroid_enable: OK");
         s_stack_needs_full_init = false;
 
+        /* Clear any stored BLE bonds from NVS so the stack does not
+         * auto-reconnect to a previously paired peer. During development
+         * every boot is a clean pairing flow. */
+        {
+            int bond_num = esp_ble_get_bond_device_num();
+            if (bond_num > 0) {
+                esp_ble_bond_dev_t bond_list[8];
+                int list_cap = 8;
+                if (esp_ble_get_bond_device_list(&list_cap, bond_list) == ESP_OK) {
+                    for (int i = 0; i < list_cap; i++) {
+                        esp_ble_remove_bond_device(bond_list[i].bd_addr);
+                    }
+                    ESP_LOGI(TAG, "Cleared %d stored BLE bond(s)", list_cap);
+                }
+            }
+        }
+
         /* Restore balanced RF coexistence now that BLE is active again.
          * task_session.c sets ESP_COEX_PREFER_WIFI after BLE deinit to
          * ensure ESP-NOW TX succeeds during post-derive sync; reverse
@@ -869,6 +929,10 @@ CeePewErr_t transport_ble_init(void)
     } else {
         ESP_LOGI(TAG, "BLE stack already initialised — skipping controller+bluedroid init");
     }
+
+    /* Yield so the BTC task can finish processing any pending messages
+     * before we call BLE API functions that check bluedroid status. */
+    vTaskDelay(pdMS_TO_TICKS(10));
 
     /* Create the delayed sign_pk write timer (one-shot, 50 ms settle).
      * Safe to create even if the timer already exists from a prior init. */
@@ -888,14 +952,11 @@ CeePewErr_t transport_ble_init(void)
     /* Set initialization flag BEFORE registering callbacks to avoid race condition. */
     s_ble_initialised = true;
 
-    esp_ble_gap_register_callback(gap_event_handler);
-    ESP_LOGI(TAG, "GAP callback registered");
-
-    esp_ble_gattc_register_callback(gattc_event_handler);
-    ESP_LOGI(TAG, "GATTC callback registered");
-
-    esp_ble_gatts_register_callback(gatts_event_handler);
-    ESP_LOGI(TAG, "GATTS callback registered");
+    esp_err_t bt_err_gap = esp_ble_gap_register_callback(gap_event_handler);
+    esp_err_t bt_err_gattc = esp_ble_gattc_register_callback(gattc_event_handler);
+    esp_err_t bt_err_gatts = esp_ble_gatts_register_callback(gatts_event_handler);
+    ESP_LOGI(TAG, "Callback registrations: gap=%d gattc=%d gatts=%d bt_stat=%d",
+             bt_err_gap, bt_err_gattc, bt_err_gatts, (int)esp_bluedroid_get_status());
 
     CeePewErr_t adv_err = transport_ble_start_advertising();
     if (adv_err != CEEPEW_OK) {
@@ -1018,8 +1079,9 @@ CeePewErr_t transport_ble_start_scan(void)
     }
 
 #ifdef CONFIG_BT_ENABLED
-    ESP_LOGI(TAG, "Scan requested: active=%u interval=%u window=%u duplicate=%u",
-             1U, 0x50U, 0x30U, 0U);
+    esp_bluedroid_status_t bt_stat = esp_bluedroid_get_status();
+    ESP_LOGI(TAG, "Scan requested: active=%u interval=%u window=%u duplicate=%u bt_stat=%d",
+             1U, 0x50U, 0x30U, 0U, (int)bt_stat);
     esp_ble_scan_params_t scan_params = {
         .scan_type          = BLE_SCAN_TYPE_ACTIVE,
         .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
@@ -1031,8 +1093,8 @@ CeePewErr_t transport_ble_start_scan(void)
 
     esp_err_t err = esp_ble_gap_set_scan_params(&scan_params);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ble_gap_set_scan_params failed: %d (%s)",
-                 err, esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_ble_gap_set_scan_params failed: %d (%s) bt_stat=%d",
+                 err, esp_err_to_name(err), (int)bt_stat);
         s_scan_requested = false;
         s_scan_start_failed = true;
         s_scan_retry_after_ms = (uint32_t)(esp_timer_get_time() / 1000LL) +
@@ -1075,7 +1137,7 @@ bool transport_ble_has_peer_cached(void)
     return transport_ble_get_peer_cached() != NULL;
 }
 
-static CeePewErr_t transport_ble_connect_to_peer_unlocked(const uint8_t peer_mac[6])
+static CeePewErr_t transport_ble_connect_to_peer_internal(const uint8_t peer_mac[6], bool is_retry)
 {
     if (peer_mac == NULL) { return CEEPEW_ERR_NULL_PTR; }
 
@@ -1086,9 +1148,9 @@ static CeePewErr_t transport_ble_connect_to_peer_unlocked(const uint8_t peer_mac
     memcpy(g_ble_ctx.peer_mac, peer_mac, 6U);
     char peer_mac_str[18];
     transport_ble_format_mac(peer_mac, peer_mac_str);
-    ESP_LOGI(TAG, "Connect requested: peer=%s addr_type=%u state=%s",
+    ESP_LOGI(TAG, "Connect requested: peer=%s addr_type=%u state=%s retry=%u",
              peer_mac_str, (unsigned)g_ble_ctx.peer_addr_type,
-             transport_ble_state_name(g_ble_ctx.state));
+             transport_ble_state_name(g_ble_ctx.state), is_retry ? 1U : 0U);
 
 #ifdef CONFIG_BT_ENABLED
     if (g_ble_ctx.gattc_if == CEEPEW_GATT_IF_NONE || !g_ble_ctx.gattc_registered) {
@@ -1097,6 +1159,23 @@ static CeePewErr_t transport_ble_connect_to_peer_unlocked(const uint8_t peer_mac
     }
     g_ble_ctx.connecting = true;
     g_ble_ctx.is_initiator_role = true;
+    if (!is_retry) {
+        g_ble_ctx.gattc_open_attempts++;
+    }
+
+    /* ESP-IDF v6: Connection parameters are now in a separate esp_ble_conn_params_t
+     * struct pointed to by phy_1m_conn_params in esp_ble_gatt_creat_conn_params_t. */
+    static esp_ble_conn_params_t s_phy_1m_conn_params = {
+        .interval_min        = CEEPEW_GATTC_CONN_INT_MIN,
+        .interval_max        = CEEPEW_GATTC_CONN_INT_MAX,
+        .latency             = CEEPEW_GATTC_CONN_LATENCY,
+        .supervision_timeout = CEEPEW_GATTC_SUPERVISION_TIMEOUT,
+        .min_ce_len          = 0,
+        .max_ce_len          = 0,
+        .scan_interval       = 0,
+        .scan_window         = 0,
+    };
+
     esp_ble_gatt_creat_conn_params_t conn_params = {0};
     memcpy(conn_params.remote_bda, g_ble_ctx.peer_mac, ESP_BD_ADDR_LEN);
     conn_params.remote_addr_type = g_ble_ctx.peer_addr_type;
@@ -1104,9 +1183,10 @@ static CeePewErr_t transport_ble_connect_to_peer_unlocked(const uint8_t peer_mac
     conn_params.is_direct        = true;
     conn_params.is_aux           = false;
     conn_params.phy_mask         = 0x0;
+    conn_params.phy_1m_conn_params = &s_phy_1m_conn_params;
     esp_err_t err = esp_ble_gattc_enh_open(g_ble_ctx.gattc_if, &conn_params);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ble_gattc_open/enh_open failed: %d", err);
+        ESP_LOGE(TAG, "esp_ble_gattc_enh_open failed: %d (%s)", err, esp_err_to_name(err));
         g_ble_ctx.connecting = false;
         return CEEPEW_ERR_HW;
     }
@@ -1116,6 +1196,16 @@ static CeePewErr_t transport_ble_connect_to_peer_unlocked(const uint8_t peer_mac
     g_ble_ctx.state = BLE_CONNECTED;
 #endif
     return CEEPEW_OK;
+}
+
+static CeePewErr_t transport_ble_connect_to_peer_unlocked(const uint8_t peer_mac[6])
+{
+    return transport_ble_connect_to_peer_internal(peer_mac, false);
+}
+
+CeePewErr_t transport_ble_retry_gattc_connect(const uint8_t peer_mac[6])
+{
+    return transport_ble_connect_to_peer_internal(peer_mac, true);
 }
 
 CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6])
@@ -1428,9 +1518,104 @@ CeePewErr_t transport_ble_deinit(void)
     /* 6. Wait for the radio to fully release before WiFi claims it */
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    ESP_LOGI(TAG, "BLE fully torn down");
+    ESP_LOGI(TAG, "BLE deinit: stack torn down (memory retained for potential reinit)");
 #else
     ESP_LOGI(TAG, "BLE deinit (CONFIG_BT_ENABLED not set)");
+#endif
+
+    memset(&g_ble_ctx, 0U, sizeof(BleContext_t));
+    g_ble_ctx.peer_name_len = 0U;
+    g_ble_ctx.peer_rssi = 0;
+    s_scan_requested = false;
+    s_adv_data_set = false;
+    s_scan_rsp_set = false;
+    s_adv_starting = false;
+    s_scan_start_failed = false;
+    s_scan_retry_after_ms = 0U;
+    s_pending_adv_update = false;
+    s_pending_scan_rsp_update = false;
+    s_pending_adv_len = 0U;
+    s_pending_scan_rsp_len = 0U;
+    memset(s_pending_adv_buf, 0, sizeof(s_pending_adv_buf));
+    memset(s_pending_scan_rsp_buf, 0, sizeof(s_pending_scan_rsp_buf));
+    s_ble_initialised = false;
+    s_stack_needs_full_init = true;
+    s_last_restart_ms = 0U;  /* Clear debounce timer so restart_discovery_session() can re-init */
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_ble_teardown(void)
+{
+    if (!s_ble_initialised) {
+        ESP_LOGW(TAG, "teardown: BLE not initialised — no-op");
+        return CEEPEW_OK;
+    }
+
+    transport_ble_supervisor_stop();
+    s_supervisor_recovering = 0U;
+    transport_ble_enter_phase(PAIRING_PHASE_IDLE);
+
+#ifdef CONFIG_BT_ENABLED
+    esp_err_t err;
+
+    /* 1. Stop advertising/scanning so no new events come in */
+    err = esp_ble_gap_stop_advertising();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "gap_stop_adv: %s", esp_err_to_name(err));
+    }
+    err = esp_ble_gap_stop_scanning();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "gap_stop_scan: %s", esp_err_to_name(err));
+    }
+
+    /* 2. Disconnect any active GATT links cleanly via esp_ble_gatts_close() and esp_ble_gattc_close() */
+    if (g_ble_ctx.gattc_connected) {
+        esp_ble_gattc_close(g_ble_ctx.gattc_if, g_ble_ctx.conn_id);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (g_ble_ctx.gatts_connected) {
+        esp_ble_gatts_close(g_ble_ctx.gatts_if, g_ble_ctx.conn_id);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    /* 3. Drain the BT event queue — give the stack time to settle */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* 4. De-register and disable Bluedroid stack fully using esp_bluedroid_disable() and esp_bluedroid_deinit() */
+    err = esp_bluedroid_disable();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bluedroid_disable: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bluedroid_disabled");
+    }
+    err = esp_bluedroid_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bluedroid_deinit: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bluedroid_deinitialized");
+    }
+
+    /* 5. Disable and deinitialize the BT controller with esp_bt_controller_disable() and esp_bt_controller_deinit() */
+    err = esp_bt_controller_disable();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bt_ctrl_disable: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bt_controller_disabled");
+    }
+    err = esp_bt_controller_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bt_ctrl_deinit: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bt_controller_deinitialized");
+    }
+
+    /* 6. Mandatory blocking delay to let the shared 2.4GHz PHY radio fully settle into an idle state */
+    vTaskDelay(pdMS_TO_TICKS(150));
+
+    ESP_LOGI(TAG, "BLE torn down (memory retained for potential reinit)");
+#else
+    ESP_LOGI(TAG, "BLE teardown (CONFIG_BT_ENABLED not set)");
+    vTaskDelay(pdMS_TO_TICKS(150));
 #endif
 
     memset(&g_ble_ctx, 0U, sizeof(BleContext_t));
@@ -1515,6 +1700,16 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
+    /* Dead-BLE detector: if Bluedroid is uninitialized despite our flag
+     * saying otherwise, force a full discovery restart to reinit the
+     * stack. This handles the case where repeated PAIR_FAIL cycles leave
+     * the BLE stack in an inconsistent state (bt_stat=0). */
+    if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
+        ESP_LOGE(TAG, "retry_scan: Bluedroid UNINITIALIZED with s_ble_initialised=true — restarting discovery");
+        (void)transport_ble_restart_discovery_session();
+        return CEEPEW_OK;
+    }
+
     /* Peer-lost timeout check.
      *
      * CRITICAL FIX:
@@ -1585,6 +1780,16 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
                 return CEEPEW_OK;
             }
         }
+    }
+
+    if (s_scan_start_pending && !g_ble_ctx.is_scanning &&
+        g_ble_ctx.state != BLE_SCANNING &&
+        g_ble_ctx.state != BLE_ADVERTISING_AND_SCANNING) {
+        s_scan_start_pending = false;
+        ESP_LOGI(TAG, "retry_scan: starting deferred scan");
+        CeePewErr_t e = transport_ble_start_scan();
+        if (e == CEEPEW_OK) { return CEEPEW_OK; }
+        s_scan_start_pending = true;
     }
 
     if (!s_scan_start_failed) { return CEEPEW_OK; }
@@ -1759,6 +1964,11 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
             g_ble_ctx.is_advertising = true;
             ESP_LOGI(TAG, "Advertising confirmed active");
+            if (s_scan_start_pending && !g_ble_ctx.is_scanning) {
+                s_scan_start_pending = false;
+                ESP_LOGI(TAG, "ADV_START_COMPLETE: starting deferred scan");
+                (void)transport_ble_start_scan();
+            }
         } else {
             ESP_LOGE(TAG, "Advertising start FAILED: status=%d",
                      param->adv_start_cmpl.status);
@@ -2117,8 +2327,8 @@ static void sign_pk_delayed_dispatch(void *arg)
     if (!g_ble_ctx.pending_sign_pk_write || !g_ble_ctx.gattc_connected) {
         return;
     }
-    if (g_ble_ctx.gattc_mtu < 84U) {
-        ESP_LOGW(TAG, "delayed dispatch: MTU %u < 84, aborting",
+    if (g_ble_ctx.gattc_mtu < 90U) {
+        ESP_LOGW(TAG, "delayed dispatch: MTU %u < 90, aborting",
                  (unsigned)g_ble_ctx.gattc_mtu);
         ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
                            sizeof(g_ble_ctx.pending_sign_pk_encrypted));
@@ -2166,8 +2376,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             }
             g_ble_ctx.gattc_if = gattc_if;
             g_ble_ctx.gattc_registered = true;
-            ESP_LOGI(TAG, "GATTC registered, if=%d", gattc_if);
-            (void)transport_ble_start_scan();
+            ESP_LOGI(TAG, "GATTC registered, if=%d — deferring scan until adv start complete", gattc_if);
+            s_scan_start_pending = true;
             break;
 
         case ESP_GATTC_OPEN_EVT:
@@ -2182,8 +2392,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 g_ble_ctx.connecting = false;
             } else {
                 /* Hybrid-GATT: request 247-byte ATT MTU upfront so the
-                 * 48B Ascon-encrypted sign_pk fits in a single write.
-                 * If negotiation lands below 84 (64B ct + 16B tag + 4B
+                 * 86B Ascon-encrypted sign_pk+box_pk+wifi_mac fits in a single write.
+                 * If negotiation lands below 90 (70B ct + 16B tag + 4B
                  * write overhead), the write will fail and we will
                  * bump reconnect_attempts in the SEARCH_CMPL_EVT branch. */
                 esp_err_t mtu_err = esp_ble_gattc_send_mtu_req(
@@ -2199,9 +2409,9 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             if (param->cfg_mtu.status == ESP_GATT_OK) {
                 g_ble_ctx.gattc_mtu = param->cfg_mtu.mtu;
                 g_ble_ctx.gattc_sign_pk_mtu_negotiated = true;
-                ESP_LOGI(TAG, "GATTC MTU negotiated: %u (need >= 84 for sign_pk+box_pk)",
-                         (unsigned)g_ble_ctx.gattc_mtu);
-                if (g_ble_ctx.gattc_mtu < 84U) {
+            ESP_LOGI(TAG, "GATTC MTU negotiated: %u (need >= 90 for sign_pk+box_pk+wifi_mac)",
+                     (unsigned)g_ble_ctx.gattc_mtu);
+            if (g_ble_ctx.gattc_mtu < 90U) {
                     ESP_LOGW(TAG, "MTU %u below sign_pk+box_pk threshold — write will be rejected",
                              (unsigned)g_ble_ctx.gattc_mtu);
                     if (g_ble_ctx.pending_sign_pk_write) {
@@ -2231,7 +2441,17 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             } else {
                 ESP_LOGW(TAG, "GATTC MTU negotiation failed: status=%d",
                          (int)param->cfg_mtu.status);
-                if (g_ble_ctx.pending_sign_pk_write) {
+                /* Attempt one-shot MTU renegotiation if not already tried */
+                if (!g_ble_ctx.mtu_negotiation_attempts && g_ble_ctx.gattc_connected) {
+                    g_ble_ctx.mtu_negotiation_attempts++;
+                    ESP_LOGI(TAG, "Attempting MTU renegotiation (attempt %u)",
+                             (unsigned)g_ble_ctx.mtu_negotiation_attempts);
+                    esp_err_t mtu_err = esp_ble_gattc_send_mtu_req(gattc_if, param->cfg_mtu.mtu);
+                    if (mtu_err != ESP_OK) {
+                        ESP_LOGW(TAG, "MTU renegotiation request failed: %d (%s)",
+                                 (int)mtu_err, esp_err_to_name(mtu_err));
+                    }
+                } else if (g_ble_ctx.pending_sign_pk_write) {
                     ESP_LOGW(TAG, "MTU negotiation failed — discarding buffered sign_pk write");
                     ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
                                        sizeof(g_ble_ctx.pending_sign_pk_encrypted));
@@ -2252,10 +2472,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             ESP_LOGI(TAG, "GATTC connected: conn_id=%u retries=%u",
                      (unsigned)g_ble_ctx.conn_id,
                      (unsigned)g_ble_ctx.reconnect_attempts);
-            /* NOTE: conn param update intentionally omitted — the brief
-             * GATT exchange (connect → write 80B → disconnect) is too short
-             * for param negotiation; firing esp_ble_gap_update_conn_params()
-             * concurrently with GATT service discovery caused status=133. */
+             /* NOTE: conn param update intentionally omitted — the brief
+              * GATT exchange (connect → write 86B → disconnect) is too short
+              * for param negotiation; firing esp_ble_gap_update_conn_params()
+              * concurrently with GATT service discovery caused status=133. */
             (void)esp_ble_gattc_search_service(gattc_if, g_ble_ctx.conn_id,
                                                &s_service_uuid_filter);
             break;
@@ -2300,14 +2520,14 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             ESP_LOGI(TAG, "GATTC sign_pk characteristic ready: handle=%u",
                      (unsigned)g_ble_ctx.gattc_sign_pk_char_handle);
 
-            /* Hybrid-GATT: encrypt the local sign_pk+box_pubkey under a key derived
-             * from the session_code (shared with peer) + sorted device IDs,
-             * then write the 80B (64B ct + 16B tag) payload to 0xFFF3.
-             *
-             * The 64B plaintext is the local Ed25519 sign_pk + X25519 box_pubkey
-             * generated at session_phase2_initiate. The 16B tag authenticates the
-             * payload — a hostile GATTS device cannot substitute a
-             * different key without knowing the session_code. */
+         /* Hybrid-GATT: encrypt the local sign_pk+box_pubkey under a key derived
+          * from the session_code (shared with peer) + sorted device IDs,
+          * then write the 86B (70B ct + 16B tag) payload to 0xFFF3.
+          *
+          * The 70B plaintext is the local Ed25519 sign_pk + X25519 box_pubkey
+          * + WiFi STA MAC (6B) generated at session_phase2_initiate.
+          * The 16B tag authenticates the payload — a hostile GATTS device
+          * cannot substitute a different key without knowing the session_code. */
             /* Phase guard: if session was reset to discovery (phase 1)
              * while a stale GATT connection was still completing service
              * discovery, sign_pk access would assert.  Disconnect
@@ -2369,6 +2589,23 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             ceepew_secure_zero(sign_pk, sizeof(sign_pk));
             ceepew_secure_zero(box_pk, sizeof(box_pk));
             ceepew_secure_zero(wifi_mac, sizeof(wifi_mac));
+
+            /* DIAG: hash of session_code for mismatch detection */
+            {
+                uint8_t sc_hash[32];
+                (void)crypto_sha256_compute(session_code, 32U, sc_hash);
+                ESP_LOGI(TAG, "GATTC encrypt DIAG: sc_hash=%02x%02x.. sc_byte0=%02x "
+                         "local=%02x:%02x:%02x:%02x:%02x:%02x "
+                         "peer=%02x:%02x:%02x:%02x:%02x:%02x",
+                         sc_hash[0], sc_hash[1], session_code[0],
+                         g_ble_ctx.local_mac[0], g_ble_ctx.local_mac[1],
+                         g_ble_ctx.local_mac[2], g_ble_ctx.local_mac[3],
+                         g_ble_ctx.local_mac[4], g_ble_ctx.local_mac[5],
+                         g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1],
+                         g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
+                         g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
+                ceepew_secure_zero(sc_hash, sizeof(sc_hash));
+            }
 
             uint8_t encrypted[GATT_CRYPTO_TOTAL_BYTES];
             CeePewErr_t enc_err = gatt_crypto_encrypt_with_ids(
@@ -2432,6 +2669,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                          g_ble_ctx.initiator_sign_pk_sent);
                 g_ble_ctx.initiator_sign_pk_sent = true;
                 g_ble_ctx.reverse_gattc_pending  = false;
+                g_ble_ctx.sign_pk_write_attempts = 0U;
                 (void)transport_ble_disconnect();
             } else if (param->write.status == 133) {
                 /* Status 133 = ESP_GATT_INTERNAL_ERROR — may be
@@ -2444,21 +2682,42 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                     g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS) {
                     g_ble_ctx.reconnect_attempts++;
                 }
-                ESP_LOGW(TAG, "GATTC sign_pk write status=133 (retries=%u) — "
-                              "keeping rev_pend, will retry",
-                         (unsigned)g_ble_ctx.reconnect_attempts);
-                (void)transport_ble_disconnect();
-            } else {
-                ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d — closing link, "
-                              "bumping reconnect_attempts",
-                         (int)param->write.status);
-                if (g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS) {
-                    g_ble_ctx.reconnect_attempts++;
+                g_ble_ctx.sign_pk_write_attempts++;
+                if (g_ble_ctx.sign_pk_write_attempts < 3U && g_ble_ctx.gattc_connected &&
+                    g_ble_ctx.gattc_sign_pk_mtu_negotiated) {
+                    /* Retry the write without full reconnect */
+                    ESP_LOGW(TAG, "GATTC sign_pk write status=133 (write attempt %u/3) — retrying write",
+                             (unsigned)g_ble_ctx.sign_pk_write_attempts);
+                    (void)esp_timer_start_once(s_sign_pk_delay_timer, 50000);
+                } else {
+                    ESP_LOGW(TAG, "GATTC sign_pk write status=133 (retries=%u, write_attempts=%u) — "
+                              "keeping rev_pend, will reconnect",
+                              (unsigned)g_ble_ctx.reconnect_attempts,
+                              (unsigned)g_ble_ctx.sign_pk_write_attempts);
+                    (void)transport_ble_disconnect();
                 }
-                ESP_LOGI(TAG, "reverse_gattc_pending: 1->0 (GATTC write FAIL, status=%d)",
-                         param->write.status);
-                g_ble_ctx.reverse_gattc_pending = false;
-                (void)transport_ble_disconnect();
+            } else {
+                g_ble_ctx.sign_pk_write_attempts++;
+                if (g_ble_ctx.sign_pk_write_attempts < 3U && g_ble_ctx.gattc_connected &&
+                    g_ble_ctx.gattc_sign_pk_mtu_negotiated) {
+                    /* Retry the write without full reconnect */
+                    ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d (write attempt %u/3) — retrying write",
+                             (int)param->write.status,
+                             (unsigned)g_ble_ctx.sign_pk_write_attempts);
+                    (void)esp_timer_start_once(s_sign_pk_delay_timer, 50000);
+                } else {
+                    ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d — closing link, "
+                              "bumping reconnect_attempts",
+                             (int)param->write.status);
+                    if (g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS) {
+                        g_ble_ctx.reconnect_attempts++;
+                    }
+                    ESP_LOGI(TAG, "reverse_gattc_pending: 1->0 (GATTC write FAIL, status=%d)",
+                             param->write.status);
+                    g_ble_ctx.reverse_gattc_pending = false;
+                    g_ble_ctx.sign_pk_write_attempts = 0U;
+                    (void)transport_ble_disconnect();
+                }
             }
         } break;
 
@@ -2527,6 +2786,20 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                  * a reverse GATTC for sign_pk exchange. */
                 if (g_ble_ctx.handoff_ready) {
                     transport_ble_enter_phase(PAIRING_PHASE_GATT_IDENTITY);
+                    /* If we're the responder and rev_pend is set, trigger a reconnect
+                     * for the reverse GATTC to deliver our sign_pk. */
+                    if (g_ble_ctx.reverse_gattc_pending &&
+                        !g_ble_ctx.initiator_sign_pk_sent &&
+                        g_ble_ctx.reconnect_attempts < CEEPEW_MAX_RECONNECT_ATTEMPTS) {
+                        ESP_LOGI(TAG, "GATTC disconnected with rev_pend — scheduling reverse GATTC reconnect");
+                        if (g_ble_ctx.peer_mac[0] != 0U) {
+                            CeePewErr_t err = transport_ble_retry_gattc_connect(g_ble_ctx.peer_mac);
+                            if (err != CEEPEW_OK) {
+                                ESP_LOGW(TAG, "Reverse GATTC reconnect failed: %d", (int)err);
+                                g_ble_ctx.reconnect_attempts++;
+                            }
+                        }
+                    }
                 } else {
                     transport_ble_enter_phase(PAIRING_PHASE_IDLE);
                 }
@@ -2562,9 +2835,9 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             ESP_LOGI(TAG, "GATTS service created: handle=%u",
                      (unsigned)param->create.service_handle);
             (void)esp_ble_gatts_start_service(param->create.service_handle);
-            /* Use explicit attribute value with 80-byte buffer for sign_pk characteristic.
+            /* Use explicit attribute value buffer for sign_pk characteristic (GATT_CRYPTO_TOTAL_BYTES).
              * The old NULL attr_value + NULL attr_control approach used stack defaults
-             * which were too small for the 80-byte (64B ct + 16B tag) payload,
+             * which were too small for the 86-byte (70B ct + 16B tag) payload,
              * causing ESP_GATT_INTERNAL_ERROR (133) on GATT writes. */
             (void)esp_ble_gatts_add_char(
                 param->create.service_handle,
@@ -2605,10 +2878,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             /* MTU negotiation completed (initiated by GATTC client) */
             g_ble_ctx.gatts_mtu = param->mtu.mtu;
             g_ble_ctx.gatts_sign_pk_mtu_negotiated = true;
-            ESP_LOGI(TAG, "GATTS MTU negotiated: %u (need >= 84 for sign_pk+box_pk)",
+            ESP_LOGI(TAG, "GATTS MTU negotiated: %u (need >= 90 for sign_pk+box_pk+wifi_mac)",
                      (unsigned)g_ble_ctx.gatts_mtu);
-            if (g_ble_ctx.gatts_mtu < 84U) {
-                ESP_LOGW(TAG, "GATTS MTU %u below sign_pk+box_pk threshold — peer write may fail",
+            if (g_ble_ctx.gatts_mtu < 90U) {
+                ESP_LOGW(TAG, "GATTS MTU %u below sign_pk+box_pk+wifi_mac threshold — peer write may fail",
                          (unsigned)g_ble_ctx.gatts_mtu);
             }
             break;
@@ -2711,8 +2984,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 
             if (!param->write.is_prep &&
                 param->write.handle == g_ble_ctx.gatts_sign_pk_char_handle) {
-                /* Hybrid-GATT (Phase 7): the initiator's sign_pk+box_pubkey is now
-                 * wrapped in Ascon-128 AEAD (64B ct + 16B tag = 80B).
+                /* Hybrid-GATT (Phase 7): the initiator's sign_pk+box_pubkey+wifi_mac is now
+                 * wrapped in Ascon-128 AEAD (70B ct + 16B tag = 86B).
                  * The key/nonce are derived from the session_code, so
                  * a hostile GATTS device cannot inject a chosen sign_pk
                  * without knowing the human-typed session code.
@@ -2725,7 +2998,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                  *     GATTS path remains one-way (peer → us).
                  *
                  * MTU validation: reject writes that don't carry the full
-                 * 80-byte encrypted payload (64B ct + 16B tag). A truncated
+                 * encrypted payload (GATT_CRYPTO_TOTAL_BYTES bytes). A truncated
                  * write would fail Ascon tag verification anyway, but we
                  * check early to get a clearer diagnostic log. */
                 if (param->write.len != GATT_CRYPTO_TOTAL_BYTES) {
@@ -2768,6 +3041,22 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                          g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
                          g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5],
                          (unsigned)param->write.len);
+                /* DIAG: hash of session_code for mismatch detection */
+                uint8_t sc_hash[32];
+                (void)crypto_sha256_compute(session_code, 32U, sc_hash);
+                uint8_t sc_expected = session_code[0];
+                ESP_LOGI(TAG, "GATTS decrypt DIAG: sc_hash=%02x%02x.. sc_byte0=%02x "
+                         "local=%02x:%02x:%02x:%02x:%02x:%02x "
+                         "peer=%02x:%02x:%02x:%02x:%02x:%02x",
+                         sc_hash[0], sc_hash[1], sc_expected,
+                         g_ble_ctx.local_mac[0], g_ble_ctx.local_mac[1],
+                         g_ble_ctx.local_mac[2], g_ble_ctx.local_mac[3],
+                         g_ble_ctx.local_mac[4], g_ble_ctx.local_mac[5],
+                         g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1],
+                         g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
+                         g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
+                ceepew_secure_zero(sc_hash, sizeof(sc_hash));
+
                 CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
                     session_code,
                     g_ble_ctx.local_mac,
@@ -2783,6 +3072,19 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                     uint8_t sc_retry[32];
                     CeePewErr_t sc_retry_err = session_get_session_code(sc_retry);
                     if (sc_retry_err == CEEPEW_OK) {
+                        uint8_t sc_rhash[32];
+                        (void)crypto_sha256_compute(sc_retry, 32U, sc_rhash);
+                        ESP_LOGI(TAG, "GATTS retry DIAG: sc_hash=%02x%02x.. sc_byte0=%02x "
+                                 "local=%02x:%02x:%02x:%02x:%02x:%02x "
+                                 "peer=%02x:%02x:%02x:%02x:%02x:%02x",
+                                 sc_rhash[0], sc_rhash[1], sc_retry[0],
+                                 g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1],
+                                 g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
+                                 g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5],
+                                 g_ble_ctx.local_mac[0], g_ble_ctx.local_mac[1],
+                                 g_ble_ctx.local_mac[2], g_ble_ctx.local_mac[3],
+                                 g_ble_ctx.local_mac[4], g_ble_ctx.local_mac[5]);
+                        ceepew_secure_zero(sc_rhash, sizeof(sc_rhash));
                         CeePewErr_t dec2 = gatt_crypto_decrypt_with_ids(
                             sc_retry,
                             g_ble_ctx.peer_mac,
@@ -2797,6 +3099,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                             ESP_LOGW(TAG, "GATTS: swapped-MAC retry also failed (%d)", (int)dec2);
                         }
                     } else {
+                        ESP_LOGW(TAG, "GATTS retry DIAG: session_code refetch failed: %d", (int)sc_retry_err);
                         ceepew_secure_zero(sc_retry, sizeof(sc_retry));
                     }
                 }
@@ -3026,7 +3329,12 @@ static CeePewErr_t transport_ble_handle_event_internal(const PairingEvent_t *eve
             s_recovery_started_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
             (void)rgb_set_pattern(RGB_YELLOW_RED_BLINK);
 #ifdef CONFIG_BT_ENABLED
-            (void)esp_ble_gap_disconnect(g_ble_ctx.peer_mac);
+            /* Guard against double-disconnect: only call
+             * esp_ble_gap_disconnect if there is an active link or a
+             * non-zero peer MAC (implying a stale connection). */
+            if (g_ble_ctx.gattc_connected || g_ble_ctx.gatts_connected) {
+                (void)esp_ble_gap_disconnect(g_ble_ctx.peer_mac);
+            }
 #endif
             (void)transport_ble_clear_discovery_peer_state();
             (void)transport_ble_restart_discovery_session();
@@ -3049,6 +3357,7 @@ static void transport_ble_supervisor_task(void *arg)
 {
     (void)arg;
     ESP_LOGI(TAG, "pairing supervisor: started");
+    uint32_t last_metrics_log = 0U;
     while (s_supervisor_running) {
         PairingEvent_t ev = {0};
         BaseType_t got = xQueueReceive(g_pairing_event_queue, &ev,
@@ -3058,6 +3367,31 @@ static void transport_ble_supervisor_task(void *arg)
         }
         transport_ble_supervisor_check_stall();
         transport_ble_supervisor_tick_recovery();
+
+        /* Periodic GATT metrics log during active pairing phases */
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if ((now_ms - last_metrics_log) >= 5000U) {
+            PairingPhase_t phase = transport_ble_get_phase();
+            if (phase == PAIRING_PHASE_GATT_IDENTITY ||
+                phase == PAIRING_PHASE_SIGN_PK_EXCHANGE) {
+                ble_ctx_lock();
+                ESP_LOGI(TAG, "GATT Metrics: phase=%s open=%u mtu=%u write=%u disc=%u reason=0x%02X "
+                             "mtu_val=%u conn_ms=%u handoff=%d sign_pk=%d",
+                         transport_ble_phase_name(phase),
+                         (unsigned)g_ble_ctx.gattc_open_attempts,
+                         (unsigned)g_ble_ctx.mtu_negotiation_attempts,
+                         (unsigned)g_ble_ctx.sign_pk_write_attempts,
+                         (unsigned)g_ble_ctx.reconnect_attempts,
+                         (unsigned)g_ble_ctx.last_disconnect_reason,
+                         (unsigned)g_ble_ctx.gattc_mtu,
+                         (unsigned)g_ble_ctx.accumulated_conn_ms,
+                         g_ble_ctx.handoff_ready ? 1U : 0U,
+                         g_ble_ctx.sign_pk_received ? 1U : 0U);
+                g_ble_ctx.last_metrics_log_ms = now_ms;
+                ble_ctx_unlock();
+            }
+            last_metrics_log = now_ms;
+        }
     }
     ESP_LOGI(TAG, "pairing supervisor: stopped");
     s_supervisor_task_handle = NULL;

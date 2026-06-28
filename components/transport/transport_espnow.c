@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "transport_esl.h"
+#include "session_fsm.h"
 
 static const char *TAG = "transport_espnow";
 
@@ -39,8 +41,11 @@ static void transport_send_status_cb(esp_now_send_status_t status)
     #endif
     
     if (s_send_sem != NULL) {
-        BaseType_t rc = xSemaphoreGive(s_send_sem);
-        (void)rc;
+        BaseType_t was_woken = pdFALSE;
+        (void)xSemaphoreGiveFromISR(s_send_sem, &was_woken);
+        if (was_woken == pdTRUE) {
+            portYIELD_FROM_ISR(was_woken);
+        }
     }
 }
 
@@ -97,4 +102,51 @@ CeePewErr_t transport_wait_ack(const uint8_t *peer_mac, uint16_t seq, uint32_t t
         return CEEPEW_ERR_HW;
     }
     return CEEPEW_ERR_TIMEOUT;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* Rendezvous Phase (Static Channel Sync before Channel Hopping)               */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+/* Drive rendezvous handshake from session task.
+ * Initiator: sends REQ, waits for ACK.
+ * Responder: waits for REQ, sends ACK.
+ * 
+ * Returns:
+ *   CEEPEW_OK           - Rendezvous complete (both sides synced)
+ *   CEEPEW_ERR_TIMEOUT  - Initiator timed out waiting for ACK
+ *   CEEPEW_OK           - In progress (caller should retry)
+ *   Other error         - Transport error
+ * 
+ * Caller must call this repeatedly from session task main loop until
+ * CEEPEW_OK (synced) or CEEPEW_ERR_TIMEOUT is returned. */
+CeePewErr_t transport_espnow_rendezvous_drive(void)
+{
+    CeePewErr_t err = CEEPEW_OK;
+
+    /* Check if already synced */
+    if (hal_radio_rendezvous_is_synced()) {
+        return CEEPEW_OK;
+    }
+
+    /* Check for initiator timeout */
+    if (hal_radio_rendezvous_check_timeout()) {
+        return CEEPEW_ERR_TIMEOUT;
+    }
+
+    /* If we're the initiator and haven't sent REQ yet, send it */
+    if (session_get_role()) {  /* true = initiator */
+        if (!hal_radio_rendezvous_is_synced()) {
+            /* Check if we've already sent REQ by checking state */
+            /* We'll just try to send - hal_radio_rendezvous_initiator_start
+             * will fail if not in IDLE state */
+            err = hal_radio_rendezvous_initiator_start();
+            if (err != CEEPEW_OK && err != CEEPEW_ERR_PARAM) {
+                return err;
+            }
+            /* CEEPEW_ERR_PARAM means already sent, wait for ACK */
+        }
+    }
+
+    return CEEPEW_OK;  /* Still in progress */
 }

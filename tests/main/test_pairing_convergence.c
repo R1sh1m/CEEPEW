@@ -91,6 +91,10 @@ static void test_keys_converge_without_fresh_salt(void)
     check(err == CEEPEW_OK, "A: phase2_initiate");
     err = session_set_role(true);   /* A is initiator */
     check(err == CEEPEW_OK, "A: set_role(initiator)");
+    err = session_set_self_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "A: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "A: set_peer_wifi_mac");
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "A: derive_key");
     snapshot_derived(a_ascon, a_box, a_sid);
@@ -113,6 +117,10 @@ static void test_keys_converge_without_fresh_salt(void)
     check(err == CEEPEW_OK, "B: phase2_initiate");
     err = session_set_role(false);  /* B is responder */
     check(err == CEEPEW_OK, "B: set_role(responder)");
+    err = session_set_self_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "B: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "B: set_peer_wifi_mac");
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "B: derive_key");
     snapshot_derived(b_ascon, b_box, b_sid);
@@ -167,6 +175,10 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(err == CEEPEW_OK, "A2: phase2_initiate");
     err = session_set_role(true);
     check(err == CEEPEW_OK, "A2: set_role(initiator)");
+    err = session_set_self_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "A2: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "A2: set_peer_wifi_mac");
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "A2: derive_key");
 
@@ -209,20 +221,32 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(err == CEEPEW_OK, "B2: phase2_initiate");
     err = session_set_role(false);
     check(err == CEEPEW_OK, "B2: set_role(responder)");
+    err = session_set_self_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "B2: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "B2: set_peer_wifi_mac");
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "B2: derive_key");
     check(session_sync_barrier_cleared() == false,
           "B: barrier starts cleared=false after derive");
 
-    /* B receives HELLO → barrier clears, handler returns ERR_NEED_TX
-     * signalling the caller to send the ACK back. */
+    /* B receives HELLO → handler returns ERR_NEED_TX, but barrier is NOT
+     * cleared yet — it requires session_confirm_ack_sent() to complete
+     * the double-ended rendezvous (HELLO received + ACK sent). */
     err = session_handle_key_sync_byte(CEEPEW_KEY_SYNC_HELLO_BYTE);
     check(err == CEEPEW_ERR_NEED_TX,
           "B: HELLO byte returns ERR_NEED_TX (caller must send ACK)");
-    check(session_sync_barrier_cleared() == true,
-          "B: barrier cleared after HELLO");
+    check(session_sync_barrier_cleared() == false,
+          "B: barrier NOT cleared after HELLO alone (needs confirm_ack_sent)");
 
-    /* Second HELLO is a no-op (barrier already cleared). */
+    /* Confirm ACK sent → barrier clears. */
+    err = session_confirm_ack_sent();
+    check(err == CEEPEW_OK,
+          "B: confirm_ack_sent returns OK");
+    check(session_sync_barrier_cleared() == true,
+          "B: barrier cleared after confirm_ack_sent");
+
+    /* Second HELLO is a no-op (already processed). */
     err = session_handle_key_sync_byte(CEEPEW_KEY_SYNC_HELLO_BYTE);
     check(err == CEEPEW_OK,
           "B: second HELLO returns OK (idempotent)");
@@ -256,8 +280,11 @@ static void test_different_session_code_different_keys(void)
     check(err == CEEPEW_OK, "diffA: phase2_initiate");
     err = session_set_role(true);
     check(err == CEEPEW_OK, "diffA: set_role");
+    err = session_set_self_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "diffA: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "diffA: set_peer_wifi_mac");
     err = session_phase2_derive_key();
-    check(err == CEEPEW_OK, "diffA: derive_key");
     snapshot_derived(a_ascon, a_box, a_sid);
 
     /* Peer B with OTHER_CODE */
@@ -271,6 +298,10 @@ static void test_different_session_code_different_keys(void)
     check(err == CEEPEW_OK, "diffB: phase2_initiate");
     err = session_set_role(true);
     check(err == CEEPEW_OK, "diffB: set_role");
+    err = session_set_self_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "diffB: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "diffB: set_peer_wifi_mac");
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "diffB: derive_key");
     snapshot_derived(b_ascon, b_box, b_sid);

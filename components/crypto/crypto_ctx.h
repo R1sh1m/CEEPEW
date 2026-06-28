@@ -15,40 +15,45 @@ typedef struct {
     bool     session_active;
     uint8_t  ascon_key[CEEPEW_SESSION_KEY_BYTES];
     uint8_t  box_seed[32U];            /* HKDF derivation seed (retained for key expansion) */
-    uint8_t  box_privkey[32U];         /* Ephemeral X25519 private key (per-session) */
+    uint8_t  box_privkey[32U];         /* Ephemeral X25519 private key (per-session, BLE-derived) */
     uint8_t  box_pubkey[32U];          /* Ephemeral X25519 public key (exchanged via BLE) */
     uint8_t  peer_box_pubkey[32U];     /* Peer's X25519 public key (received via BLE) */
     bool     peer_box_pubkey_valid;    /* true once peer_box_pubkey has been received */
     uint8_t  session_id[8U];
     uint8_t  reserved[8U];
+
+    /* PFS (Perfect Forward Secrecy) — ephemeral Curve25519 ECDH over ESP-NOW */
+    uint8_t  pfs_privkey[32U];         /* PFS ephemeral private key */
+    uint8_t  pfs_pubkey[32U];          /* PFS ephemeral public key */
+    uint8_t  pfs_peer_pubkey[32U];     /* Peer's PFS ephemeral public key */
+    bool     pfs_peer_pubkey_valid;    /* true once peer's PFS key received */
+    uint8_t  pfs_shared_secret[32U];   /* Curve25519 shared secret */
+    uint8_t  pfs_ascon_key[16U];       /* HKDF-derived Ascon key from PFS secret */
+    bool     pfs_active;               /* true once PFS key exchange complete */
 } CryptoCtx_t;
 
 extern CryptoCtx_t g_crypto_ctx;
 extern SemaphoreHandle_t g_crypto_mutex;
 
-/* Initialize the global crypto context and PSA crypto subsystem.
- * Must be called once at boot before any crypto operations. */
+/* Init global crypto context + PSA. Call once at boot. */
 CeePewErr_t crypto_ctx_init(void);
 
-/* Securely zero the global crypto context and destroy the crypto mutex.
- * Call on session end or device wipe. */
+/* Secure zero context + destroy mutex. Call on session end/wipe. */
 CeePewErr_t crypto_ctx_destroy(void);
 
-/* Initialize the global crypto mutex (lazy, idempotent). */
+/* Lazy, idempotent mutex init. */
 CeePewErr_t crypto_mutex_init(void);
 
-/* Acquire the global crypto mutex (blocking). */
+/* Blocking mutex acquire. */
 CeePewErr_t crypto_mutex_lock(void);
 
-/* Release the global crypto mutex. */
+/* Mutex release. */
 CeePewErr_t crypto_mutex_unlock(void);
 
-/* Derive a 16-byte ESP-NOW Primary Master Key from the session's HKDF output.
- * Both devices independently compute the same PMK since they share the session key. */
+/* Derive ESP-NOW PMK from session key. Symmetric by design (both peers share key). */
 CeePewErr_t crypto_espnow_derive_pmk(uint8_t pmk_out[16]);
 
-/* Derive a 16-byte ESP-NOW Local Master Key for a specific peer.
- * Incorporates the peer's WiFi MAC so different peers get different LMKs. */
+/* Derive ESP-NOW LMK for a peer. Incorporates peer WiFi MAC for per-peer keys. */
 CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk_out[16]);
 
 #endif /* CRYPTO_CTX_H */

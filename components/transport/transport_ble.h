@@ -44,6 +44,7 @@
 #include "freertos/queue.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#include "transport_ble_gatt_crypto.h"
 #ifdef CONFIG_BT_ENABLED
 #include "esp_bt_defs.h"
 #else
@@ -148,15 +149,26 @@ typedef struct {
     bool           gattc_sign_pk_mtu_negotiated;/* ESP_GATTC_CFG_MTU_EVT received */
     bool           gattc_sign_pk_write_pending; /* Search-cmpl wrote, awaiting ESP_GATTC_WRITE_CHAR_EVT */
     bool           pending_sign_pk_write;        /* Deferred write awaiting MTU negotiation */
-    uint8_t        pending_sign_pk_encrypted[80];/* Buffered 80B payload for deferred write */
+    uint8_t        pending_sign_pk_encrypted[GATT_CRYPTO_TOTAL_BYTES];/* Buffered payload for deferred write */
     bool           reverse_gattc_pending;       /* Responder: reverse GATTC for sign_pk exchange pending */
     bool           initiator_sign_pk_sent;      /* true after our sign_pk has been written to peer */
     /* GATTS MTU tracking (for responder sign_pk receive) */
     uint16_t       gatts_mtu;                   /* Negotiated GATTS MTU (default 23) */
     bool           gatts_sign_pk_mtu_negotiated;/* ESP_GATTS_MTU_EVT received */
+    /* ── Diagnostics (Phase 8) ── */
+    uint8_t        gattc_open_attempts;         /* GATTC connection open attempts */
+    uint8_t        mtu_negotiation_attempts;    /* MTU renegotiation attempts */
+    uint8_t        sign_pk_write_attempts;      /* sign_pk write attempts (buffered) */
+    uint8_t        last_disconnect_reason;      /* Last GATT disconnect HCI reason code */
+    uint32_t       last_metrics_log_ms;         /* Last periodic metrics log timestamp */
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
+
+/* Lock/unlock g_ble_ctx for multi-field atomic reads from external
+ * tasks (e.g., task_session.c). Exports the internal ble_ctx semaphore. */
+bool transport_ble_ctx_lock(void);
+void transport_ble_ctx_unlock(void);
 
 /* Initialize BLE subsystem (call once after WiFi/hardware init) */
 CeePewErr_t transport_ble_init(void);
@@ -248,6 +260,11 @@ CeePewErr_t transport_ble_send_handoff_ready_beacon(void);
 /* Deinit BLE subsystem (call on session end) */
 CeePewErr_t transport_ble_deinit(void);
 
+/* Strict BLE teardown for Phase 2->3 transition: disconnects GATT links, disables Bluedroid,
+ * deinitializes BT controller, releases controller memory, and enforces a mandatory
+ * 150ms blocking delay for radio PHY settle before ESP-NOW initialization. */
+CeePewErr_t transport_ble_teardown(void);
+
 /* Check if BLE subsystem is initialised */
 bool transport_ble_is_initialised(void);
 
@@ -278,7 +295,8 @@ typedef enum {
     PAIRING_EVENT_SIGN_PK_RECEIVED,     /* Peer's sign_pk delivered over 0xFFF3 */
     PAIRING_EVENT_PHASE_TIMEOUT,        /* Supervisor detected a stall */
     PAIRING_EVENT_RADIO_RESTART,        /* Supervisor forcing radio restart */
-    PAIRING_EVENT_HANDOFF_READY         /* Peer's HANDOFF_READY beacon received */
+    PAIRING_EVENT_HANDOFF_READY,        /* Peer's HANDOFF_READY beacon received */
+    PAIRING_EVENT_GATT_METRICS          /* Periodic GATT metrics dump (diagnostics) */
 } PairingEventType_t;
 
 typedef struct {

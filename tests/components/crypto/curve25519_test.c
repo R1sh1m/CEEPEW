@@ -16,6 +16,10 @@
 #include <stdint.h>
 #include "curve25519.h"
 #include "ceepew_assert.h"
+#include "crypto_box_wrap.h"
+#include "crypto_ctx.h"
+#include "crypto_ecdh.h"
+#include "session_fsm.h"
 
 #ifdef CEEPEW_ENABLE_SELFTEST
 
@@ -26,7 +30,7 @@ static int hex2bin(const char *hex, uint8_t *out, size_t outlen) {
         char a = hex[2*i];
         char b = hex[2*i+1];
         uint8_t va = (a >= '0' && a <= '9') ? (a - '0') : (a >= 'a' && a <= 'f') ? (10 + a - 'a') : (a >= 'A' && a <= 'F') ? (10 + a - 'A') : 255;
-        uint8_t vb = (b >= '0' && b <= '9') ? (b - '0') : (b >= 'a' && a <= 'f') ? (10 + b - 'a') : (b >= 'A' && b <= 'F') ? (10 + b - 'A') : 255;
+        uint8_t vb = (b >= '0' && b <= '9') ? (b - '0') : (b >= 'a' && b <= 'f') ? (10 + b - 'a') : (b >= 'A' && b <= 'F') ? (10 + b - 'A') : 255;
         if (va == 255 || vb == 255) return -2;
         out[i] = (uint8_t)((va << 4) | vb);
     }
@@ -61,6 +65,80 @@ static void run_vector(const char *label, const char *k_hex, const char *u_hex, 
     }
 }
 
+static void test_crypto_box_loopback(void) {
+    printf("CEEPEW: Running crypto_box loopback test\n");
+
+    CryptoCtx_t ctxA;
+    CryptoCtx_t ctxB;
+
+    memset(&ctxA, 0, sizeof(ctxA));
+    memset(&ctxB, 0, sizeof(ctxB));
+
+    ctxA.session_active = true;
+    ctxB.session_active = true;
+
+    /* Generate keypair for A */
+    CeePewErr_t err = crypto_ecdh_generate_keypair(ctxA.box_pubkey, ctxA.box_privkey);
+    if (err != CEEPEW_OK) { printf("A keygen failed: %d\n", err); return; }
+
+    /* Generate keypair for B */
+    err = crypto_ecdh_generate_keypair(ctxB.box_pubkey, ctxB.box_privkey);
+    if (err != CEEPEW_OK) { printf("B keygen failed: %d\n", err); return; }
+
+    /* Exchange public keys */
+    memcpy(ctxA.peer_box_pubkey, ctxB.box_pubkey, 32U);
+    ctxA.peer_box_pubkey_valid = true;
+
+    memcpy(ctxB.peer_box_pubkey, ctxA.box_pubkey, 32U);
+    ctxB.peer_box_pubkey_valid = true;
+
+    /* Set matching session IDs */
+    uint8_t dummy_sid[8] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+    memcpy(ctxA.session_id, dummy_sid, 8U);
+    memcpy(ctxB.session_id, dummy_sid, 8U);
+
+    /* Encrypt a test message from A to B */
+    const uint8_t plaintext[] = "Hello World! This is a test message.";
+    uint16_t pt_len = (uint16_t)strlen((char *)plaintext);
+
+    uint8_t ciphertext[128];
+    uint16_t ct_len = sizeof(ciphertext);
+
+    /* Set nonce counter override for A encrypt */
+    uint64_t nonce_ctr = 42ULL;
+    session_test_set_nonce_counter(nonce_ctr);
+
+    err = crypto_box_encrypt(&ctxA, ctxA.peer_box_pubkey, plaintext, pt_len, ciphertext, &ct_len);
+    if (err != CEEPEW_OK) {
+        printf("crypto_box_encrypt failed: %d\n", err);
+        return;
+    }
+
+    /* Build the nonce that B expects */
+    uint8_t nonce[CRYPTO_BOX_NONCEBYTES];
+    memcpy(nonce, ctxB.session_id, 8U);
+    for (uint8_t i = 0U; i < 8U; i++) {
+        nonce[8U + i] = (uint8_t)((nonce_ctr >> (8U * i)) & 0xFFU);
+    }
+    memset(nonce + 16U, 0, 8U);
+
+    /* Decrypt at B */
+    uint8_t decrypted[128];
+    uint16_t dec_len = sizeof(decrypted);
+    err = crypto_box_decrypt(&ctxB, nonce, ctxB.peer_box_pubkey, ciphertext, ct_len, decrypted, &dec_len);
+    if (err != CEEPEW_OK) {
+        printf("crypto_box_decrypt failed: %d\n", err);
+        return;
+    }
+
+    decrypted[dec_len] = '\0';
+    if (dec_len == pt_len && memcmp(decrypted, plaintext, pt_len) == 0) {
+        printf("crypto_box loopback: PASS (%s)\n", decrypted);
+    } else {
+        printf("crypto_box loopback: FAIL (len=%u got='%s')\n", dec_len, decrypted);
+    }
+}
+
 void curve25519_selftest_run(void) {
     printf("CEEPEW: Running X25519 RFC7748 self-tests\n");
 
@@ -69,6 +147,8 @@ void curve25519_selftest_run(void) {
 
     /* RFC7748 test vector 2 */
     run_vector("X25519-TV-2", "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d", "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493", "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957");
+
+    test_crypto_box_loopback();
 
     printf("CEEPEW: X25519 self-tests complete\n");
 }
