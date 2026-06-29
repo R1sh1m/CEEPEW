@@ -17,9 +17,6 @@ CeePewErr_t hal_timer_delay_ms(uint32_t ms) {
     TickType_t ticks = pdMS_TO_TICKS(ms);
     if (ticks == 0U) { ticks = 1U; }
 
-    /* Use the RTOS delay path for cooperative sleeping; esp_timer keeps this module aligned with the ESP-IDF timing stack and makes the bound explicit for callers. */
-    int64_t now_us = esp_timer_get_time();
-    (void)now_us;
     vTaskDelay(ticks);
     return CEEPEW_OK;
 }

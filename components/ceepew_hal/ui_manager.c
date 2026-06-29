@@ -63,10 +63,11 @@ static CeePewErr_t render_info(void);
 static CeePewErr_t render_pairing_failed(void);
 static CeePewErr_t render_chat_send_confirm(void);
 static CeePewErr_t ui_restart_discovery_from_pairing(void);
+static CeePewErr_t render_chat_detail(void);
 
 static void ui_draw_centered_text(uint8_t y, const char *text);
 
-#define CEEPEW_PAIRING_FAILED_HOLD_MS   4000U    /* Bug 5 Fix: reduced from 15000 to allow reconnection */
+#define CEEPEW_PAIRING_FAILED_HOLD_MS   4000U
 #define CEEPEW_PAIRING_PEER_LOSS_MS     15000U
 #define CEEPEW_SCAN_RETRY_DEBOUNCE_MS   2000U
 
@@ -2134,7 +2135,7 @@ static CeePewErr_t render_keyder_anim(void)
  * No dynamic allocation; static buffers for text display.
  * Two CEEPEW_ASSERTs for bounds checking.
  */
-CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir)
+CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir, bool selected)
 {
     CEEPEW_ASSERT(msg_idx < CEEPEW_MAX_MESSAGES, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(dir <= 1U, CEEPEW_ERR_BOUNDS);
@@ -2149,26 +2150,30 @@ CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir)
     uint8_t bubble_w = 96U;
     uint8_t text_x = (bubble_dir == 0U) ? 8U : 32U;
 
-    /* Draw bubble outline */
+    /* Draw bubble outline and content */
     HalUIRect_t bubble = {.x = bubble_x, .y = y_pos, .w = bubble_w, .h = 11U};
-    hal_ui_rect(&bubble, HAL_UI_WHITE);
 
-    /* Show compact metadata rather than ciphertext bytes. */
-    char preview[24U];
-    const char *side = (bubble_dir == 0U) ? "RX" : "TX";
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    uint32_t age_s = (now_s > msg->meta.created_at) ? (now_s - msg->meta.created_at) : 0U;
-    (void)snprintf(preview, sizeof(preview), "%s %uB %lus",
-                   side, (unsigned)msg->meta.payload_len, (unsigned long)age_s);
-    hal_ui_text(text_x, (uint8_t)(y_pos + 2U), preview, HAL_UI_WHITE);
+    char disp_text[20U];
+    (void)hal_ui_fit_text(msg->plaintext, 92U, disp_text, sizeof(disp_text));
+
+    if (selected) {
+        hal_ui_rect_fill(&bubble, HAL_UI_WHITE);
+        hal_ui_rect(&bubble, HAL_UI_WHITE);
+        hal_ui_text(text_x, (uint8_t)(y_pos + 2U), disp_text, HAL_UI_BLACK);
+    } else {
+        hal_ui_rect(&bubble, HAL_UI_WHITE);
+        hal_ui_text(text_x, (uint8_t)(y_pos + 2U), disp_text, HAL_UI_WHITE);
+    }
 
     /* Add status indicator (TTL countdown or delivery) */
+    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint32_t age_s = (now_s > msg->meta.created_at) ? (now_s - msg->meta.created_at) : 0U;
     uint32_t ttl_remaining = (age_s < CEEPEW_MSG_TTL_S) ? (CEEPEW_MSG_TTL_S - age_s) : 0U;
 
-    /* Draw TTL indicator as small circle at top-right of bubble */
+    /* Draw TTL indicator: black if selected, white if not */
     if (ttl_remaining > 0U) {
         uint8_t status_x = (bubble_dir == 0U) ? 96U : 120U;
-        hal_ui_circle(status_x, y_pos, 1U, HAL_UI_WHITE);
+        hal_ui_circle(status_x, y_pos, 1U, selected ? HAL_UI_BLACK : HAL_UI_WHITE);
     }
 
     return CEEPEW_OK;
@@ -2192,32 +2197,43 @@ static CeePewErr_t render_chat_thread(void)
         return CEEPEW_OK;
     }
 
-    /* Potentiometer-driven scrolling: map pot to top message index.
-     * Visible window is 3 bubbles. Max offset = count - visible (clamped). */
+    /* Potentiometer-driven selection */
+    uint8_t selected_idx = ui_map_pot_to_index(g_ui_ctx.user_input, count);
+    g_ui_ctx.chat_selected_idx = selected_idx;
+
+    /* Auto-scrolling list window logic to keep selected message visible */
     uint8_t visible = 3U;
+    static uint8_t s_scroll_top = 0U;
+
+    if (selected_idx < s_scroll_top) {
+        s_scroll_top = selected_idx;
+    } else if (selected_idx >= s_scroll_top + visible) {
+        s_scroll_top = (uint8_t)(selected_idx - visible + 1U);
+    }
+
     uint8_t max_offset = (count > visible) ? (uint8_t)(count - visible) : 0U;
-    uint8_t scroll_top = (uint8_t)(((uint16_t)g_ui_ctx.user_input * (uint16_t)(max_offset + 1U)) / 256U);
-    if (scroll_top > max_offset) { scroll_top = max_offset; }
+    if (s_scroll_top > max_offset) { s_scroll_top = max_offset; }
+    if (count <= visible) { s_scroll_top = 0U; }
 
     uint8_t shown = (count < visible) ? count : visible;
 
     for (uint8_t i = 0U; i < shown; i++) {
-        uint8_t idx = (uint8_t)(scroll_top + i);
+        uint8_t idx = (uint8_t)(s_scroll_top + i);
         if (idx >= count) { break; }
         const StoredMsg_t *msg = msg_store_get(idx);
         if (msg == NULL) {
             continue;
         }
         uint8_t y = (uint8_t)(14U + i * 14U);
-        (void)ui_chat_show_bubble(idx, y, msg->meta.dir);
+        (void)ui_chat_show_bubble(idx, y, msg->meta.dir, (idx == selected_idx));
     }
 
     /* Scrollbar on right edge: thin column showing position */
     if (count > visible) {
-        uint8_t bar_h = 48U;  /* Y=14 to Y=62 */
-        uint8_t thumb_h = (bar_h * visible) / count;
+        uint8_t bar_h = 40U;  /* Y=14 to Y=54 */
+        uint8_t thumb_h = (uint8_t)((bar_h * visible) / count);
         if (thumb_h < 4U) { thumb_h = 4U; }
-        uint8_t thumb_y = (uint8_t)(14U + ((uint16_t)scroll_top * (uint16_t)(bar_h - thumb_h)) / (uint16_t)max_offset);
+        uint8_t thumb_y = (uint8_t)(14U + ((uint16_t)s_scroll_top * (uint16_t)(bar_h - thumb_h)) / (uint16_t)max_offset);
         /* Draw track */
         HalUIRect_t track = { .x = 126U, .y = 14U, .w = 1U, .h = bar_h };
         hal_ui_rect(&track, HAL_UI_WHITE);
@@ -2227,6 +2243,59 @@ static CeePewErr_t render_chat_thread(void)
     }
 
     ui_draw_centered_text(54U, "BTN=menu");
+
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t render_chat_detail(void)
+{
+    hal_ui_clear();
+
+    uint8_t count = msg_store_count();
+    if (count == 0U || g_ui_ctx.chat_selected_idx >= count) {
+        (void)ui_manager_transition_to(UI_STATE_CHAT);
+        g_ui_ctx.transition_ready = true;
+        return CEEPEW_OK;
+    }
+
+    const StoredMsg_t *msg = msg_store_get(g_ui_ctx.chat_selected_idx);
+    if (msg == NULL) {
+        (void)ui_manager_transition_to(UI_STATE_CHAT);
+        g_ui_ctx.transition_ready = true;
+        return CEEPEW_OK;
+    }
+
+    ui_draw_centered_text(1U, "MESSAGE DETAIL");
+    draw_hline(0U, 11U, 128U);
+
+    char type_str[32U];
+    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint32_t age_s = (now_s > msg->meta.created_at) ? (now_s - msg->meta.created_at) : 0U;
+    (void)snprintf(type_str, sizeof(type_str), "%s (%lus ago)",
+                   (msg->meta.dir == 0U) ? "Received" : "Sent", (unsigned long)age_s);
+    hal_ui_text(4U, 14U, type_str, HAL_UI_WHITE);
+    draw_hline(4U, 23U, 120U);
+
+    /* Word-wrap plaintext to fit 128px screen (21 chars per line) */
+    uint8_t line_y = 26U;
+    const char *ptr = msg->plaintext;
+    char line_buf[22U];
+    for (uint8_t line = 0U; line < 4U; line++) {
+        if (*ptr == '\0') { break; }
+        uint8_t len = 0U;
+        /* Copy up to 21 characters */
+        while (len < 21U && ptr[len] != '\0') {
+            line_buf[len] = ptr[len];
+            len++;
+        }
+        line_buf[len] = '\0';
+        hal_ui_text(4U, line_y, line_buf, HAL_UI_WHITE);
+        ptr += len;
+        line_y = (uint8_t)(line_y + 9U);
+    }
+
+    /* Footer */
+    draw_hline(0U, 62U, 128U);
 
     return CEEPEW_OK;
 }
@@ -2580,9 +2649,8 @@ CeePewErr_t ui_manager_update(void)
             /* Trigger red LED pulse for pairing failure */
             (void)rgb_set_pattern(RGB_RED_BLINK);
 
-            /* Bug 5 Fix: Force immediate restart of advertising/scan so device is
-             * re-discoverable for reparing attempts. This ensures the peer doesn't
-             * expire during the hold period and can rediscover us quickly. */
+            /* Force immediate restart of advertising/scan so the peer can
+             * rediscover us during the hold period. */
             (void)transport_ble_restart_discovery_session();
         } else if (g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
             /* BLE is initialized once by app_main; discovery entry only
@@ -2630,6 +2698,7 @@ CeePewErr_t ui_manager_update(void)
                 ESP_LOGI("ui", "Cryptogram state: signaled ready_for_chat to peer");
             }
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
+            g_ui_ctx.chat_selected_idx = 0U;
             g_ui_ctx.button_prev = false;
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT_MENU) {
             /* Initialize chat menu */
@@ -2659,7 +2728,7 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
-#ifdef CONFIG_CEEPEW_HEADLESS_MODE
+#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
     /* ── Headless auto-advance ──────────────────────────────────────────
      * Auto-advances UI through pairing flow without OLED or buttons.
      * Hardcoded session code "ZZZZ" is used for commitment verification.
@@ -2691,18 +2760,25 @@ CeePewErr_t ui_manager_update(void)
             uint32_t elapsed = (now_ms >= g_ui_ctx.code_entry_start_ms)
                              ? (now_ms - g_ui_ctx.code_entry_start_ms) : 0U;
             ESP_LOGW("headless", "CODE_ENTRY elapsed=%lu", elapsed);
-            /* Set ZZZZ once after 2s minimum */
-            if (elapsed >= 2000U && g_ui_ctx.code_digits[0] != (uint8_t)'Z') {
+            /* HEADLESS ZZZZ — use a static flag (NOT code_digits[0]) so the
+             * normal code-entry input handler (pot → digit-0 overwrite) cannot
+             * trick the guard into skipping digits[1..3].  Reset the flag on
+             * re-entry (elapsed near 0 after CODE_ENTRY entry init). */
+            static bool s_zzzz_set = false;
+            if (elapsed < 1900U) { s_zzzz_set = false; }
+            if (!s_zzzz_set && elapsed >= 2000U) {
                 session_ui_ctx_lock();
                 g_ui_ctx.code_digits[0] = (uint8_t)'Z';
                 g_ui_ctx.code_digits[1] = (uint8_t)'Z';
                 g_ui_ctx.code_digits[2] = (uint8_t)'Z';
                 g_ui_ctx.code_digits[3] = (uint8_t)'Z';
+                g_ui_ctx.code_selected = 4U;   /* prevent input handler overwrite */
                 session_ui_ctx_unlock();
+                s_zzzz_set = true;
                 ESP_LOGW("headless", "CODE_ENTRY ZZZZ set at %lu", now_ms);
             }
             /* Poll peer after ZZZZ is set; transition as soon as peer appears */
-            if (g_ui_ctx.code_digits[0] == (uint8_t)'Z') {
+            if (s_zzzz_set) {
                 if (transport_ble_has_peer_cached()) {
                     memcpy(g_ui_ctx.peer_mac, g_ble_ctx.peer_mac, 6U);
                     (void)ui_manager_transition_to(UI_STATE_CONFIRM);
@@ -2874,30 +2950,18 @@ CeePewErr_t ui_manager_update(void)
             /* If peer not yet discovered, ignore button press (no-op) */
         }
     } else if (g_ui_ctx.current_state == UI_STATE_PAIRING) {
-        /* Pairing countdown: 3 s hold on the button = DEBUG hook that
-         * forces the supervisor to run its recovery path. The RGB LED
-         * should immediately switch to RGB_YELLOW_RED_BLINK and the
-         * device should re-advertise / re-scan. Useful for verifying
-         * Task 2 (radio-failure recovery) without a broken device. */
-        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-            g_ui_ctx.button_press_start_ms = now_ms;
-        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
-            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
-                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 3000U) {
-                ESP_LOGD("ui", "Pairing screen: 3 s hold detected — triggering debug timeout");
-                (void)transport_ble_debug_trigger_timeout();
-                /* Force the visual feedback bridge to re-evaluate immediately
-                 * so the LED reflects the recovery state on the very next
-                 * tick rather than waiting for a phase transition. */
-                task_ui_update_visual_feedback();
-            }
-            /* No short-press action — pairing is non-interactive once
-             * the user has confirmed the code. Short press is ignored
-             * to avoid accidental state churn. */
-        }
+        /* No short-press action — pairing is non-interactive once
+         * the user has confirmed the code. Short press is ignored
+         * to avoid accidental state churn. */
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
-        /* Chat thread: long press returns to menu */
+        /* Chat thread: potentiometer selects message, short press opens detail view, long press returns to menu */
+        uint8_t count = msg_store_count();
+        if (count > 0U) {
+            g_ui_ctx.chat_selected_idx = ui_map_pot_to_index(g_ui_ctx.user_input, count);
+        } else {
+            g_ui_ctx.chat_selected_idx = 0U;
+        }
+
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
@@ -2905,6 +2969,26 @@ CeePewErr_t ui_manager_update(void)
                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
             if (dur >= CEEPEW_CHAT_LONG_PRESS_MS) {
                 (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
+            } else if (count > 0U) {
+                /* Short press on message -> enter detail view */
+                (void)ui_manager_transition_to(UI_STATE_CHAT_DETAIL);
+                g_ui_ctx.transition_ready = true;
+            }
+        }
+    } else if (g_ui_ctx.current_state == UI_STATE_CHAT_DETAIL) {
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                           ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= CEEPEW_CHAT_LONG_PRESS_MS) {
+                /* Long press → chat menu */
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
+            } else {
+                /* Short press → go back to chat thread */
+                (void)ui_manager_transition_to(UI_STATE_CHAT);
                 g_ui_ctx.transition_ready = true;
             }
         }
@@ -3420,6 +3504,7 @@ CeePewErr_t ui_manager_draw(void)
         case UI_STATE_PAIRING_FAILED:     err = render_pairing_failed();      break;
         case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
         case UI_STATE_CHAT:               err = render_chat_thread();         break;
+        case UI_STATE_CHAT_DETAIL:        err = render_chat_detail();         break;
         case UI_STATE_CHAT_MENU:          err = render_chat_menu();           break;
         case UI_STATE_CHAT_COMPOSE:       err = render_chat_compose();        break;
         case UI_STATE_CHAT_SEND_CONFIRM:  err = render_chat_send_confirm();   break;
@@ -3450,7 +3535,7 @@ CeePewErr_t ui_manager_draw(void)
 
 CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
-    CEEPEW_ASSERT(next_state <= UI_STATE_CHAT_SEND_CONFIRM, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(next_state <= UI_STATE_CHAT_DETAIL, CEEPEW_ERR_PARAM);
     if (next_state == UI_STATE_PAIRING_FAILED) {
         ESP_LOGW("ui_transition", "→ PAIRING_FAILED (was %u)", g_ui_ctx.current_state);
     }

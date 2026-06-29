@@ -11,9 +11,7 @@
 #include "esp_log.h"
 #include <string.h>
 
-static const char *BOX_TAG = "BOX-DIAG";
-
-/* Buffers are now stack-local in encrypt/decrypt (M6: thread-safety fix).
+/* Buffers are stack-local in encrypt/decrypt.
  * Each is CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES = 192 bytes.
  * Stack budget: session task has 8 KB, these fit comfortably. */
 
@@ -138,19 +136,7 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
         return err;
     }
 
-    ESP_LOGI(BOX_TAG, "ENC: nce_ctr=%llu", (unsigned long long)nonce_counter);
-    ESP_LOGI(BOX_TAG, "ENC: sid[0:4]=%02x%02x%02x%02x",
-             ctx->session_id[0], ctx->session_id[1], ctx->session_id[2], ctx->session_id[3]);
-    ESP_LOGI(BOX_TAG, "ENC: priv[0:4]=%02x%02x%02x%02x",
-             ctx->box_privkey[0], ctx->box_privkey[1], ctx->box_privkey[2], ctx->box_privkey[3]);
-    ESP_LOGI(BOX_TAG, "ENC: peer[0:4]=%02x%02x%02x%02x",
-             peer_public_key[0], peer_public_key[1], peer_public_key[2], peer_public_key[3]);
-    ESP_LOGI(BOX_TAG, "ENC: shared_secret hex:");
-    ESP_LOG_BUFFER_HEX(BOX_TAG, shared_secret, 32U);
-    ESP_LOGI(BOX_TAG, "ENC: stream_key hex:");
-    ESP_LOG_BUFFER_HEX(BOX_TAG, stream_key, 32U);
-    ESP_LOGI(BOX_TAG, "ENC: nonce hex:");
-    ESP_LOG_BUFFER_HEX(BOX_TAG, nonce, 24U);
+
 
     StreamCipher_t stream;
     err = crypto_stream_init(&stream, stream_key, nonce);
@@ -189,13 +175,7 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
         return err;
     }
 
-    ESP_LOGI(BOX_TAG, "ENC: mac[0:4]=%02x%02x%02x%02x",
-             mac[0], mac[1], mac[2], mac[3]);
-    ESP_LOGI(BOX_TAG, "ENC: msg_len=%u mac_key[0:4]=%02x%02x%02x%02x ct_prefix[0:4]=%02x%02x%02x%02x",
-             (unsigned)msg_len,
-             mac_key[0],mac_key[1],mac_key[2],mac_key[3],
-             nacl_ct_buf[CRYPTO_BOX_ZEROBYTES],nacl_ct_buf[CRYPTO_BOX_ZEROBYTES+1],
-             nacl_ct_buf[CRYPTO_BOX_ZEROBYTES+2],nacl_ct_buf[CRYPTO_BOX_ZEROBYTES+3]);
+
 
     memcpy(nacl_ct_buf + CRYPTO_BOX_BOXZEROBYTES, mac, CRYPTO_BOX_BOXZEROBYTES);
     memset(nacl_ct_buf, 0, CRYPTO_BOX_BOXZEROBYTES);
@@ -248,21 +228,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-    ESP_LOGI(BOX_TAG, "DEC: nce[0:4]=%02x%02x%02x%02x nce[8:12]=%02x%02x%02x%02x",
-             nonce[0], nonce[1], nonce[2], nonce[3],
-             nonce[8], nonce[9], nonce[10], nonce[11]);
-    ESP_LOGI(BOX_TAG, "DEC: sid[0:4]=%02x%02x%02x%02x",
-             ctx->session_id[0], ctx->session_id[1], ctx->session_id[2], ctx->session_id[3]);
-    ESP_LOGI(BOX_TAG, "DEC: priv[0:4]=%02x%02x%02x%02x",
-             ctx->box_privkey[0], ctx->box_privkey[1], ctx->box_privkey[2], ctx->box_privkey[3]);
-    ESP_LOGI(BOX_TAG, "DEC: peer[0:4]=%02x%02x%02x%02x",
-             peer_public_key[0], peer_public_key[1], peer_public_key[2], peer_public_key[3]);
-    ESP_LOGI(BOX_TAG, "DEC: shared_secret hex:");
-    ESP_LOG_BUFFER_HEX(BOX_TAG, shared_secret, 32U);
-    ESP_LOGI(BOX_TAG, "DEC: stream_key hex:");
-    ESP_LOG_BUFFER_HEX(BOX_TAG, stream_key, 32U);
-    ESP_LOGI(BOX_TAG, "DEC: nonce hex:");
-    ESP_LOG_BUFFER_HEX(BOX_TAG, nonce, 24U);
+
 
     StreamCipher_t stream;
     err = crypto_stream_init(&stream, stream_key, nonce);
@@ -272,8 +238,8 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-    static uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
-    static uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
     memset(nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
     uint16_t work_len = CRYPTO_BOX_ZEROBYTES;
     uint16_t out_work_len = work_len;
@@ -298,15 +264,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-    ESP_LOGI(BOX_TAG, "DEC: rx_mac[0:4]=%02x%02x%02x%02x",
-             in[0], in[1], in[2], in[3]);
-    ESP_LOGI(BOX_TAG, "DEC: calc_mac[0:4]=%02x%02x%02x%02x",
-             calc_mac[0], calc_mac[1], calc_mac[2], calc_mac[3]);
-    ESP_LOGI(BOX_TAG, "DEC: msg_len=%u in_len=%u mac_key[0:4]=%02x%02x%02x%02x ct_prefix[0:4]=%02x%02x%02x%02x",
-             (unsigned)msg_len, (unsigned)in_len,
-             mac_key[0],mac_key[1],mac_key[2],mac_key[3],
-             in[CRYPTO_BOX_BOXZEROBYTES],in[CRYPTO_BOX_BOXZEROBYTES+1],
-             in[CRYPTO_BOX_BOXZEROBYTES+2],in[CRYPTO_BOX_BOXZEROBYTES+3]);
+
 
     if (!ceepew_ct_equal(in, calc_mac, CRYPTO_BOX_BOXZEROBYTES)) {
         crypto_stream_finalise(&stream);

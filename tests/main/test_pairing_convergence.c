@@ -331,8 +331,9 @@ static void test_gatt_crypto_roundtrip(void)
         CODE_32, MAC_A, MAC_B, plaintext, encrypted);
     check(enc_err == CEEPEW_OK, "encrypt returned OK");
 
-    /* Ciphertext should not equal plaintext (otherwise Ascon is broken). */
-    check(memcmp(encrypted, plaintext, GATT_CIPHERTEXT_BYTES) != 0,
+    /* Ciphertext should not equal plaintext (otherwise Ascon is broken).
+     * Skip the counter byte at encrypted[0]. */
+    check(memcmp(encrypted + GATT_COUNTER_BYTES, plaintext, GATT_CIPHERTEXT_BYTES) != 0,
           "encrypted ct != plaintext");
 
     uint8_t recovered[GATT_PLAINTEXT_BYTES];
@@ -369,8 +370,8 @@ static void test_gatt_crypto_tamper(void)
         CODE_32, MAC_A, MAC_B, plaintext, encrypted);
     check(enc_err == CEEPEW_OK, "encrypt returned OK");
 
-    /* Flip a single bit in the ciphertext body. */
-    encrypted[5U] ^= 0x01U;
+    /* Flip a single bit in the ciphertext body (skip the counter byte at offset 0). */
+    encrypted[GATT_COUNTER_BYTES + 5U] ^= 0x01U;
 
     uint8_t recovered[GATT_PLAINTEXT_BYTES];
     CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(

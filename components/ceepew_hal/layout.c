@@ -138,6 +138,7 @@ static const LayoutState_t s_states[] = {
     { UI_STATE_CHAT_MENU,          "CHAT_MENU",          s_chat_zones,           (uint8_t)(sizeof(s_chat_zones) / sizeof(s_chat_zones[0])) },
     { UI_STATE_CHAT_COMPOSE,       "CHAT_COMPOSE",       s_chat_compose_zones,   (uint8_t)(sizeof(s_chat_compose_zones) / sizeof(s_chat_compose_zones[0])) },
     { UI_STATE_CHAT_SEND_CONFIRM,  "CHAT_SEND_CONFIRM",  s_chat_send_confirm_zones, (uint8_t)(sizeof(s_chat_send_confirm_zones) / sizeof(s_chat_send_confirm_zones[0])) },
+    { UI_STATE_CHAT_DETAIL,        "CHAT_DETAIL",        s_chat_zones,           (uint8_t)(sizeof(s_chat_zones) / sizeof(s_chat_zones[0])) },
     { UI_STATE_CRYPTOGRAM,         "CRYPTOGRAM",         s_cryptogram_zones,     (uint8_t)(sizeof(s_cryptogram_zones) / sizeof(s_cryptogram_zones[0])) },
     { UI_STATE_NONCE_EXHAUSTED,    "NONCE_EXHAUSTED",    s_nonce_zones,          (uint8_t)(sizeof(s_nonce_zones) / sizeof(s_nonce_zones[0])) },
     { UI_STATE_INFO,               "INFO",               s_info_zones,           (uint8_t)(sizeof(s_info_zones) / sizeof(s_info_zones[0])) },

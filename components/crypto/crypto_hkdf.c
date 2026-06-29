@@ -139,7 +139,7 @@ CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_
     uint8_t generated = 0U;
     uint8_t previous_len = 0U;
     uint8_t nblocks = (uint8_t)((out_len + 31U) / 32U);
-    uint8_t input_buf[160U];
+    uint8_t input_buf[320U];
 
     for (uint8_t block = 0U; block < nblocks; block++) {
         size_t pos = 0U;
@@ -192,7 +192,7 @@ CeePewErr_t crypto_hkdf_expand(const uint8_t *prk, const uint8_t *info, uint8_t 
     uint8_t generated = 0U;
     uint8_t previous_len = 0U;
     uint8_t nblocks = (uint8_t)((out_len + 31U) / 32U);
-    uint8_t input_buf[160U];
+    uint8_t input_buf[320U];
 
     for (uint8_t block = 0U; block < nblocks; block++) {
         size_t pos = 0U;

@@ -260,13 +260,6 @@ static CeePewErr_t task_session_build_session_code(uint8_t session_code[32U]) {
     session_code[i] = ch;
   }
 
-  CEEPEW_LOG(TAG, "build_session_code: digits=[%u,%u,%u,%u] ascii=[%c,%c,%c,%c]",
-           digits[0], digits[1], digits[2], digits[3],
-           (digits[0] >= 32U && digits[0] < 127U) ? (char)digits[0] : '?',
-           (digits[1] >= 32U && digits[1] < 127U) ? (char)digits[1] : '?',
-           (digits[2] >= 32U && digits[2] < 127U) ? (char)digits[2] : '?',
-           (digits[3] >= 32U && digits[3] < 127U) ? (char)digits[3] : '?');
-
   return CEEPEW_OK;
 }
 
@@ -646,7 +639,7 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     }
   }
 
-  /* M3: Responder reverse GATTC — placed OUTSIDE the !sign_pk_received
+  /* Responder reverse GATTC — placed OUTSIDE the !sign_pk_received
    * gate so it can fire even after the responder already received the
    * initiator's sign_pk.  Without this, the responder skips STEP 5
    * (because sign_pk_received=true) and the reverse GATTC never opens,
@@ -1487,10 +1480,8 @@ CeePewErr_t task_session_sync_visual_state(void) {
  * Process a received frame from the radio.
  *
  * In the initial implementation, this simply posts a UI event.
- * Later sprints will add:
- * - transport_esl_process_incoming() for CRC/FEC/decryption
- * - session_mac_lock_check() for peer verification
- * - Crypto verification (Ascon-128, Ed25519)
+ * Full processing includes transport_esl_process_incoming(),
+ * session_mac_lock_check(), and crypto verification.
  *
  * All failures result in silent discard (no NACK, no log).
  *
@@ -1791,7 +1782,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     goto rx_cleanup;
   }
 
-  err = msg_store_add(local_box_ct, box_ct_len, decoded_len, 0U);
+  err = msg_store_add(local_work_frame, decoded_len, 0U);
   if (err != CEEPEW_OK) {
     ESP_LOGW("SESSION", "RX discard: msg_store_add failed (err=%d decoded=%u)",
              (int)err, (unsigned)decoded_len);
@@ -1940,11 +1931,8 @@ void task_session_run(void *pvParameters) {
         continue;
       }
 
-      /* Frame ownership: if frame was allocated, it should be freed here.
-       * For now (initial implementation), frame is assumed to be
-       * statically allocated by the radio callback.
-       * Future sprints may use region_alloc and require cleanup here.
-       */
+      /* Frame is statically allocated by the radio callback.
+       * If region_alloc is used later, cleanup goes here. */
     } else if (result == pdFAIL) {
       /* Queue receive timeout (1000ms) — this is normal, no error */
       s_stats.queue_timeouts++;
@@ -2133,11 +2121,6 @@ void task_session_run(void *pvParameters) {
       CEEPEW_LOG(TAG, "Unexpected xQueueReceive result: %d", (int)result);
     }
 
-    /* Periodic session maintenance (placeholder for sprints) */
-    /* - Check nonce exhaustion
-     * - Expire old messagesI
-     * - Check session TTL
-     * - Advance replay windows
-     */
+    /* Periodic session maintenance */
   }
 }

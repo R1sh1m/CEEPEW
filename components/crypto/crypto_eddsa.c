@@ -1,4 +1,4 @@
-/* components/crypto/crypto_eddsa.c - touched for compile check */
+/* components/crypto/crypto_eddsa.c */
 
 #include "ceepew_assert.h"
 #include "ceepew_config.h"

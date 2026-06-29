@@ -10,11 +10,7 @@
 #include "esp_timer.h"
 #include <string.h>
 
-/* Design note: The message store is a simple circular buffer with expiration.
-   Instead of maintaining a background task, expiration is checked opportunistically
-   on every add and via explicit msg_store_expire_old() calls. The nonce_exhausted
-   flag is set when the counter reaches CEEPEW_NONCE_HARD_LIMIT; once set, it
-   persists until msg_store_wipe_all() clears it (which happens on session end). */
+/* Circular buffer with opportunistic expiration — no background maintenance task. */
 MsgStore_t g_msg_store = {0};
 CeePewErr_t msg_store_init(void){
     /* Ensure store starts empty and configured limits are sane */
@@ -31,12 +27,9 @@ CeePewErr_t msg_store_init(void){
     return CEEPEW_OK;
 }
 
-CeePewErr_t msg_store_add(const uint8_t *encrypted_data, uint16_t encrypted_len,
-                          uint16_t plaintext_len, uint8_t direction)
+CeePewErr_t msg_store_add(const uint8_t *plaintext, uint16_t plaintext_len, uint8_t direction)
 {
-    CEEPEW_ASSERT(encrypted_data != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(encrypted_len > 0U && encrypted_len <= sizeof(g_msg_store.messages[0].encrypted),
-                  CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(plaintext != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(plaintext_len > 0U && plaintext_len <= CEEPEW_MAX_MSG_BYTES,
                   CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(direction <= 1U, CEEPEW_ERR_PARAM);
@@ -64,12 +57,13 @@ CeePewErr_t msg_store_add(const uint8_t *encrypted_data, uint16_t encrypted_len,
     g_msg_store.messages[g_msg_store.tail].meta.dir = direction;
     g_msg_store.messages[g_msg_store.tail].meta.reserved = 0U;
 
-    memcpy(g_msg_store.messages[g_msg_store.tail].encrypted, encrypted_data, encrypted_len);
-    /* Zero-pad the rest of the ciphertext buffer */
-    if (encrypted_len < sizeof(g_msg_store.messages[g_msg_store.tail].encrypted)) {
-        memset(g_msg_store.messages[g_msg_store.tail].encrypted + encrypted_len,
+    memcpy(g_msg_store.messages[g_msg_store.tail].plaintext, plaintext, plaintext_len);
+    g_msg_store.messages[g_msg_store.tail].plaintext[plaintext_len] = '\0';
+    /* Zero-pad the rest of the plaintext buffer */
+    if (plaintext_len + 1U < sizeof(g_msg_store.messages[g_msg_store.tail].plaintext)) {
+        memset(g_msg_store.messages[g_msg_store.tail].plaintext + plaintext_len + 1U,
                0U,
-               sizeof(g_msg_store.messages[g_msg_store.tail].encrypted) - encrypted_len);
+               sizeof(g_msg_store.messages[g_msg_store.tail].plaintext) - (plaintext_len + 1U));
     }
 
     g_msg_store.tail = (g_msg_store.tail + 1U) % CEEPEW_MAX_MESSAGES;

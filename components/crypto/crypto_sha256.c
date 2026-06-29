@@ -27,7 +27,7 @@ CeePewErr_t crypto_sha256_compute(const uint8_t *in, uint32_t len, uint8_t out[3
 
     rc = mbedtls_md_finish(&ctx, out);
     mbedtls_md_free(&ctx);
-    CEEPEW_ASSERT(rc == 0, CEEPEW_ERR_CRYPTO);
+    if (rc != 0) { return CEEPEW_ERR_CRYPTO; }
 
     return CEEPEW_OK;
 }

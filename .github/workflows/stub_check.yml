@@ -1,0 +1,20 @@
+name: Stub marker check
+
+on: [push, pull_request]
+
+jobs:
+  stub-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find Stub markers
+        run: |
+          echo "Scanning repository for 'Stub:' markers..."
+          set -e
+          # Search text files for common stub markers, fail if any found
+          if git ls-files -z | xargs -0 grep -I --line-number -H "Stub:"; then
+            echo "Stub markers found. Failing job.";
+            exit 1;
+          else
+            echo "No Stub markers found.";
+          fi

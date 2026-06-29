@@ -1,17 +1,7 @@
-/* main/ceepew_assert.h
+/* main/ceepew_assert.h — Project-wide assert macros and CeePewErr_t type.
  *
- * Project-wide assert macros and the CeePewErr_t type.
- *
- * Hosted in main/ so all components can include it without depending on
- * the OLED driver. Previously lived in components/ceepew_oled/. The
- * implementation of ceepew_log_assert() is in main/ceepew_assert.c.
- *
- * CeePewErr_t itself is defined in hal_ui_types.h (components/ceepew_oled).
- * We keep the transitive include here intentionally: ~100 TUs in the
- * codebase use CeePewErr_t without including hal_ui_types.h directly,
- * so removing the include would require a separate sweep. The cost
- * of the transitive include is one extra preprocessor pass per TU
- * and zero runtime cost.
+ * CeePewErr_t is defined in hal_ui_types.h; we re-export it here so all
+ * ~100 TUs can use it without an extra include.
  */
 #ifndef CEEPEW_ASSERT_H
 #define CEEPEW_ASSERT_H

@@ -171,8 +171,13 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     err = hal_radio_send(local_frame, frame_len);
     if (err != CEEPEW_OK) { goto cleanup; }
 
-    err = msg_store_add(local_frame, frame_len, len, 1U);
-    if (err != CEEPEW_OK) { goto cleanup; }
+    /* Do not store handshake sync messages (HELLO/ACK) in the message store */
+    bool is_handshake = (len == 1U && (plaintext[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
+                                       plaintext[0] == CEEPEW_KEY_SYNC_ACK_BYTE));
+    if (!is_handshake) {
+        err = msg_store_add(plaintext, len, 1U);
+        if (err != CEEPEW_OK) { goto cleanup; }
+    }
 
     err = session_update_last_message_time();
     if (err != CEEPEW_OK) { goto cleanup; }

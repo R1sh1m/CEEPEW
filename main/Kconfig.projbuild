@@ -1,13 +1,15 @@
 menu "CEE-PEW Build Options"
 
-    config CEEPEW_BUILD_TESTS
-        bool "Diagnostic Mode (build & auto-run internal test suite)"
+    config CEEPEW_DEVELOPMENT_MODE
+        bool "Development Mode (enables tests, debug serial, headless mode)"
         default n
         help
-            Compile the internal test suite under tests/ and auto-run
-            it on boot. A "=== DIAGNOSTIC REPORT ===" block is printed
-            to the serial console. Production builds MUST leave this
-            disabled (default).
+            Master toggle that enables the internal test suite under tests/
+            (auto-run on boot, prints === DIAGNOSTIC REPORT ===), enables
+            CEEPEW_DEBUG_SERIAL for operational-status logging (never key
+            material), and enables CEEPEW_HEADLESS_MODE for UI auto-advance
+            without OLED (uses hardcoded session code "ZZZZ"). Production
+            builds MUST leave this disabled (default).
 
     config CEEPEW_OLED_FORCE_FAST_FALLBACK
         bool "Force 800 kHz Fm+ OLED fallback at boot"
@@ -17,16 +19,6 @@ menu "CEE-PEW Build Options"
             fallback path in components/ceepew_oled at panel init
             time, instead of probing for it reactively. Useful in
             production for known-good wiring; off by default.
-
-    config CEEPEW_HEADLESS_MODE
-        bool "Headless Mode (auto-advance UI for headless testing)"
-        default n
-        help
-            Auto-advances the UI through the pairing flow (DISCOVERY →
-            CODE_ENTRY → CONFIRM → PAIRING) without requiring button presses
-            or OLED interaction. Uses hardcoded session code "ZZZZ". Intended
-            for bring-up and CI testing on devices without a working OLED panel.
-            Also sets the CEEPEW_HEADLESS_MODE preprocessor define.
 
     config CEEPEW_EFUSE_HMAC_KEY
         bool "Enable eFuse HMAC device identity key"

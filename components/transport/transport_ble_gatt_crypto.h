@@ -10,22 +10,22 @@
  * already share the session code can decrypt the GATT payload.
  *
  * Key derivation:
- *   salt  = SHA256("CEEPEW_GATT_SALT_v1")
- *   info  = "CEEPEW_GATT_SIGN_PK_v1" || idA || idB
+ *   salt  = SHA256("CEEPEW_GATT_SALT_v2")
+ *   info  = "CEEPEW_GATT_SIGN_PK_v2" || idA || idB
  *          (idA/idB sorted lexicographically so both peers agree)
  *   key   = HKDF-SHA256(ikm=session_code, salt, info)[:16]
  *
  * Nonce derivation:
- *   nonce = SHA256("CEEPEW_GATT_NONCE_v1" || session_code)[:16]
+ *   nonce = SHA256("CEEPEW_GATT_NONCE_v2" || session_code || ctr)[:16]
+ *   where ctr is a 1-byte monotonic counter transmitted in-band.
  *
- * The nonce is deterministic per session (both peers compute identically)
- * and is never transmitted on the wire. It is bound to the session_code
- * by inclusion in the SHA-256 input, so a captured ciphertext cannot be
- * replayed against a different session.
+ * The counter byte is prepended to the ciphertext and passed as AAD
+ * to the Ascon AEAD so it is authenticated without being encrypted.
+ * The decryptor reads ctr from the wire and derives the identical nonce.
+ * This eliminates the need for synchronised local counters between peers.
  *
- * Wire format carries sign_pk[32] || box_pubkey[32] || wifi_mac[6] = 70B plaintext,
- * producing 70B ciphertext + 16B tag = 86B on the wire.
- * (negotiated GATT MTU must be >= 90 to fit a single write —
+ * Wire format: [1B ctr][70B ciphertext][16B tag] = 87B.
+ * (negotiated GATT MTU must be >= 91 to fit a single write —
  *  see ESP_GATTC_CFG_MTU_EVT in transport_ble.c.)
  */
 
@@ -39,29 +39,29 @@
 extern "C" {
 #endif
 
-/* Total length of the encrypted GATT payload (ct || tag).
- * Wire format carries sign_pk[32] || box_pubkey[32] || wifi_mac[6] = 70B plaintext,
- * producing 70B ciphertext + 16B tag = 86B on the wire. */
+/* Total length of the encrypted GATT payload.
+ * Wire format: [1B ctr][70B ciphertext][16B tag] = 87B.
+ * Plaintext carries sign_pk[32] || box_pubkey[32] || wifi_mac[6] = 70B. */
+#define GATT_COUNTER_BYTES      1U
 #define GATT_PLAINTEXT_BYTES    70U
 #define GATT_CIPHERTEXT_BYTES   70U
 #define GATT_TAG_BYTES          16U
-#define GATT_CRYPTO_TOTAL_BYTES (GATT_CIPHERTEXT_BYTES + GATT_TAG_BYTES)
+#define GATT_CRYPTO_TOTAL_BYTES (GATT_COUNTER_BYTES + GATT_CIPHERTEXT_BYTES + GATT_TAG_BYTES)
 
 /* Ascon-128 key and nonce are both 16 bytes. */
 #define GATT_KEY_BYTES         16U
 #define GATT_NONCE_BYTES       16U
 
 /* Encrypted 70-byte (sign_pk || box_pubkey || wifi_mac) under the session_code-derived key.
- * Output is 86 bytes (70B ct + 16B tag). Both peers use the same session_code
- * and sorted (id_self, id_peer) ordering, so the receiver can
- * independently derive the same key/nonce and decrypt.
+ * Output is 87 bytes (1B ctr + 70B ct + 16B tag). Prepends a monotonic counter byte
+ * at out[0] used for nonce derivation; the receiver reads it from the wire.
  *
  * PARAMETERS:
  *   session_code: 32-byte human-verified session code (not NULL)
  *   id_self:      6-byte local MAC (not NULL)
  *   id_peer:      6-byte peer MAC (not NULL)
  *   plaintext:    70-byte sign_pk[32] || box_pubkey[32] || wifi_mac[6] (not NULL)
- *   out:          86-byte output buffer for ct+tag (not NULL)
+ *   out:          87-byte output buffer for [ctr][ct][tag] (not NULL)
  *
  * RETURNS:
  *   CEEPEW_OK
@@ -74,15 +74,16 @@ CeePewErr_t gatt_crypto_encrypt_with_ids(const uint8_t session_code[32],
                                           const uint8_t plaintext[GATT_PLAINTEXT_BYTES],
                                           uint8_t out[GATT_CRYPTO_TOTAL_BYTES]);
 
-/* Decrypt an 86-byte (ct || tag) GATT payload back to a 70-byte
- * (sign_pk || box_pubkey || wifi_mac). Authentication is mandatory: any tag
+/* Decrypt an 87-byte (ctr || ct || tag) GATT payload back to a 70-byte
+ * (sign_pk || box_pubkey || wifi_mac). Reads the counter byte from in[0]
+ * to derive the matching nonce. Authentication is mandatory: any tag
  * mismatch returns CEEPEW_ERR_AUTH_FAIL without revealing the plaintext.
  *
  * PARAMETERS:
  *   session_code: 32-byte session code (same value as used to encrypt)
  *   id_self:      6-byte local MAC (not NULL)
  *   id_peer:      6-byte peer's MAC (not NULL)
- *   in:           86-byte ct+tag buffer (not NULL)
+ *   in:           87-byte [ctr][ct][tag] buffer (not NULL)
  *   plaintext_out:70-byte output buffer for sign_pk[32] || box_pubkey[32] || wifi_mac[6]
  *
  * RETURNS:

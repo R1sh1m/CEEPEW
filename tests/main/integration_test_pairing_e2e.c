@@ -3,8 +3,8 @@
  * Two-device automated pairing + encrypted message integration test.
  *
  * REQUIREMENTS:
- *   - CONFIG_CEEPEW_BUILD_TESTS=y
- *   - CONFIG_CEEPEW_HEADLESS_MODE=y (UI auto-advances through pairing)
+ *   - CONFIG_CEEPEW_DEVELOPMENT_MODE=y
+ *   - CONFIG_CEEPEW_DEVELOPMENT_MODE=y (UI auto-advances through pairing)
  *   - Both devices must be flashed with the same firmware binary
  *   - Session code hardcoded to "ZZZZ" via headless mode
  *
@@ -125,7 +125,7 @@ static void pairing_e2e_monitor(void *arg)
              s_ctx.local_mac[0], s_ctx.local_mac[1], s_ctx.local_mac[2],
              s_ctx.local_mac[3], s_ctx.local_mac[4], s_ctx.local_mac[5]);
     ESP_LOGI(TAG, "Headless mode: %s",
-#if CONFIG_CEEPEW_HEADLESS_MODE
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
              "ENABLED"
 #else
              "DISABLED (test will likely fail without UI interaction)"

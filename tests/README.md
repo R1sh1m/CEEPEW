@@ -2,7 +2,7 @@
 
 The `tests/` component is the project's diagnostic harness. It is a
 gated build of 16 internal test files, compiled into the firmware only
-when `CONFIG_CEEPEW_BUILD_TESTS` is set in `menuconfig` → "CEE-PEW
+when `CONFIG_CEEPEW_DEVELOPMENT_MODE` is set in `menuconfig` → "CEE-PEW
 Build Options" → "Diagnostic Mode". With the option off, this component
 contributes nothing to the final binary.
 
@@ -52,7 +52,7 @@ The facade has no real "behaviour" to test (it's a one-line forwarder to
 - Every test file MUST define its entry point as `void NAME_selftest_run(void)` — never as a constructor. The compiler-enforced
   ban on `__attribute__((constructor))` is documented in `.github/copilot-instructions.md`.
 - Every test file MUST guard its body with `#ifdef CEEPEW_ENABLE_SELFTEST`. The macro is set in `tests/CMakeLists.txt` only when
-  `CONFIG_CEEPEW_BUILD_TESTS=y`, so test code is invisible to the
+  `CONFIG_CEEPEW_DEVELOPMENT_MODE=y`, so test code is invisible to the
   compiler when the option is off.
 - Tests print PASS/FAIL with a leading `CEEPEW: ` prefix so `diagnose.ps1`
   can `Select-String` the serial log without ambiguity.
@@ -110,7 +110,7 @@ when narrowing down a fail.
 contains:
 
 ```
-# CONFIG_CEEPEW_BUILD_TESTS is not set
+# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set
 ```
 
 A production build that accidentally enables the option will fail its

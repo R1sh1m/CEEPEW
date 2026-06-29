@@ -36,6 +36,7 @@ typedef enum {
     UI_STATE_PAIRING = 15U,       /* Sprint 9: Pairing countdown state */
     UI_STATE_PAIRING_FAILED = 16U,  /* Pairing outcome: failure banner */
     UI_STATE_CHAT_SEND_CONFIRM = 17U, /* Phase 4: Confirm composed message before send */
+    UI_STATE_CHAT_DETAIL = 18U,       /* Detail view of selected message */
 } UIState_t;
 
 typedef enum {
@@ -92,6 +93,7 @@ typedef struct {
     uint8_t       compose_cursor;       /* Cursor position in message */
     uint8_t       keyboard_row;         /* Current keyboard row (0-9 for 6x10 grid) */
     uint8_t       keyboard_col;         /* Current keyboard column (0-5) */
+    uint8_t       chat_selected_idx;    /* Currently selected message index in thread */
 } UIContext_t;
 
 extern UIContext_t g_ui_ctx;
@@ -124,7 +126,7 @@ CeePewErr_t ui_keygen_show_progress(uint8_t frame_index);
  * Displays a single message as a bubble with text preview and status indicator.
  * dir: 0=RX (left-aligned), 1=TX (right-aligned)
  */
-CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir);
+CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir, bool selected);
 
 /* Sprint 11: Character pool display.
  * Shows available character budget for message composition.

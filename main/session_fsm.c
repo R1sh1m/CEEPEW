@@ -1,43 +1,8 @@
 /* main/session_fsm.c
  *
- * CEE-PEW Session Finite State Machine (3-phase pairing with nonce enforcement)
- *
- * Phase 1 (DISCOVERY): Exchange MAC addresses, device identifiers, capability flags.
- *                      No encryption; plain discovery frames.
- *
- * Phase 2 (PAIRING):   Exchange session code (human-verified), derive shared secret
- *                      via HKDF-SHA256 with digital_sum preprocessing.
- *                      Build ephemeral Ed25519 keypairs.
- *
- * Phase 3 (ACTIVE):    Encrypted bidirectional communication. Nonce counter enforced
- *                      before every encryption. Session key locked after Phase 2.
- *                      No key material leaves Phase 3 until session_end().
- *
- * SECURITY MODEL:
- * - MAC locking: Each session bound to exactly one peer MAC (constant-time compare)
- * - Key derivation: HKDF-SHA256(session_code, salt, info) where salt is
- *   SHA256(digital_sum_mix(code) || code) and info binds device IDs,
- *   session commitment, and timestamp. The IKM is the raw 32-byte
- *   session_code (no local randomness) so both peers compute identical keys.
- * - Nonce enforcement: Counter must be < CEEPEW_NONCE_HARD_LIMIT; incremented AFTER check.
- *   Initiator starts at 0 (even nonces); responder at 1 (odd nonces) — both
- *   derived deterministically from the role assignment (lower MAC = initiator).
- * - Replay defense: 64-bit WireGuard bitmap + ±15s timestamp window
- * - Signing: Ed25519 per-session ephemeral keypairs (destroyed on session_end).
- *   The LOCAL sign_pk is never transmitted — only received from peer via
- *   BLE GATT. The peer's sign_pk is used as the "public key" input to
- *   curve25519_scalarmult() (symmetric operation, bounded by session_code
- *   trust anchor; see Bug 4 threat model in transport_ble.c).
- * - Secure zeroing: All key material (session_key, nonce_counter, sign_sk) volatile-written
- *
- * POST-DERIVE SYNC BARRIER (Bug 3 fix):
- *   After HKDF completes locally, the FSM does NOT advance the UI to
- *   does NOT advance the UI to KEYDER. The session task drives
- *   which initiates a 1-byte encrypted HELLO/ACK round-trip via
- *   session_send_message() on the ESP-NOW link. Only after the ACK is
- *   received and decrypted does the UI transition fire. This prevents
- *   the desync where one device shows "✓ SECURE" while the other is
- *   still on the pairing screen.
+ * Session FSM — three-phase pairing with nonce enforcement.
+ * See session_fsm.h for the public API and ARCHITECTURE.md for the
+ * protocol overview, security model, and sync barrier design.
  */
 
 #include "ceepew_config.h"
@@ -282,7 +247,7 @@ CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
     s_session.sync_peer_encrypted_received = false;
     s_session.sync_local_ack_sent = false;
 
-    /* M7: Power management — enable WiFi modem PS + low BLE duty during discovery */
+    /* Enable WiFi modem PS + low BLE duty during discovery */
     (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_DISCOVERY);
     (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_DISC_MS,
                                             CEEPEW_BLE_SCAN_WINDOW_DISC_MS);
@@ -320,7 +285,7 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     s_session.phase = 2U;
     memcpy(s_session.session_code, session_code, 32U);
 
-    /* M7: Power management — full power for pairing (fast BLE + low latency) */
+    /* Full power for pairing (fast BLE + low latency) */
     (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_ACTIVE_CHAT);
     (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_PAIR_MS,
                                             CEEPEW_BLE_SCAN_WINDOW_PAIR_MS);
@@ -457,39 +422,6 @@ CeePewErr_t session_phase2_derive_key(void){
         hkdf_info_len += 6U;
         memcpy(hkdf_info + hkdf_info_len, wifi_b, 6U);
         hkdf_info_len += 6U;
-    }
-
-    /* Step 3a: DIAGNOSTIC — log HKDF inputs for key-convergence debugging */
-    {
-        /* Log device MACs used in HKDF info */
-        ESP_LOGI("session_fsm", "DIAG: self_wifi=%02X:%02X:%02X:%02X:%02X:%02X valid=%d",
-                 s_session.device_id_self_wifi[0], s_session.device_id_self_wifi[1],
-                 s_session.device_id_self_wifi[2], s_session.device_id_self_wifi[3],
-                 s_session.device_id_self_wifi[4], s_session.device_id_self_wifi[5],
-                 s_session.device_id_self_wifi_valid);
-        ESP_LOGI("session_fsm", "DIAG: peer_wifi=%02X:%02X:%02X:%02X:%02X:%02X valid=%d",
-                 s_session.device_id_peer_wifi[0], s_session.device_id_peer_wifi[1],
-                 s_session.device_id_peer_wifi[2], s_session.device_id_peer_wifi[3],
-                 s_session.device_id_peer_wifi[4], s_session.device_id_peer_wifi[5],
-                 s_session.device_id_peer_wifi_valid);
-        /* Log sorted wifi_a/wifi_b (the actual bytes fed to HKDF) */
-        const uint8_t *wifi_a = s_session.device_id_self_wifi;
-        const uint8_t *wifi_b = s_session.device_id_peer_wifi;
-        if (s_session.device_id_self_wifi_valid && s_session.device_id_peer_wifi_valid) {
-            if (memcmp(wifi_a, wifi_b, 6U) > 0) {
-                const uint8_t *tmp = wifi_a; wifi_a = wifi_b; wifi_b = tmp;
-            }
-        }
-        ESP_LOGI("session_fsm", "DIAG: hkdf_info_len=%u wifi_a=%02X:%02X:%02X:%02X:%02X:%02X wifi_b=%02X:%02X:%02X:%02X:%02X:%02X",
-                 hkdf_info_len,
-                 wifi_a[0], wifi_a[1], wifi_a[2], wifi_a[3], wifi_a[4], wifi_a[5],
-                 wifi_b[0], wifi_b[1], wifi_b[2], wifi_b[3], wifi_b[4], wifi_b[5]);
-        /* Log full hkdf_info as hex for cross-device comparison */
-        ESP_LOGI("session_fsm", "DIAG: hkdf_info_hex ");
-        ESP_LOG_BUFFER_HEX("session_fsm", hkdf_info, (uint16_t)hkdf_info_len);
-        /* Log first 8 bytes of hkdf_salt for cross-device comparison */
-        ESP_LOGI("session_fsm", "DIAG: hkdf_salt_first8");
-        ESP_LOG_BUFFER_HEX("session_fsm", hkdf_salt, 8U);
     }
 
     /* Step 3a: IKM is the raw 32-byte session_code. Both peers must derive
@@ -1014,14 +946,19 @@ static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx)
 
     /* Post UI_EVENT_SESSION_ESTABLISHED to notify UI task (Core 0) that
      * the encrypted HELLO/ACK round-trip completed and session is ready.
-     * This triggers transition from UI_STATE_KEYDER to UI_STATE_CHAT_MENU. */
+     * This triggers transition from UI_STATE_KEYDER to UI_STATE_CHAT_MENU.
+     * Retry with a short timeout — silently dropping this event would leave
+     * the UI stuck in KEYDER while the session is actually active. */
     if (g_ui_event_queue != NULL) {
         UIEvent_t evt = {0};
         evt.type = UI_EVENT_SESSION_ESTABLISHED;
         uint64_t sid = session_get_id();
         evt.param = (uint32_t)(sid >> 32);
         evt.payload.session_established.session_id_hi = evt.param;
-        (void)xQueueSend(g_ui_event_queue, &evt, 0);
+        BaseType_t q_rc = xQueueSend(g_ui_event_queue, &evt, pdMS_TO_TICKS(100));
+        if (q_rc != pdPASS) {
+            ESP_LOGE("session_fsm", "CRITICAL: SESSION_ESTABLISHED not delivered to UI (queue full)");
+        }
     }
 
     return need_tx ? CEEPEW_ERR_NEED_TX : CEEPEW_OK;
@@ -1236,7 +1173,7 @@ CeePewErr_t session_end(void){
     session_secure_zero_context();
     region_reset(&g_region);
 
-    /* M7: Return to low-power state after session ends */
+    /* Return to low-power state after session ends */
     (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_DISCOVERY);
     (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_DISC_MS,
                                             CEEPEW_BLE_SCAN_WINDOW_DISC_MS);
@@ -1349,16 +1286,6 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 {
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
 
-    ESP_LOGI("session_fsm", "session_get_commitment entry: phase=%u test_flag=%d "
-             "self=%02X:%02X:%02X:%02X:%02X:%02X peer=%02X:%02X:%02X:%02X:%02X:%02X",
-             s_session.phase, (int)s_test_commitment_set,
-             s_session.device_id_self[0], s_session.device_id_self[1],
-             s_session.device_id_self[2], s_session.device_id_self[3],
-             s_session.device_id_self[4], s_session.device_id_self[5],
-             s_session.device_id_peer[0], s_session.device_id_peer[1],
-             s_session.device_id_peer[2], s_session.device_id_peer[3],
-             s_session.device_id_peer[4], s_session.device_id_peer[5]);
-
     if (s_test_commitment_set) {
         memcpy(commitment, s_test_commitment, CEEPEW_COMMITMENT_BYTES);
         return CEEPEW_OK;
@@ -1401,17 +1328,6 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
 
     memcpy(commitment, out32, CEEPEW_COMMITMENT_BYTES);
 
-    ESP_LOGI("session_fsm", "session_get_commitment: self=%02X:%02X:%02X:%02X:%02X:%02X peer=%02X:%02X:%02X:%02X:%02X:%02X",
-             s_session.device_id_self[0], s_session.device_id_self[1], s_session.device_id_self[2],
-             s_session.device_id_self[3], s_session.device_id_self[4], s_session.device_id_self[5],
-             s_session.device_id_peer[0], s_session.device_id_peer[1], s_session.device_id_peer[2],
-             s_session.device_id_peer[3], s_session.device_id_peer[4], s_session.device_id_peer[5]);
-    ESP_LOGI("session_fsm", "session_get_commitment: local_commit=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
-             commitment[0], commitment[1], commitment[2], commitment[3],
-             commitment[4], commitment[5], commitment[6], commitment[7],
-             commitment[8], commitment[9], commitment[10], commitment[11],
-             commitment[12], commitment[13], commitment[14], commitment[15]);
-
     /* Secure zero temporaries */
     ceepew_secure_zero(out32, sizeof(out32));
     ceepew_secure_zero(info, sizeof(info));
@@ -1436,31 +1352,10 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
         CeePewErr_t adv_err = session_get_commitment(local_commit);
         if (adv_err != CEEPEW_OK) { return adv_err; }
 
-        ESP_LOGI("session_fsm", "session_verify_peer_commitment_with_sig: peer=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
-                 peer_data[0], peer_data[1], peer_data[2], peer_data[3],
-                 peer_data[4], peer_data[5], peer_data[6], peer_data[7],
-                 peer_data[8], peer_data[9], peer_data[10], peer_data[11],
-                 peer_data[12], peer_data[13], peer_data[14], peer_data[15]);
-
-        ESP_LOGI("session_fsm", "verify_adv: local=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
-                 local_commit[0], local_commit[1], local_commit[2], local_commit[3],
-                 local_commit[4], local_commit[5], local_commit[6], local_commit[7],
-                 local_commit[8], local_commit[9], local_commit[10], local_commit[11],
-                 local_commit[12], local_commit[13], local_commit[14], local_commit[15]);
-
         uint8_t diff = 0U;
         for (uint8_t i = 0U; i < CEEPEW_COMMITMENT_ADV_BYTES; i++) {
             diff |= (uint8_t)(local_commit[i] ^ peer_data[i]);
         }
-        ESP_LOGI("session_fsm", "verify_adv: diff=0x%02X self_mac=%02X:%02X:%02X:%02X:%02X:%02X peer_mac=%02X:%02X:%02X:%02X:%02X:%02X phase=%u test=%d",
-                 diff,
-                 s_session.device_id_self[0], s_session.device_id_self[1],
-                 s_session.device_id_self[2], s_session.device_id_self[3],
-                 s_session.device_id_self[4], s_session.device_id_self[5],
-                 s_session.device_id_peer[0], s_session.device_id_peer[1],
-                 s_session.device_id_peer[2], s_session.device_id_peer[3],
-                 s_session.device_id_peer[4], s_session.device_id_peer[5],
-                 s_session.phase, (int)s_test_commitment_set);
         ceepew_secure_zero(local_commit, sizeof(local_commit));
         return (diff == 0U) ? CEEPEW_OK : CEEPEW_ERR_AUTH_FAIL;
     }
@@ -1472,19 +1367,6 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
     uint8_t local_commit[CEEPEW_COMMITMENT_BYTES];
     CeePewErr_t err = session_get_commitment(local_commit);
     if (err != CEEPEW_OK) { return err; }
-
-    ESP_LOGI("session_fsm", "verify_gatt: local=%02X%02X%02X%02X%02X%02X%02X%02X"
-             "%02X%02X%02X%02X%02X%02X%02X%02X peer=%02X%02X%02X%02X%02X%02X%02X%02X"
-             "%02X%02X%02X%02X%02X%02X%02X%02X len=%u",
-             local_commit[0], local_commit[1], local_commit[2], local_commit[3],
-             local_commit[4], local_commit[5], local_commit[6], local_commit[7],
-             local_commit[8], local_commit[9], local_commit[10], local_commit[11],
-             local_commit[12], local_commit[13], local_commit[14], local_commit[15],
-             peer_data[0], peer_data[1], peer_data[2], peer_data[3],
-             peer_data[4], peer_data[5], peer_data[6], peer_data[7],
-             peer_data[8], peer_data[9], peer_data[10], peer_data[11],
-             peer_data[12], peer_data[13], peer_data[14], peer_data[15],
-             (unsigned)len);
 
     uint8_t match = 0U;
     for (uint8_t i = 0U; i < cmp_len; i++) { match |= (uint8_t)(local_commit[i] ^ peer_data[i]); }

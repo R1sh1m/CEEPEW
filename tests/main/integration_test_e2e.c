@@ -3,7 +3,7 @@
  * End-to-end integration test suite for CEE-PEW firmware.
  * Tests complete workflows: session FSM, nonce enforcement, compression, encryption, transport.
  *
- * When CONFIG_CEEPEW_BUILD_TESTS is enabled (see main/Kconfig.projbuild),
+ * When CONFIG_CEEPEW_DEVELOPMENT_MODE is enabled (see main/Kconfig.projbuild),
  * the firmware auto-invokes integration_tests_run_all() at the end of
  * app_main and prints a structured "=== DIAGNOSTIC REPORT ===" block.
  *
@@ -398,10 +398,10 @@ static void test_session_message_store(void){
     CeePewErr_t err = msg_store_init();
     test_assert_ok(err, "msg_store_init");
 
-    uint8_t enc[32];
-    for (uint8_t i = 0U; i < sizeof(enc); i++) { enc[i] = (uint8_t)(i + 1U); }
+    uint8_t plain[32];
+    for (uint8_t i = 0U; i < sizeof(plain); i++) { plain[i] = (uint8_t)('a' + (i % 26U)); }
 
-    err = msg_store_add(enc, (uint16_t)sizeof(enc), 16U, 0U);
+    err = msg_store_add(plain, (uint16_t)sizeof(plain), 0U);
     test_assert_ok(err, "msg_store_add");
 
     uint8_t count = msg_store_count();
@@ -409,11 +409,11 @@ static void test_session_message_store(void){
 
     const StoredMsg_t *m = msg_store_get(0U);
     if (m != NULL) {
-        if (memcmp(m->encrypted, enc, sizeof(enc)) == 0) {
-            ESP_LOGI(TAG, "[PASS] stored encrypted matches input");
+        if (memcmp(m->plaintext, plain, sizeof(plain)) == 0) {
+            ESP_LOGI(TAG, "[PASS] stored plaintext matches input");
             s_tests_passed++;
         } else {
-            ESP_LOGE(TAG, "[FAIL] stored encrypted mismatch");
+            ESP_LOGE(TAG, "[FAIL] stored plaintext mismatch");
             s_tests_failed++;
         }
     } else {

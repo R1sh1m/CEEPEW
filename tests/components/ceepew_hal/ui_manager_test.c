@@ -231,10 +231,10 @@ void ui_manager_selftest_run(void) {
     if (msg_store_count() == 0U) {
         /* Add a test message for display */
         uint8_t test_payload[21] = "Hello from peer!    ";
-        (void)msg_store_add(test_payload, 20U, 15U, 0U);  /* RX message */
+        (void)msg_store_add(test_payload, 20U, 0U);  /* RX message */
     }
     
-    if (ui_chat_show_bubble(0U, 14U, 0U) != CEEPEW_OK) {
+    if (ui_chat_show_bubble(0U, 14U, 0U, false) != CEEPEW_OK) {
         printf("ui_manager selftest: ui_chat_show_bubble() failed\n");
         return;
     }

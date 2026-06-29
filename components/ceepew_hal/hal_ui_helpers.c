@@ -24,7 +24,8 @@ CeePewErr_t hal_ui_fit_text(const char *src, uint8_t max_px_width, char *out, ui
     size_t src_len = strlen(src);
     /* If it fits and buffer is large enough, copy directly */
     if (src_len <= max_chars && src_len < (size_t)out_size) {
-        (void)snprintf(out, out_size, "%s", src);
+        memcpy(out, src, src_len);
+        out[src_len] = '\0';
         return CEEPEW_OK;
     }
 

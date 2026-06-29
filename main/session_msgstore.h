@@ -25,10 +25,10 @@ typedef struct {
     uint8_t  reserved;
 } MsgMeta_t;
 
-/* In-store message: metadata + encrypted payload */
+/* In-store message: metadata + plaintext payload */
 typedef struct {
     MsgMeta_t meta;
-    uint8_t   encrypted[CEEPEW_MAX_MSG_BYTES + 64U];  /* Ciphertext with overhead */
+    char      plaintext[CEEPEW_MAX_MSG_BYTES + 1U];  /* Null-terminated plaintext */
 } StoredMsg_t;
 
 /* Message store context: circular buffer + expiration tracking */
@@ -46,9 +46,8 @@ extern MsgStore_t g_msg_store;
 /* Initialize message store (call once after session_phase2_derive_key) */
 CeePewErr_t msg_store_init(void);
 
-/* Store a received or transmitted message (encrypted). Expires old entries on overflow. */
-CeePewErr_t msg_store_add(const uint8_t *encrypted_data, uint16_t encrypted_len,
-                          uint16_t plaintext_len, uint8_t direction);
+/* Store a received or transmitted message (plaintext). Expires old entries on overflow. */
+CeePewErr_t msg_store_add(const uint8_t *plaintext, uint16_t plaintext_len, uint8_t direction);
 
 /* Get message at index (0=oldest, count-1=newest). Returns NULL if index out of bounds. */
 const StoredMsg_t *msg_store_get(uint8_t index);

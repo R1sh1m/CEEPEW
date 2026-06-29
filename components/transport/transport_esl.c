@@ -1,4 +1,4 @@
-/* components/transport/transport_esl.c - touched for compile check
+/* components/transport/transport_esl.c
  *
  * CEE-PEW ESP-NOW Security Layer (hardened receive pipeline)
  *
@@ -207,6 +207,16 @@ static CeePewErr_t dos_generate_cookie(const uint8_t sender_mac[6], uint32_t tim
 
 static CeePewErr_t dos_verify_cookie(const uint8_t sender_mac[6], uint32_t timestamp_rounded, const uint8_t received_cookie[CEEPEW_COOKIE_BYTES]) {
     CEEPEW_ASSERT(sender_mac != NULL && received_cookie != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Reject stale cookies outside the rotation window — prevents cookie replay
+     * beyond the server secret lifetime. A cookie issued within the last
+     * CEEPEW_COOKIE_ROTATE_S seconds is considered fresh. */
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint32_t cookie_age = (now > timestamp_rounded) ? (now - timestamp_rounded) : 0U;
+    if (cookie_age > CEEPEW_COOKIE_ROTATE_S) {
+        return CEEPEW_ERR_TRANSPORT;  /* Silent fail — stale cookie */
+    }
+
     uint8_t expected_cookie[CEEPEW_COOKIE_BYTES];
     CeePewErr_t err = dos_generate_cookie(sender_mac, timestamp_rounded, expected_cookie);
     if (err != CEEPEW_OK) { return err; }

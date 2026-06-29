@@ -17,6 +17,9 @@
 
 include sdkconfig.defaults
 
+# Development mode MUST be off for production
+# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set
+
 # Secure Boot v2 (Release mode)
 # Requires signing key at keys/secure_boot_signing_key.pem
 CONFIG_SECURE_BOOT_V2_ENABLED=y

@@ -41,7 +41,7 @@
  * itself only has 10,000 possible values (~13 bits of entropy). */
 #define CEEPEW_COMMITMENT_ADV_BYTES      16U
 
-/* Beacon replay defense (Bug 2 fix). Each commitment beacon carries a
+/* Beacon replay defense. Each commitment beacon carries a
  * 2-byte monotonic nonce. The receiver rejects any beacon whose nonce
  * is not strictly greater than the highest nonce it has previously
  * accepted from this peer — closing the "first-scan-wins" replay window
@@ -92,7 +92,7 @@
  * encrypted ESP-NOW tunnel to verify that crypto_box works in BOTH
  * directions before the UI advances to KEYDER. Without this
  * round-trip, an initiator whose local key derivation succeeds would
- * transition the UI while the responder was still in PAIRING (Bug 3).
+ * transition the UI while the responder was still in PAIRING.
  *
  * The magic values are chosen > 0x7F so they can never collide with
  * ASCII chat text typed by the user. */
@@ -189,7 +189,7 @@
 /* -------------------------------------------------------------------------- */
 /* FreeRTOS                                                                    */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_CORE0_STACK_BYTES         4096U
+#define CEEPEW_CORE0_STACK_BYTES         10240U
 #define CEEPEW_CORE1_STACK_BYTES         16384U
 #define CEEPEW_QUEUE_DEPTH               32U
 #define CEEPEW_TASK_UI_PRIORITY          3U
@@ -265,17 +265,10 @@
 /* SECURITY: Even when CEEPEW_DEBUG_SERIAL is defined, the following are      */
 /* NEVER printed: key material, plaintext content, peer MAC during pairing.   */
 /* -------------------------------------------------------------------------- */
-// #define CEEPEW_DEBUG_SERIAL   /* Commented for manual testing */
-
-/* Headless mode: auto-advances the UI through the pairing flow (DISCOVERY
- * → CODE_ENTRY → CONFIRM → PAIRING) without requiring button presses or
- * OLED interaction. Uses hardcoded session code "ZZZZ". Intended for
- * bring-up and CI testing on devices without a working OLED panel.
- *
- * The CONFIRM → PAIRING transition is already automatic once
- * commitment_verified is set by the BLE transport; this define bridges
- * the earlier interaction gaps that normally need a button press. */
-// #define CEEPEW_HEADLESS_MODE  1   /* uncomment for headless auto-advance */
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+#define CEEPEW_DEBUG_SERIAL
+#define CEEPEW_HEADLESS_MODE 1
+#endif
 
 #ifdef CEEPEW_DEBUG_SERIAL
     #define CEEPEW_LOG(tag, fmt, ...) \

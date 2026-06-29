@@ -1,7 +1,7 @@
 # tests/CMakeLists.txt
 #
 # Internal-use test code. NOT built into production firmware unless
-# CONFIG_CEEPEW_BUILD_TESTS is enabled in menuconfig. When disabled this
+# CONFIG_CEEPEW_DEVELOPMENT_MODE is enabled in menuconfig. When disabled this
 # component registers with no source files and contributes nothing
 # (apart from trivial component metadata) to the final binary.
 #
@@ -10,7 +10,7 @@
 # for the human-and-AI-agent workflow.
 
 set(test_srcs "")
-if(CONFIG_CEEPEW_BUILD_TESTS)
+if(CONFIG_CEEPEW_DEVELOPMENT_MODE)
     list(APPEND test_srcs
         "main/integration_test_e2e.c"
         "main/integration_test_pairing_ui.c"
@@ -58,6 +58,6 @@ idf_component_register(
 # Single chokepoint for the runtime-selftest macro. Test files that
 # gate their bodies with #ifdef CEEPEW_ENABLE_SELFTEST see this define
 # when the test suite is being built.
-if(CONFIG_CEEPEW_BUILD_TESTS AND NOT CMAKE_SCRIPT_MODE_FILE)
+if(CONFIG_CEEPEW_DEVELOPMENT_MODE AND NOT CMAKE_SCRIPT_MODE_FILE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CEEPEW_ENABLE_SELFTEST)
 endif()

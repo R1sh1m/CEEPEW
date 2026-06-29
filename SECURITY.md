@@ -27,7 +27,8 @@ CEE-PEW is NOT designed to resist:
 ## Build Security Notes
 - `sdkconfig` is gitignored. Use `sdkconfig.debug` for debug builds, `sdkconfig.production` for releases.
 - Never commit `keys/` directory — it is gitignored by design.
-- `CEEPEW_DEBUG_SERIAL` must be undefined in production builds (enforced by `sdkconfig.production`).
+- `CONFIG_CEEPEW_DEVELOPMENT_MODE` must be `n` in production builds (enforced by `sdkconfig.production`). This master toggle controls test compilation, `CEEPEW_DEBUG_SERIAL` (operational logging), and `CEEPEW_HEADLESS_MODE` (UI auto-advance).
+- No sensitive material (keys, MACs, session codes, HKDF intermediates) is ever logged, even when `CEEPEW_DEBUG_SERIAL` is enabled.
 - Region allocator pool (48KB) is static — no heap allocation means no malloc-related vulnerabilities.
 - All secret material (session_key, sign_sk, peer_sign_pk) is secure-zeroed on teardown via `ceepew_secure_zero()` (volatile pointer + memory barrier pattern).
 - Constant-time comparison (`crypto_ct_equal`) used for all tag/MAC/key comparisons — never `memcmp`.

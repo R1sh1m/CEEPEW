@@ -2,7 +2,7 @@
  *
  * Device identity: tries eFuse BLOCK_KEY0 first, falls back to MAC-derived.
  *
- * M8: Production devices should have a unique 256-bit key burned into
+ * Production devices should have a unique 256-bit key burned into
  * EFUSE_BLK_KEY0 during manufacturing. Development boards start with
  * an empty block, so the MAC-derived fallback keeps things working.
  */

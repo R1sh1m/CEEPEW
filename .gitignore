@@ -12,27 +12,32 @@ venv/
 .git/
 .venv/
 .vcode/
-.gitignore
-.editorconfig
-.cspell/
-.cspell.json
 eim_config.toml
 project_snapshot.ps1
 project_snapshot_md.ps1
 Research/
-sdkconfig.defaults
 sdkconfig.old
-.github/
 .clangd
-sdkconfig.production
 CLAUDE.md
-docs/
 opencode.json
 .cache/
-verify_handoff_fix.ps1
-sdkconfig.production
 skills-lock.json
 logs/
-digest.txt
-tools/
 *.log
+
+# CI / AI assistant internals (keep workflows/)
+.github/agents/
+.github/instructions/
+.github/prompts/
+.github/copilot-instructions.md
+.github/COPILOT_USAGE.md
+.github/run_tests.sh
+
+# Docs — internal design documents, not published to GitHub
+docs/
+
+# Tools — keep scripts, ignore artifacts and duplicates
+tools/eim_config.toml
+tools/monitor_both_*.txt
+tools/dual_capture.ps1
+tools/dual_capture.py

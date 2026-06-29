@@ -10,7 +10,7 @@
  * PHASE 2 (PAIRING) — HYBRID GATED-GATT:
  *   1. Both peers broadcast a 16-byte truncated SHA-256 commitment in
  *      SCAN_RSP (manufacturer AD 0xCEEE subtype 0x50), preceded by a
- *      2-byte monotonic nonce (Bug 2 fix). The high bit (bit 15) of the
+ *      2-byte monotonic nonce. The high bit (bit 15) of the
  *      nonce is the "GATT-ready" flag (set when local commitment_verified
  *      transitions 0→1; see Item 3 of Phase 7 plan).
  *   2. Once both beacons are received and the truncated commitments match,
@@ -140,7 +140,7 @@ typedef struct {
     bool           ready_for_chat;              /* Local readiness flag after key derivation */
     bool           peer_ready_for_chat;         /* Peer's readiness flag (set by verify_pending_commitment_unlocked) */
     uint32_t       peer_ready_timestamp_ms;     /* When peer_ready_for_chat was set */
-    /* ── Beacon replay defense (Bug 2 fix) ── */
+    /* ── Beacon replay defense ── */
     uint16_t       beacon_nonce_local;          /* Last counter we put in our beacon (bits 0-14 only) */
     uint16_t       beacon_nonce_peer_counter_max; /* Highest 15-bit counter accepted from peer */
     /* ── Hybrid-GATT gating (Phase 7) ── */
@@ -337,7 +337,9 @@ bool transport_ble_is_recovering(void);
 
 /* Debug hook: post a synthetic PHASE_TIMEOUT event so the recovery path
  * can be exercised from the UI without needing a real radio stall. */
+#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
 void transport_ble_debug_trigger_timeout(void);
+#endif
 
 /* Notify the supervisor that a phase transition occurred.
  * Updates s_pairing_ctx.phase and resets the phase_entered_ms timer. */

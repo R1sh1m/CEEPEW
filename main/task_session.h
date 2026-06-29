@@ -2,7 +2,7 @@
  *
  * Session Task for Core 1 — Cryptographic transport and RX processing.
  * Drains incoming radio frames from RX queue, posts UI events on message receipt.
- * Main crypto/transport processing entry point (extended in later sprints).
+ * Main crypto/transport processing entry point.
  *
  * Core 1 provides dedicated compute capacity for ESP-NOW recv callbacks and
  * encryption/decryption operations, while Core 0 handles UI rendering.

@@ -33,6 +33,7 @@
 #include "../transport/transport_hop.h"
 #include "../transport/transport_esl.h"
 #include "../crypto/crypto_ctx.h"
+#include "session_fsm.h"
 
 #include <string.h>
 
@@ -905,6 +906,19 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
 
     if (len == 0) {
         return CEEPEW_ERR_PARAM;
+    }
+
+    /* Authenticate src_mac against the paired peer — reject frames from
+     * unauthenticated senders even at the radio level. If no peer is paired
+     * yet (session phase < 3), skip the check and allow rendezvous setup. */
+    if (session_get_phase() >= 3U) {
+        uint8_t peer_wifi_mac[6];
+        if (session_get_peer_wifi_mac(peer_wifi_mac) == CEEPEW_OK) {
+            if (memcmp(src_mac, peer_wifi_mac, 6U) != 0) {
+                ESP_LOGW(TAG, "Rendezvous: discarding frame from unauthenticated MAC");
+                return CEEPEW_ERR_AUTH_FAIL;
+            }
+        }
     }
 
     uint8_t msg_type = payload[0];

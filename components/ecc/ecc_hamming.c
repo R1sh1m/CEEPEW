@@ -27,7 +27,7 @@ static uint32_t s_fec_corrections_total = 0U;
 static uint32_t s_fec_failures_total = 0U;
 
 /* Maps 4-bit syndrome -> bit position to flip (0-14), 15 = uncorrectable */
-static const uint8_t SYNDROME_TABLE[16] = {0U, 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 15U};
+static const uint8_t SYNDROME_TABLE[16] = {0U, 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U};
 
 static inline uint8_t bit_get_msb(const uint8_t *buf, uint32_t bit_pos, uint32_t total_bits) {
     if (bit_pos >= total_bits) { return 0U;}

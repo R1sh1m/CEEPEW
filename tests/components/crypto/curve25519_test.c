@@ -6,7 +6,7 @@
  * diagnostic harness drives the call deterministically.
  *
  * The file is gated by CEEPEW_ENABLE_SELFTEST which is defined in
- * tests/CMakeLists.txt when CONFIG_CEEPEW_BUILD_TESTS is on. The
+ * tests/CMakeLists.txt when CONFIG_CEEPEW_DEVELOPMENT_MODE is on. The
  * source lives in tests/ so it does NOT enter the production binary
  * (tests/CMakeLists.txt registers SRCS "" when the option is off).
  */

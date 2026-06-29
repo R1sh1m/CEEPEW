@@ -399,13 +399,9 @@ static void transport_ble_clear_discovery_peer_state_unlocked(void)
     g_ble_ctx.sign_pk_received         = false;
     g_ble_ctx.box_pubkey_received      = false;
     ceepew_secure_zero(g_ble_ctx.adv_commitment, sizeof(g_ble_ctx.adv_commitment));
-    /* NOTE: gatts_sign_pk_char_handle is NOT cleared here — it is assigned by
-     * the BLE stack via ESP_GATTS_ADD_CHAR_EVT during transport_ble_init().
-     * Clearing it here on a subsequent restart_discovery that does NOT re-init
-     * BLE (because the stack is already alive) would orphan the handle: the
-     * ESP_GATTS_ADD_CHAR_EVT callback only fires once per service creation and
-     * will never restore it.  The handle is stable across connections. */
-    // g_ble_ctx.gatts_sign_pk_char_handle = 0U;
+    /* gatts_sign_pk_char_handle is NOT cleared here — the BLE stack
+     * assigns it once via ESP_GATTS_ADD_CHAR_EVT during init and the
+     * handle is stable across connections. */
     g_ble_ctx.gattc_sign_pk_char_handle = 0U;
     g_ble_ctx.reconnect_attempts   = 0U;
     g_ble_ctx.connecting           = false;
@@ -574,8 +570,8 @@ static bool transport_ble_payload_contains(const uint8_t *buf,
  * complete local name "CEEPEW").  The existing 0xFFF0 service UUID in the
  * primary advertisement is left untouched.
  *
- * Layout (31 bytes total for len=16, Bug 2 fix with replay nonce,
- * Phase 7 with GATT-ready flag in bit 15):
+ * Layout (31 bytes total for len=16, replay nonce,
+ * GATT-ready flag in bit 15):
  *   [7, 0x09, 'C','E','E','P','E','W']                          — name (8B)
  *   [22, 0xFF, 0xEE, 0xCE, 0x50, nonce_hi, nonce_lo, c0..c15]  — mfr (23B)
  *
@@ -2590,23 +2586,6 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             ceepew_secure_zero(box_pk, sizeof(box_pk));
             ceepew_secure_zero(wifi_mac, sizeof(wifi_mac));
 
-            /* DIAG: hash of session_code for mismatch detection */
-            {
-                uint8_t sc_hash[32];
-                (void)crypto_sha256_compute(session_code, 32U, sc_hash);
-                ESP_LOGI(TAG, "GATTC encrypt DIAG: sc_hash=%02x%02x.. sc_byte0=%02x "
-                         "local=%02x:%02x:%02x:%02x:%02x:%02x "
-                         "peer=%02x:%02x:%02x:%02x:%02x:%02x",
-                         sc_hash[0], sc_hash[1], session_code[0],
-                         g_ble_ctx.local_mac[0], g_ble_ctx.local_mac[1],
-                         g_ble_ctx.local_mac[2], g_ble_ctx.local_mac[3],
-                         g_ble_ctx.local_mac[4], g_ble_ctx.local_mac[5],
-                         g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1],
-                         g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
-                         g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
-                ceepew_secure_zero(sc_hash, sizeof(sc_hash));
-            }
-
             uint8_t encrypted[GATT_CRYPTO_TOTAL_BYTES];
             CeePewErr_t enc_err = gatt_crypto_encrypt_with_ids(
                 session_code,
@@ -2623,8 +2602,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 break;
             }
 
-            /* Gate sign_pk write on MTU negotiation — the 86-byte
-             * payload requires MTU >= 90. If MTU is not yet negotiated,
+            /* Gate sign_pk write on MTU negotiation — the 87-byte
+             * payload requires MTU >= 91. If MTU is not yet negotiated,
              * buffer the encrypted payload and dispatch it from the
              * CFG_MTU_EVT handler once the MTU is confirmed sufficient.
              * If MTU IS already negotiated, dispatch immediately but only
@@ -2837,7 +2816,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             (void)esp_ble_gatts_start_service(param->create.service_handle);
             /* Use explicit attribute value buffer for sign_pk characteristic (GATT_CRYPTO_TOTAL_BYTES).
              * The old NULL attr_value + NULL attr_control approach used stack defaults
-             * which were too small for the 86-byte (70B ct + 16B tag) payload,
+             * which were too small for the 87-byte (1B ctr + 70B ct + 16B tag) payload,
              * causing ESP_GATT_INTERNAL_ERROR (133) on GATT writes. */
             (void)esp_ble_gatts_add_char(
                 param->create.service_handle,
@@ -2998,7 +2977,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                  *     GATTS path remains one-way (peer → us).
                  *
                  * MTU validation: reject writes that don't carry the full
-                 * encrypted payload (GATT_CRYPTO_TOTAL_BYTES bytes). A truncated
+                 * sign_pk payload (GATT_CRYPTO_TOTAL_BYTES bytes). A truncated
                  * write would fail Ascon tag verification anyway, but we
                  * check early to get a clearer diagnostic log. */
                 if (param->write.len != GATT_CRYPTO_TOTAL_BYTES) {
@@ -3041,22 +3020,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                          g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
                          g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5],
                          (unsigned)param->write.len);
-                /* DIAG: hash of session_code for mismatch detection */
-                uint8_t sc_hash[32];
-                (void)crypto_sha256_compute(session_code, 32U, sc_hash);
-                uint8_t sc_expected = session_code[0];
-                ESP_LOGI(TAG, "GATTS decrypt DIAG: sc_hash=%02x%02x.. sc_byte0=%02x "
-                         "local=%02x:%02x:%02x:%02x:%02x:%02x "
-                         "peer=%02x:%02x:%02x:%02x:%02x:%02x",
-                         sc_hash[0], sc_hash[1], sc_expected,
-                         g_ble_ctx.local_mac[0], g_ble_ctx.local_mac[1],
-                         g_ble_ctx.local_mac[2], g_ble_ctx.local_mac[3],
-                         g_ble_ctx.local_mac[4], g_ble_ctx.local_mac[5],
-                         g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1],
-                         g_ble_ctx.peer_mac[2], g_ble_ctx.peer_mac[3],
-                         g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
-                ceepew_secure_zero(sc_hash, sizeof(sc_hash));
-
                 CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
                     session_code,
                     g_ble_ctx.local_mac,
@@ -3559,6 +3522,7 @@ bool transport_ble_is_recovering(void)
     return s_supervisor_recovering != 0U;
 }
 
+#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
 void transport_ble_debug_trigger_timeout(void)
 {
     PairingPhase_t phase = transport_ble_get_phase();
@@ -3570,5 +3534,6 @@ void transport_ble_debug_trigger_timeout(void)
     ESP_LOGD(TAG, "DEBUG: Manually triggering timeout recovery");
     transport_ble_post_event(PAIRING_EVENT_PHASE_TIMEOUT, NULL, 0U);
 }
+#endif /* CONFIG_CEEPEW_DEVELOPMENT_MODE */
 
 #endif
