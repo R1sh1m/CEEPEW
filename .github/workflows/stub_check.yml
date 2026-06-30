@@ -9,10 +9,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Find Stub markers
         run: |
-          echo "Scanning repository for 'Stub:' markers..."
+          echo "Scanning repository for Stub markers..."
           set -e
           # Search text files for common stub markers, fail if any found
-          if git ls-files -z | xargs -0 grep -I --line-number -H "Stub:"; then
+          if git grep -I --line-number "Stu[b]:"; then
             echo "Stub markers found. Failing job.";
             exit 1;
           else
