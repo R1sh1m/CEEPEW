@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 135" width="100%" height="auto">
+  <defs>
+    <linearGradient id="rainbow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff3366" />
+      <stop offset="20%" stop-color="#ff6633" />
+      <stop offset="40%" stop-color="#ffcc33" />
+      <stop offset="60%" stop-color="#33cc66" />
+      <stop offset="80%" stop-color="#3399ff" />
+      <stop offset="100%" stop-color="#9933ff" />
+    </linearGradient>
+  </defs>
+  <style>
+    .ascii {
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+      font-size: 15px;
+      font-weight: 900;
+      fill: url(#rainbow);
+    }
+  </style>
+  <text x="10" y="20" class="ascii">
+    <tspan x="10" dy="0"> _____ _____ _____ _____ _____ _ _ _ </tspan>
+    <tspan x="10" dy="18">/  __ \  ___|  ___|  _ \  ___| | | |</tspan>
+    <tspan x="10" dy="18">| /  \/ |__ | |__ | |_) | |__ | | | |</tspan>
+    <tspan x="10" dy="18">| |   |  __|  __| |  __/|  __| | | | |</tspan>
+    <tspan x="10" dy="18">| \__/\ |___| |___| |   | |___| | | |</tspan>
+    <tspan x="10" dy="18"> \____/\____/\____/_|   \____/ \_/\_/</tspan>
+  </text>
+</svg>
