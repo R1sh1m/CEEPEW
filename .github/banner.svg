@@ -1,28 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 135" width="100%" height="auto">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 445 120" width="100%" height="auto">
   <defs>
-    <linearGradient id="rainbow" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#ff3366" />
-      <stop offset="20%" stop-color="#ff6633" />
-      <stop offset="40%" stop-color="#ffcc33" />
-      <stop offset="60%" stop-color="#33cc66" />
-      <stop offset="80%" stop-color="#3399ff" />
-      <stop offset="100%" stop-color="#9933ff" />
-    </linearGradient>
+    <!-- Import Outfit font from Google Fonts -->
+    <style type="text/css">
+      @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@900&amp;display=swap');
+      .box-text {
+        font-family: 'Outfit', 'Arial Black', sans-serif;
+        font-size: 56px;
+        font-weight: 900;
+        text-anchor: middle;
+        fill: black;
+      }
+    </style>
+
+    <!-- Masks for punching out the letters from each box -->
+    <mask id="mask-C">
+      <rect x="20" y="20" width="80" height="80" rx="18" fill="white" />
+      <text x="60" y="80" class="box-text">C</text>
+    </mask>
+    <mask id="mask-E1">
+      <rect x="85" y="20" width="80" height="80" rx="18" fill="white" />
+      <text x="125" y="80" class="box-text">E</text>
+    </mask>
+    <mask id="mask-E2">
+      <rect x="150" y="20" width="80" height="80" rx="18" fill="white" />
+      <text x="190" y="80" class="box-text">E</text>
+    </mask>
+    <mask id="mask-P">
+      <rect x="215" y="20" width="80" height="80" rx="18" fill="white" />
+      <text x="255" y="80" class="box-text">P</text>
+    </mask>
+    <mask id="mask-E3">
+      <rect x="280" y="20" width="80" height="80" rx="18" fill="white" />
+      <text x="320" y="80" class="box-text">E</text>
+    </mask>
+    <mask id="mask-W">
+      <rect x="345" y="20" width="80" height="80" rx="18" fill="white" />
+      <text x="385" y="80" class="box-text">W</text>
+    </mask>
   </defs>
-  <style>
-    .ascii {
-      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
-      font-size: 15px;
-      font-weight: 900;
-      fill: url(#rainbow);
-    }
-  </style>
-  <text x="10" y="20" class="ascii">
-    <tspan x="10" dy="0"> _____ _____ _____ _____ _____ _ _ _ </tspan>
-    <tspan x="10" dy="18">/  __ \  ___|  ___|  _ \  ___| | | |</tspan>
-    <tspan x="10" dy="18">| /  \/ |__ | |__ | |_) | |__ | | | |</tspan>
-    <tspan x="10" dy="18">| |   |  __|  __| |  __/|  __| | | | |</tspan>
-    <tspan x="10" dy="18">| \__/\ |___| |___| |   | |___| | | |</tspan>
-    <tspan x="10" dy="18"> \____/\____/\____/_|   \____/ \_/\_/</tspan>
-  </text>
+
+  <!-- Overlapping boxes with masks and opacity for blending -->
+  <g>
+    <!-- C: Yellow -->
+    <rect x="20" y="20" width="80" height="80" rx="18" fill="#FFE600" opacity="0.9" mask="url(#mask-C)" />
+    <!-- E: Orange -->
+    <rect x="85" y="20" width="80" height="80" rx="18" fill="#FF8C00" opacity="0.9" mask="url(#mask-E1)" />
+    <!-- E: Red -->
+    <rect x="150" y="20" width="80" height="80" rx="18" fill="#FF3300" opacity="0.9" mask="url(#mask-E2)" />
+    <!-- P: Purple -->
+    <rect x="215" y="20" width="80" height="80" rx="18" fill="#9900CC" opacity="0.9" mask="url(#mask-P)" />
+    <!-- E: Blue -->
+    <rect x="280" y="20" width="80" height="80" rx="18" fill="#0066FF" opacity="0.9" mask="url(#mask-E3)" />
+    <!-- W: Green -->
+    <rect x="345" y="20" width="80" height="80" rx="18" fill="#00CC44" opacity="0.9" mask="url(#mask-W)" />
+  </g>
 </svg>
