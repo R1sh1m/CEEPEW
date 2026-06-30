@@ -1,8 +1,17 @@
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/rishi-misra/ceepew/main/.github/banner-dark.svg">
-  <img alt="CEE-PEW" src="https://raw.githubusercontent.com/rishi-misra/ceepew/main/.github/banner-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/R1sh1m/ceepew/main/.github/banner-dark.svg">
+  <img alt="CEE-PEW" src="https://raw.githubusercontent.com/R1sh1m/ceepew/main/.github/banner-light.svg">
 </picture>
+
+```ansi
+ [1;31m_[1;33m_[1;33m_[1;32m_[1;32m_ [1;36m_[1;34m_[1;34m_[1;35m_[1;35m_ [1;31m_[1;33m_[1;33m_[1;32m_[1;32m_ [1;36m_[1;34m_[1;34m_[1;35m_[1;35m_ [1;31m_[1;33m_[1;33m_[1;32m_[1;32m_ [1;36m_ [1;34m_ [1;35m_ [0m
+[1;33m/  [1;32m_[1;36m_ [1;34m\  [1;35m_[1;31m_[1;31m_[1;33m|  [1;32m_[1;36m_[1;36m_[1;34m|  [1;35m_ [1;31m\  [1;32m_[1;32m_[1;36m_[1;36m| [1;34m| [1;35m| [1;31m|[0m
+[1;32m| [1;36m/  [1;34m\[1;35m/ [1;31m|[1;31m_[1;33m_ [1;32m| [1;36m|[1;36m_[1;34m_ [1;35m| [1;31m|[1;31m_[1;33m) [1;32m| [1;36m|[1;36m_[1;34m_ [1;35m| [1;31m| [1;33m| [1;32m|[0m
+[1;36m| [1;34m|   [1;31m|  [1;33m_[1;32m_[1;32m|  [1;34m_[1;34m_[1;35m| [1;31m|  [1;33m_[1;32m_[1;32m/[1;36m|  [1;34m_[1;35m_[1;35m| [1;31m| [1;33m| [1;32m| [1;36m|[0m
+[1;34m| [1;35m\[1;35m_[1;31m_[1;31m/[1;33m\ [1;32m|[1;32m_[1;36m_[1;36m_[1;34m| [1;35m|[1;35m_[1;31m_[1;31m_[1;33m| [1;32m|   [1;34m| [1;35m|[1;35m_[1;31m_[1;31m_[1;33m| [1;32m| [1;36m| [1;34m|[0m
+ [1;35m\[1;31m_[1;31m_[1;33m_[1;33m_[1;32m/[1;32m\[1;36m_[1;36m_[1;34m_[1;34m_[1;35m/[1;35m\[1;31m_[1;31m_[1;33m_[1;33m_[1;32m/[1;32m_[1;36m|   [1;35m\[1;35m_[1;31m_[1;31m_[1;33m_[1;33m/ [1;32m\[1;36m_[1;36m/[1;34m\[1;34m_[1;35m/[0m
+```
 
 # CEE-PEW
 
