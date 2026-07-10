@@ -7,11 +7,11 @@ idf_component_register(
         "include"
         "."
     REQUIRES
+        ceepew_common
         driver
         esp_driver_gpio
         esp_driver_i2c
+        esp_adc
         esp_timer
         esp_common
-    PRIV_REQUIRES
-        main
 )

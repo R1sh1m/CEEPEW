@@ -9,6 +9,7 @@
 #include "ceepew_assert.h"
 #include "hal_adc.h"
 #include "ceepew_config.h"
+#include <stddef.h>
 
 CeePewErr_t input_get_normalized(const InputCtx_t *ctx, uint8_t *out_pot, bool *out_button, bool *out_diag){
     /* Two assertions as per coding standard */

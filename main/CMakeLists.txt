@@ -1,8 +1,6 @@
 idf_component_register(
     SRCS
         "main.c"
-        "ceepew_assert.c"
-        "ceepew_security_utils.c"
         "session_fsm.c"
         "session_msgstore.c"
         "session_send.c"
@@ -11,6 +9,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
     REQUIRES
+        ceepew_common
         ceepew_hal
         ceepew_oled
         crypto
@@ -27,4 +26,5 @@ idf_component_register(
         esp_timer
         freertos
         log
+        bt
 )

@@ -4,7 +4,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
     REQUIRES
-        main
+        ceepew_common
         esp_common
         mem
         log

@@ -29,7 +29,7 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "hal_pins.h"
+#include "../hal/hal_pins.h"
 
 /* ── Control-byte / command-set constants ─────────────────────────── */
 

@@ -19,7 +19,6 @@
 #define HAL_PINS_H
 
 #include "driver/gpio.h"
-#include "esp_wifi.h"
 #include "esp_adc/adc_oneshot.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"

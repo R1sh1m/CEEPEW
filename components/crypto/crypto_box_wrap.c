@@ -4,7 +4,7 @@
 #include "crypto_stream.h"
 #include "crypto_sha256.h"
 #include "ceepew_security_utils.h"
-#include "session_fsm.h"
+#include "../../main/session_fsm.h"
 
 #include "curve25519.h"
 

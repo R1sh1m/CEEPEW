@@ -4,6 +4,7 @@
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include <stdint.h>
+#include <stddef.h>
 
 /*
  * SHA256(digital_sum_mix(code) || code) forms the HKDF salt for every session key.

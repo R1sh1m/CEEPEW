@@ -11,7 +11,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "session_fsm.h"
-#include "session_send.h"
 #include "crypto_ctx.h"
 
 static const char *TAG = "test_espnow_roundtrip";

@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "transport_esl.h"
-#include "session_fsm.h"
+#include "../../main/session_fsm.h"
 
 static const char *TAG = "transport_espnow";
 

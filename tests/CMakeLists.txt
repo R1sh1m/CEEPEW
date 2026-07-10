@@ -41,6 +41,7 @@ idf_component_register(
         "components/crypto"
         "."
     REQUIRES
+        ceepew_common
         main
         ceepew_hal
         ceepew_oled

@@ -41,3 +41,6 @@ tools/eim_config.toml
 tools/monitor_both_*.txt
 tools/dual_capture.ps1
 tools/dual_capture.py
+
+# Workspace coding agent customizations
+.agents/

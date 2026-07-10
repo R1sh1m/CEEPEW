@@ -19,8 +19,8 @@
 
 #include "transport_ble.h"
 #include "transport_ble_gatt_crypto.h"
-#include "session_fsm.h"
-#include "session_memory.h"
+#include "../../main/session_fsm.h"
+#include "../../main/session_memory.h"
 #include "ui_manager.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_config.h"

@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "ceepew_assert.c"
+        "ceepew_security_utils.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        log
+)

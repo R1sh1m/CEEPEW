@@ -24,7 +24,7 @@ idf_component_register(
         "../hal"
         "."
     REQUIRES
-        main
+        ceepew_common
         crypto
         ceepew_oled
         esp_driver_gpio
@@ -41,4 +41,5 @@ idf_component_register(
         esp_common
         esp_system
         efuse
+        bt
 )

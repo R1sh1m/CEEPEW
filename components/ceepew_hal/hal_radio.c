@@ -33,7 +33,7 @@
 #include "../transport/transport_hop.h"
 #include "../transport/transport_esl.h"
 #include "../crypto/crypto_ctx.h"
-#include "session_fsm.h"
+#include "../../main/session_fsm.h"
 
 #include <string.h>
 

@@ -17,7 +17,13 @@ set(EXTRA_COMPONENT_DIRS
 #   - calls idf_build_process internally
 #   - registers menuconfig, bootloader, flash targets
 # DO NOT call idf_build_process() anywhere else.
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+if(NOT DEFINED ENV{IDF_PATH} OR "$ENV{IDF_PATH}" STREQUAL "")
+    set(ENV{IDF_PATH} "C:/esp/v6.0.2/esp-idf")
+    set(IDF_PATH "C:/esp/v6.0.2/esp-idf")
+else()
+    set(IDF_PATH "$ENV{IDF_PATH}")
+endif()
+include(${IDF_PATH}/tools/cmake/project.cmake)
 
 # Keep the build focused on the components this app actually uses.
 idf_build_set_property(MINIMAL_BUILD ON)

@@ -22,7 +22,7 @@
 #include "../crypto/crypto_ctx.h"
 #include "../crypto/crypto_rng.h"
 #include "../crypto/crypto_ascon.h"
-#include "session_fsm.h"
+#include "../../main/session_fsm.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"

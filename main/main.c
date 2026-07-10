@@ -6,7 +6,9 @@
 #include "esp_chip_info.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#ifdef CONFIG_BT_ENABLED
 #include "esp_bt.h"
+#endif
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
 #include "session_memory.h"
@@ -88,6 +90,7 @@ void app_main(void){
         ESP_LOGE(TAG, "hal_ui_init failed: %d — continuing headless", (int)err);
     }
 
+#ifdef CONFIG_BT_ENABLED
     /* Release Classic BT memory — BLE only */
     esp_err_t bt_mem_err = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
     if (bt_mem_err != ESP_OK) {
@@ -96,6 +99,7 @@ void app_main(void){
     } else {
         ESP_LOGI(TAG, "Classic BT memory released to heap — BLE-only mode");
     }
+#endif
 
     err = hal_radio_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "hal_radio_init failed: %d", (int)err); return; }

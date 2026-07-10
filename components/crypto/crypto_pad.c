@@ -3,6 +3,7 @@
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include <stdint.h>
+#include <stddef.h>
 
 #define CEEPEW_PAD_BLOCK_SIZE 64U
 
