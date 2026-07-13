@@ -6,6 +6,7 @@ idf_component_register(
         "session_send.c"
         "task_ui.c"
         "task_session.c"
+
     INCLUDE_DIRS
         "."
     REQUIRES

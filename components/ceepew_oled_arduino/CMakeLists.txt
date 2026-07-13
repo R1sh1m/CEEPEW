@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "ceepew_oled_arduino_transport.cpp"
+    INCLUDE_DIRS
+        "include"
+        "."
+    REQUIRES
+        arduino-esp32
+        ceepew_common
+)

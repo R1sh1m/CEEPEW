@@ -17,7 +17,7 @@
 #include "ceepew_oled.h"
 #include "ceepew_oled_gfx_primitives.h"
 #include "hal_pins.h"
-#include "ceepew_config.h"
+#include "esp_err.h"
 #include "ceepew_assert.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -28,6 +28,16 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include "esp_mac.h"
+
+static uint8_t get_board_tag(void)
+{
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) {
+        return mac[5];
+    }
+    return 0;
+}
 
 /* ── Module state ─────────────────────────────────────────────────── */
 static ceepew_oled_t *s_oled;       /* the panel device handle           */
@@ -103,15 +113,15 @@ static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t f
 
     s_oled = ceepew_oled_create();
     if (s_oled == NULL) {
-        (void)i2c_master_bus_rm_device(dev);
-        (void)i2c_del_master_bus(bus);
+        (void)ceepew_oled_bus_cleanup(bus, dev);
         return CEEPEW_ERR_HW;
     }
     s_fb = ceepew_oled_get_buffer(s_oled);
 
     rc = ceepew_oled_init_panel(s_oled, bus, dev, addr);
     if (rc == ESP_OK) {
-        ESP_LOGI(TAG, "OLED bring-up SUCCESS on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
+        s_sh1106_mode = false;
+        ESP_LOGI(TAG, "OLED bring-up SUCCESS (SSD1306) on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
                  (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq);
         return CEEPEW_OK;
     }
@@ -120,8 +130,7 @@ static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t f
              (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq, (int)rc, esp_err_to_name(rc));
 
     /* Clean up the failed attempt */
-    (void)i2c_master_bus_rm_device(dev);
-    (void)i2c_del_master_bus(bus);
+    (void)ceepew_oled_bus_cleanup(bus, dev);
     ceepew_oled_destroy(s_oled);
     s_oled = NULL;
     s_fb = NULL;
@@ -142,14 +151,14 @@ static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uin
 
     s_oled = ceepew_oled_create();
     if (s_oled == NULL) {
-        (void)i2c_master_bus_rm_device(dev);
-        (void)i2c_del_master_bus(bus);
+        (void)ceepew_oled_bus_cleanup(bus, dev);
         return CEEPEW_ERR_HW;
     }
     s_fb = ceepew_oled_get_buffer(s_oled);
 
     rc = ceepew_oled_init_panel_sh1106(s_oled, bus, dev, addr);
     if (rc == ESP_OK) {
+        s_sh1106_mode = true;
         ESP_LOGI(TAG, "OLED bring-up SUCCESS (SH1106) on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
                  (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq);
         return CEEPEW_OK;
@@ -159,8 +168,7 @@ static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uin
              (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq, (int)rc, esp_err_to_name(rc));
 
     /* Clean up the failed attempt */
-    (void)i2c_master_bus_rm_device(dev);
-    (void)i2c_del_master_bus(bus);
+    (void)ceepew_oled_bus_cleanup(bus, dev);
     ceepew_oled_destroy(s_oled);
     s_oled = NULL;
     s_fb = NULL;
@@ -170,47 +178,40 @@ static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uin
 
 static CeePewErr_t ssd1306_bringup(void)
 {
-    /* Try Configuration 1: Primary pins, Primary address, Primary frequency */
+    /* Try SSD1306 configurations first */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 2: Primary pins, Fallback address, Primary frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 2b: Primary pins, Primary address, Fallback frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 2c: Primary pins, Fallback address, Fallback frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 3: Fallback pins, Primary address, Primary frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 4: Fallback pins, Fallback address, Primary frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 5: Fallback pins, Primary address, Fallback frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* Try Configuration 6: Fallback pins, Fallback address, Fallback frequency */
     if (try_bringup_config(CEEPEW_PIN_I2C_SDA_FALLBACK, CEEPEW_PIN_I2C_SCL_FALLBACK, CEEPEW_I2C_FREQ_FALLBACK_HZ, CEEPEW_OLED_I2C_ADDR_FB) == CEEPEW_OK) {
         return CEEPEW_OK;
     }
 
-    /* All SSD1306 configs failed. Try SH1106 with the same 6 combos. */
+    /* Fallback to SH1106 configurations second */
     ESP_LOGW(TAG, "All SSD1306 configs failed, trying SH1106 init...");
 
     if (try_bringup_config_sh1106(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR) == CEEPEW_OK) {
@@ -251,14 +252,19 @@ static CeePewErr_t ssd1306_bringup(void)
 
 static CeePewErr_t ssd1306_display_push(void)
 {
-    esp_err_t rc = ceepew_oled_display(s_oled);
-    if (rc != ESP_OK && !s_sh1106_mode) {
+    esp_err_t rc;
+    if (s_sh1106_mode) {
         rc = ceepew_oled_display_sh1106(s_oled, 2U);
-        if (rc == ESP_OK) {
-            s_sh1106_mode = true;
-            ESP_LOGW(TAG, "Switched to SH1106 +2 column offset");
-        } else {
-            ESP_LOGE(TAG, "display push failed on both SSD1306 and SH1106 attempts");
+    } else {
+        rc = ceepew_oled_display(s_oled);
+        if (rc != ESP_OK) {
+            rc = ceepew_oled_display_sh1106(s_oled, 2U);
+            if (rc == ESP_OK) {
+                s_sh1106_mode = true;
+                ESP_LOGW(TAG, "Switched to SH1106 +2 column offset");
+            } else {
+                ESP_LOGE(TAG, "display push failed on both SSD1306 and SH1106 attempts");
+            }
         }
     }
     if (rc == ESP_OK) {
@@ -302,16 +308,70 @@ CeePewErr_t hal_ui_init(void)
     CEEPEW_ASSERT(GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SDA) &&
                   GPIO_IS_VALID_GPIO(CEEPEW_PIN_I2C_SCL), CEEPEW_ERR_PINS);
 
-    ESP_LOGI(TAG, "hal_ui_init (in-house ceepew_oled, I2C only)");
+    /* I2C peripheral settling delay.
+     *
+     * The boot-time I2C scanner (hal_i2c_scanner.c) creates and destroys the
+     * I2C master bus on port 0 (GPIO26/27) before this function runs. After
+     * i2c_del_master_bus(), the ESP32 I2C0 peripheral hardware enters a reset
+     * sequence that takes ~50–75 ms to complete. During that window, a new bus
+     * on port 0 can be created at the driver level (returns ESP_OK) but the
+     * peripheral cannot clock out data bytes — every i2c_master_transmit()
+     * returns ESP_ERR_INVALID_RESPONSE (264) because the device NACKs.
+     *
+     * This 500 ms delay guarantees the peripheral has exited its reset sequence
+     * and the OLED display has completed its power-on settling before the first
+     * OLED init command is sent. In production builds where the scanner is gated
+     * behind CONFIG_CEEPEW_DEVELOPMENT_MODE, this delay provides a safe power-up
+     * margin for the OLED controller. */
+    vTaskDelay(pdMS_TO_TICKS(500U));
+
+    ESP_LOGI(TAG, "[BOARD %02X] hal_ui_init (in-house ceepew_oled, I2C only)", get_board_tag());
     s_sh1106_mode        = false;
     s_framebuffer_dirty   = true;   /* initial flush below is non-redundant */
     s_display_absent      = false;
     s_nonzero_flush_seen  = false;
     s_last_flush_diag_ms  = 0U;
 
-    CeePewErr_t err = ssd1306_bringup();
+    g_oled_in_init_stream = true;
+    int64_t init_start_time_us = esp_timer_get_time();
+
+    ESP_LOGI(TAG, "[BOARD %02X] OLED Init Attempt 1: Normal init (Primary Config)", get_board_tag());
+    CeePewErr_t err = try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR);
+    if (err == CEEPEW_OK) {
+        int64_t elapsed_ms = (esp_timer_get_time() - init_start_time_us) / 1000;
+        ESP_LOGI(TAG, "[BOARD %02X] OLED Init Attempt 1 SUCCESS. Elapsed time: %lld ms", get_board_tag(), elapsed_ms);
+    } else {
+        int64_t elapsed_ms = (esp_timer_get_time() - init_start_time_us) / 1000;
+        ESP_LOGW(TAG, "[BOARD %02X] OLED Init Attempt 1 FAILED. Elapsed time: %lld ms", get_board_tag(), elapsed_ms);
+
+        ESP_LOGI(TAG, "[BOARD %02X] Attempting bus recovery (SCL bit-bang)", get_board_tag());
+        ceepew_oled_bus_recover(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL);
+
+        ESP_LOGI(TAG, "[BOARD %02X] OLED Init Attempt 2: Retry init after bus recovery", get_board_tag());
+        err = try_bringup_config(CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL, CEEPEW_I2C_FREQ_HZ, CEEPEW_OLED_I2C_ADDR);
+        if (err == CEEPEW_OK) {
+            elapsed_ms = (esp_timer_get_time() - init_start_time_us) / 1000;
+            ESP_LOGI(TAG, "[BOARD %02X] OLED Init Attempt 2 SUCCESS. Elapsed time: %lld ms", get_board_tag(), elapsed_ms);
+        } else {
+            elapsed_ms = (esp_timer_get_time() - init_start_time_us) / 1000;
+            ESP_LOGW(TAG, "[BOARD %02X] OLED Init Attempt 2 FAILED. Elapsed time: %lld ms", get_board_tag(), elapsed_ms);
+
+            ESP_LOGI(TAG, "[BOARD %02X] Attempting full multi-attempt pin/speed/address matrix", get_board_tag());
+            err = ssd1306_bringup();
+            if (err == CEEPEW_OK) {
+                elapsed_ms = (esp_timer_get_time() - init_start_time_us) / 1000;
+                ESP_LOGI(TAG, "[BOARD %02X] OLED Init Attempt 3 SUCCESS. Elapsed time: %lld ms", get_board_tag(), elapsed_ms);
+            } else {
+                elapsed_ms = (esp_timer_get_time() - init_start_time_us) / 1000;
+                ESP_LOGE(TAG, "[BOARD %02X] OLED Init Attempt 3 FAILED. Elapsed time: %lld ms", get_board_tag(), elapsed_ms);
+            }
+        }
+    }
+
+    g_oled_in_init_stream = false;
+
     if (err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "OLED init failed — continuing headless; all display ops are no-ops");
+        ESP_LOGW(TAG, "[BOARD %02X] OLED init failed — continuing headless; all display ops are no-ops", get_board_tag());
         s_display_absent    = true;
         s_ui_initialised    = true;
         return CEEPEW_OK;
@@ -325,7 +385,7 @@ CeePewErr_t hal_ui_init(void)
 
     CeePewErr_t flush_err = ssd1306_display_push();
     if (flush_err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "Initial display flush failed — continuing headless");
+        ESP_LOGW(TAG, "[BOARD %02X] Initial display flush failed — continuing headless", get_board_tag());
         s_display_absent = true;
     }
 
@@ -397,7 +457,7 @@ CeePewErr_t hal_ui_flush(void)
         if (nonzero_bytes > 0U) { s_nonzero_flush_seen = true; }
     }
 
-    if (dirty_tiles > 0U && dirty_tiles <= 8U) {
+    if (!s_sh1106_mode && dirty_tiles > 0U && dirty_tiles <= 8U) {
         const CeePewErr_t err = ssd1306_display_push_tiled();
         if (err == CEEPEW_OK) {
             return CEEPEW_OK;

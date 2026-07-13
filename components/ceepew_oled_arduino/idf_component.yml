@@ -1,0 +1,7 @@
+## Managed component dependency for Arduino-esp32.
+## When this file is present, `idf.py reconfigure` will download
+## espressif/arduino-esp32 from the IDF Component Registry.
+## Resolved to v3.3.10 on IDF v6.0.2 (both driver-ng and legacy).
+dependencies:
+  espressif/arduino-esp32:
+    version: "^3.0.0"

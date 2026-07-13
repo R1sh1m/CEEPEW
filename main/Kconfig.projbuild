@@ -35,6 +35,17 @@ menu "CEE-PEW Build Options"
             eFuse user block.  Falls back to software-only salt if the
             eFuse block is not provisioned.
 
+    config CEEPEW_OLED_GRAPHICS_TEST
+        bool "OLED Graphics Test Mode (bypass normal firmware, cycle test patterns)"
+        default n
+        help
+            Standalone diagnostic mode that ports U8glib's GraphicsTest.pde
+            patterns to the in-house ceepew_oled / hal_ui stack.  The OLED
+            cycles through 72 frames (9 groups x 8 sub-states) of box, frame,
+            disc, circle, line, triangle, ASCII, and pixel-grid patterns.
+            Normal application tasks (session, BLE, etc.) are NOT started.
+            Disable for production builds.
+
     config CEEPEW_WIFI_FULL_RESTART
         bool "Full WiFi stop+start on BLE->WiFi transition"
         default y

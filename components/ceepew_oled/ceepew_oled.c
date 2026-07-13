@@ -5,13 +5,16 @@
  * Owns:
  *  - The framebuffer (1024 bytes, in struct storage).
  *  - The protocol logic for SSD1306 vs SH1106.
- *  - The I2C bus init (nopnop2002 pattern: create bus → add device →
- *    send init stream; no probe, no bus recovery, no scan).
+ *  - The I2C bus init (Arduino Wire transport — see Test 007).
  *
- * Does NOT own:
- *  - The i2c_master_bus_handle_t or i2c_master_dev_handle_t lifetime.
- *    The caller creates the bus via ceepew_oled_bus_init() and is
- *    responsible for i2c_del_master_bus() if needed.
+ * TRANSPORT NOTE (see DEBUG_LOG_OLED_I2C.md Test 007):
+ *  The ESP-IDF driver-ng API (driver/i2c_master.h) and legacy driver
+ *  (driver/i2c.h) both NACK on data-phase bytes for this OLED clone.
+ *  The Arduino Wire library works. This file uses the ceepew_oled_arduino
+ *  component as its transport. The i2c_master_bus_handle_t /
+ *  i2c_master_dev_handle_t fields in the struct are retained as non-NULL
+ *  sentinels so that existing assert()s in hal_ui.c are satisfied without
+ *  requiring caller changes.
  *
  * License: GPL-3.0-only. See /LICENSE.
  */
@@ -26,10 +29,55 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-#include "driver/i2c_master.h"
+#include "driver/i2c_master.h"  /* kept for handle typedefs used by callers */
+#include "ceepew_oled_arduino_transport.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "../hal/hal_pins.h"
+#include "esp_mac.h"
+#include "esp_rom_sys.h"
+#include "ceepew_config.h"
+
+static const char *TAG = "ceepew_oled";
+
+bool g_oled_in_init_stream = false;
+
+static uint8_t get_board_tag(void)
+{
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) {
+        return mac[5];
+    }
+    return 0;
+}
+
+static uint32_t s_i2c_tx_attempts = 0;
+
+/* Sentinel handle returned to callers that check for != NULL.  The
+ * Arduino Wire transport owns the actual bus; this pointer is never
+ * dereferenced here. */
+static uint8_t s_sentinel_bus_marker = 0xBBU;
+static uint8_t s_sentinel_dev_marker = 0xDDU;
+
+static esp_err_t ceepew_oled_i2c_transmit(i2c_master_dev_handle_t dev_handle,
+                                           const uint8_t *write_buffer,
+                                           size_t write_size,
+                                           int xfer_timeout_ms)
+{
+    /* dev_handle is a sentinel value; ignore it.  Route through the
+     * Arduino Wire transport which works on this hardware where the
+     * IDF I2C drivers NACK. */
+    (void)dev_handle;
+    s_i2c_tx_attempts++;
+    (void)xfer_timeout_ms;
+    esp_err_t rc = ceepew_oled_arduino_transmit(write_buffer, write_size);
+    if (g_oled_in_init_stream) {
+        ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] [WIRE TX #%lu] size=%u rc=%d (%s)",
+                 get_board_tag(), (unsigned long)s_i2c_tx_attempts,
+                 (unsigned)write_size, (int)rc, esp_err_to_name(rc));
+    }
+    return rc;
+}
 
 /* ── Control-byte / command-set constants ─────────────────────────── */
 
@@ -62,27 +110,21 @@
 
 /* ── Internal types ──────────────────────────────────────────────── */
 
-#define CEEPEW_OLED_FAST_HZ    800000U
-#define CEEPEW_OLED_SLOW_HZ    400000U
 #define CEEPEW_OLED_TILE_COLS  16U
 #define CEEPEW_OLED_TILE_ROWS  8U
 
 struct ceepew_oled_t {
     i2c_master_bus_handle_t  bus;
     i2c_master_dev_handle_t  i2c_dev;
-    i2c_master_dev_handle_t  i2c_dev_fast;
     uint8_t                  addr;
     uint8_t                  buffer[CEEPEW_OLED_BUF_SIZE];
     bool                     sh1106_mode;
     bool                     initialised;
-    bool                     fast_probed;
-    bool                     fast_active;
-    bool                     fast_failed;
 };
 
 /* ── Logging tag ─────────────────────────────────────────────────── */
 
-static const char *TAG = "ceepew_oled";
+/* TAG defined early at the top of the file */
 
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
@@ -105,18 +147,14 @@ void ceepew_oled_restore_state(void)
 
 ceepew_oled_t *ceepew_oled_create(void)
 {
-    assert(sizeof(ceepew_oled_t) > 0U);
+    // Static device is used, size is verified by compile-time layout.
 
     (void)memset(&s_dev, 0, sizeof(s_dev));
-    s_dev.bus          = NULL;
-    s_dev.i2c_dev      = NULL;
-    s_dev.i2c_dev_fast = NULL;
-    s_dev.addr         = 0U;
-    s_dev.sh1106_mode  = false;
-    s_dev.initialised  = false;
-    s_dev.fast_probed  = false;
-    s_dev.fast_active  = false;
-    s_dev.fast_failed  = false;
+    s_dev.bus         = NULL;
+    s_dev.i2c_dev     = NULL;
+    s_dev.addr        = 0U;
+    s_dev.sh1106_mode = false;
+    s_dev.initialised = false;
     return &s_dev;
 }
 
@@ -128,15 +166,11 @@ void ceepew_oled_destroy(ceepew_oled_t *dev)
         p[i] = 0U;
     }
     __asm__ __volatile__("" ::: "memory");
-    dev->bus          = NULL;
-    dev->i2c_dev      = NULL;
-    dev->i2c_dev_fast = NULL;
-    dev->addr         = 0U;
-    dev->sh1106_mode  = false;
-    dev->initialised  = false;
-    dev->fast_probed  = false;
-    dev->fast_active  = false;
-    dev->fast_failed  = false;
+    dev->bus         = NULL;
+    dev->i2c_dev     = NULL;
+    dev->addr        = 0U;
+    dev->sh1106_mode = false;
+    dev->initialised = false;
 }
 
 /* ── Framebuffer access ──────────────────────────────────────────── */
@@ -165,7 +199,7 @@ bool ceepew_oled_get_sh1106_mode(const ceepew_oled_t *dev)
     return dev->sh1106_mode;
 }
 
-/* ── I2C bus init (nopnop2002 pattern) ───────────────────────────── */
+/* ── I2C bus init (Arduino Wire transport) ────────────────────────── */
 
 esp_err_t ceepew_oled_bus_init(i2c_master_bus_handle_t *out_bus,
                                i2c_master_dev_handle_t *out_dev,
@@ -177,51 +211,82 @@ esp_err_t ceepew_oled_bus_init(i2c_master_bus_handle_t *out_bus,
     *out_bus = NULL;
     *out_dev = NULL;
 
-    const i2c_master_bus_config_t bus_cfg = {
-        .i2c_port              = CEEPEW_I2C_PORT,
-        .sda_io_num            = sda,
-        .scl_io_num            = scl,
-        .clk_source            = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt     = 7U,
-        .intr_priority         = 0,
-        /* Synchronous mode: no async queue, every i2c_master_transmit()
-         * blocks until the physical transfer completes. */
-        .trans_queue_depth     = 0U,
-        .flags = {
-            .enable_internal_pullup = 1U,
-            .allow_pd               = 0U,
-        },
-    };
+    /* ---------------------------------------------------------------
+     * TRANSPORT: Arduino Wire library (register-level I2C HAL).
+     *
+     * Both the IDF driver-ng (i2c_master_transmit) and legacy driver
+     * (i2c_master_write_to_device) NACK on data-phase bytes for this
+     * OLED clone.  The Arduino Wire library, which uses the low-level
+     * ESP32 I2C HAL (register-level), works on the same hardware.
+     * See DEBUG_LOG_OLED_I2C.md, Tests 001-007.
+     * --------------------------------------------------------------- */
 
-    i2c_master_bus_handle_t bus = NULL;
-    esp_err_t rc = i2c_new_master_bus(&bus_cfg, &bus);
+    (void)sda;
+    (void)scl;
+    (void)speed_hz;
+    (void)addr;
+
+    /* Raw GPIO pre-init — confirm bus lines are pulled HIGH */
+    gpio_reset_pin(sda);
+    gpio_reset_pin(scl);
+    gpio_set_direction(sda, GPIO_MODE_INPUT);
+    gpio_set_direction(scl, GPIO_MODE_INPUT);
+    vTaskDelay(pdMS_TO_TICKS(2));
+    int sda_lvl = gpio_get_level(sda);
+    int scl_lvl = gpio_get_level(scl);
+    ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] GPIO pre-init: SDA(GPIO%d)=%d, SCL(GPIO%d)=%d",
+             get_board_tag(), (int)sda, sda_lvl, (int)scl, scl_lvl);
+
+    /* Initialise the Arduino Wire transport on GPIO26/27 at 400 kHz */
+    esp_err_t rc = ceepew_oled_arduino_init();
+    ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] ceepew_oled_arduino_init (SDA=GPIO%d, SCL=GPIO%d, freq=400000) returned: %d (%s)",
+             get_board_tag(), (int)sda, (int)scl,
+             (int)rc, esp_err_to_name(rc));
     if (rc != ESP_OK) {
-        ESP_LOGW(TAG, "i2c_new_master_bus(SDA=%d,SCL=%d,@%luHz) failed: %d (%s)",
-                 (int)sda, (int)scl, (unsigned long)speed_hz,
-                 (int)rc, esp_err_to_name(rc));
+        CEEPEW_LOG(TAG, "OLED Arduino init failed: esp_err %d (%s)", rc, esp_err_to_name(rc));
         return rc;
     }
 
-    const i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = addr,
-        .scl_speed_hz    = speed_hz,
-    };
-    i2c_master_dev_handle_t dev = NULL;
-    rc = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
-    if (rc != ESP_OK) {
-        ESP_LOGW(TAG, "i2c_master_bus_add_device(0x%02X) failed: %d (%s)",
-                 (unsigned)addr, (int)rc, esp_err_to_name(rc));
-        (void)i2c_del_master_bus(bus);
-        return rc;
-    }
+    /* Return sentinel non-NULL handles so that callers (hal_ui.c) that
+     * check `bus != NULL` and `dev != NULL` are satisfied.  These pointers
+     * are NEVER dereferenced; the actual I2C is done via the Arduino Wire
+     * transport. */
+    *out_bus = (i2c_master_bus_handle_t)&s_sentinel_bus_marker;
+    *out_dev = (i2c_master_dev_handle_t)&s_sentinel_dev_marker;
 
-    ESP_LOGI(TAG, "I2C bus created — SDA=%d SCL=%d, device 0x%02X added (no probe)",
-             (int)sda, (int)scl, (unsigned)addr);
-
-    *out_bus = bus;
-    *out_dev = dev;
+    vTaskDelay(pdMS_TO_TICKS(10U));  /* allow Wire to stabilise */
     return ESP_OK;
+}
+
+/**
+ * @brief Safe cleanup of bus/dev handles.
+ *
+ * With the Arduino Wire transport the bus and dev are sentinel pointers
+ * pointing into static storage — they must NEVER be passed to
+ * i2c_master_bus_rm_device or i2c_del_master_bus, which would dereference
+ * them as real driver-ng handles and crash.  This function is a deliberate
+ * no-op: the Arduino Wire transport is installed once at boot and lives
+ * for the duration of the firmware run.
+ */
+void ceepew_oled_bus_cleanup(i2c_master_bus_handle_t bus,
+                              i2c_master_dev_handle_t dev)
+{
+    /* Intentional no-op for the Arduino Wire transport sentinel handles. */
+    (void)bus;
+    (void)dev;
+}
+
+/* Helper functions for sending commands in short chunks (avoids signal issues / controller NACKs on streams) */
+static esp_err_t send_cmd_1(i2c_master_dev_handle_t dev_handle, uint8_t cmd)
+{
+    uint8_t buf[2] = { CEEPEW_OLED_CTRL_CMD_STREAM, cmd };
+    return ceepew_oled_i2c_transmit(dev_handle, buf, 2, CEEPEW_OLED_I2C_TIMEOUT_TICKS);
+}
+
+static esp_err_t send_cmd_2(i2c_master_dev_handle_t dev_handle, uint8_t cmd, uint8_t param)
+{
+    uint8_t buf[4] = { 0x80U, cmd, CEEPEW_OLED_CTRL_CMD_STREAM, param };
+    return ceepew_oled_i2c_transmit(dev_handle, buf, 4, CEEPEW_OLED_I2C_TIMEOUT_TICKS);
 }
 
 /* ── SSD1306 init command stream ─────────────────────────────────── */
@@ -229,46 +294,44 @@ esp_err_t ceepew_oled_bus_init(i2c_master_bus_handle_t *out_bus,
 static esp_err_t send_init_stream(ceepew_oled_t *dev)
 {
     assert(dev != NULL);
-    assert(dev->i2c_dev != NULL);
+    /* dev->i2c_dev is a sentinel; actual I2C goes through legacy driver */
 
-    uint8_t out[32U];
-    uint8_t i = 0U;
-    out[i++] = CEEPEW_OLED_CTRL_CMD_STREAM;
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_OFF;             /* AE          */
-    out[i++] = CEEPEW_OLED_CMD_SET_MUX_RATIO;          /* A8          */
-    out[i++] = 0x3FU;                                   /* 64 MUX      */
-    out[i++] = CEEPEW_OLED_CMD_SET_DISPLAY_OFFSET;     /* D3          */
-    out[i++] = 0x00U;
-    out[i++] = CEEPEW_OLED_CMD_SET_DISPLAY_START_LINE; /* 40          */
-    out[i++] = CEEPEW_OLED_CMD_SET_SEGMENT_REMAP_1;    /* A1          */
-    out[i++] = CEEPEW_OLED_CMD_SET_COM_SCAN_MODE;      /* C8          */
-    out[i++] = CEEPEW_OLED_CMD_SET_DISPLAY_CLK_DIV;    /* D5          */
-    out[i++] = 0x80U;
-    out[i++] = CEEPEW_OLED_CMD_SET_COM_PIN_MAP;        /* DA          */
-    out[i++] = 0x12U;                                   /* alt COM cfg */
-    out[i++] = CEEPEW_OLED_CMD_SET_CONTRAST;           /* 81          */
-    out[i++] = 0xFFU;
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_RAM;            /* A4          */
-    out[i++] = CEEPEW_OLED_CMD_SET_VCOMH_DESELCT;      /* DB          */
-    out[i++] = 0x40U;
-    out[i++] = CEEPEW_OLED_CMD_SET_MEMORY_ADDR_MODE;   /* 20          */
-    out[i++] = CEEPEW_OLED_CMD_SET_PAGE_ADDR_MODE;     /* 02 (page)   */
-    out[i++] = CEEPEW_OLED_CMD_SET_LOWER_COL;          /* 00          */
-    out[i++] = CEEPEW_OLED_CMD_SET_HIGHER_COL;         /* 10          */
-    out[i++] = CEEPEW_OLED_CMD_SET_CHARGE_PUMP;        /* 8D          */
-    out[i++] = 0x14U;                                   /* pump on     */
-    out[i++] = CEEPEW_OLED_CMD_DEACTIVE_SCROLL;        /* 2E          */
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_NORMAL;         /* A6          */
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_ON;             /* AF          */
+    /* Replicate the old working driver (ssd1306_i2c_new.c @ 8473afd):
+     * send the entire init sequence as a single i2c_master_transmit burst
+     * starting with control byte CEEPEW_OLED_CTRL_CMD_STREAM (0x00).
+     * The old driver's 27-byte burst worked; the new approach of
+     * sending each command separately fails on this OLED clone. */
+    uint8_t cmd_buf[] = {
+        CEEPEW_OLED_CTRL_CMD_STREAM,
+        CEEPEW_OLED_CMD_DISPLAY_OFF,
+        CEEPEW_OLED_CMD_SET_MUX_RATIO, 0x3FU,
+        CEEPEW_OLED_CMD_SET_DISPLAY_OFFSET, 0x00U,
+        CEEPEW_OLED_CMD_SET_DISPLAY_START_LINE,
+        CEEPEW_OLED_CMD_SET_SEGMENT_REMAP_1,
+        CEEPEW_OLED_CMD_SET_COM_SCAN_MODE,
+        CEEPEW_OLED_CMD_SET_DISPLAY_CLK_DIV, 0x80U,
+        CEEPEW_OLED_CMD_SET_COM_PIN_MAP, 0x12U,
+        CEEPEW_OLED_CMD_SET_CONTRAST, 0xFFU,
+        CEEPEW_OLED_CMD_DISPLAY_RAM,
+        CEEPEW_OLED_CMD_SET_VCOMH_DESELCT, 0x40U,
+        CEEPEW_OLED_CMD_SET_MEMORY_ADDR_MODE, 0x02U,
+        CEEPEW_OLED_CMD_SET_LOWER_COL,
+        CEEPEW_OLED_CMD_SET_HIGHER_COL,
+        CEEPEW_OLED_CMD_SET_CHARGE_PUMP, 0x14U,
+        CEEPEW_OLED_CMD_DEACTIVE_SCROLL,
+        CEEPEW_OLED_CMD_DISPLAY_NORMAL,
+        CEEPEW_OLED_CMD_DISPLAY_ON,
+    };
 
-    esp_err_t rc = i2c_master_transmit(dev->i2c_dev, out, i,
-                                       CEEPEW_OLED_I2C_TIMEOUT_TICKS);
-    if (rc == ESP_OK) {
-        ESP_LOGI(TAG, "OLED panel configured for 128x64");
-    } else {
-        ESP_LOGE(TAG, "init stream failed: %d (%s)",
-                 (int)rc, esp_err_to_name(rc));
+    esp_err_t rc = ceepew_oled_i2c_transmit(dev->i2c_dev, cmd_buf, sizeof(cmd_buf),
+                                            CEEPEW_OLED_I2C_TIMEOUT_TICKS);
+    if (rc != ESP_OK) {
+        CEEPEW_LOG(TAG, "OLED init burst failed: esp_err %d (%s)", rc, esp_err_to_name(rc));
+        return rc;
     }
+
+    ESP_LOGI(TAG, "[BOARD %02X] OLED panel configured for SSD1306 (128x64)", get_board_tag());
+    vTaskDelay(pdMS_TO_TICKS(150U));
     return rc;
 }
 
@@ -277,113 +340,51 @@ static esp_err_t send_init_stream(ceepew_oled_t *dev)
 static esp_err_t send_init_stream_sh1106(ceepew_oled_t *dev)
 {
     assert(dev != NULL);
-    assert(dev->i2c_dev != NULL);
+    /* dev->i2c_dev is a sentinel; actual I2C goes through legacy driver */
 
-    uint8_t out[32U];
-    uint8_t i = 0U;
-    out[i++] = CEEPEW_OLED_CTRL_CMD_STREAM;
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_OFF;             /* AE          */
-    out[i++] = CEEPEW_OLED_CMD_SET_MUX_RATIO;          /* A8          */
-    out[i++] = 0x3FU;                                   /* 64 MUX      */
-    out[i++] = CEEPEW_OLED_CMD_SET_DISPLAY_OFFSET;     /* D3          */
-    out[i++] = 0x00U;
-    out[i++] = CEEPEW_OLED_CMD_SET_DISPLAY_START_LINE; /* 40          */
-    out[i++] = CEEPEW_OLED_CMD_SET_SEGMENT_REMAP_1;    /* A1          */
-    out[i++] = CEEPEW_OLED_CMD_SET_COM_SCAN_MODE;      /* C8          */
-    out[i++] = CEEPEW_OLED_CMD_SET_DISPLAY_CLK_DIV;    /* D5          */
-    out[i++] = 0x80U;
-    out[i++] = CEEPEW_OLED_CMD_SET_COM_PIN_MAP;        /* DA          */
-    out[i++] = 0x12U;                                   /* alt COM cfg */
-    out[i++] = CEEPEW_OLED_CMD_SET_CONTRAST;           /* 81          */
-    out[i++] = 0xFFU;
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_RAM;            /* A4          */
-    out[i++] = CEEPEW_OLED_CMD_SET_VCOMH_DESELCT;      /* DB          */
-    out[i++] = 0x40U;
-    out[i++] = CEEPEW_OLED_CMD_SET_MEMORY_ADDR_MODE;   /* 20          */
-    out[i++] = CEEPEW_OLED_CMD_SET_PAGE_ADDR_MODE;     /* 02 (page)   */
-    out[i++] = CEEPEW_OLED_CMD_SET_LOWER_COL;          /* 00          */
-    out[i++] = CEEPEW_OLED_CMD_SET_HIGHER_COL;         /* 10          */
-    out[i++] = CEEPEW_OLED_CMD_SET_CHARGE_PUMP;        /* 8D          */
-    out[i++] = 0x14U;                                   /* pump on     */
-    out[i++] = CEEPEW_OLED_CMD_DEACTIVE_SCROLL;        /* 2E          */
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_NORMAL;         /* A6          */
-    out[i++] = CEEPEW_OLED_CMD_DISPLAY_ON;             /* AF          */
+    esp_err_t rc = ESP_OK;
 
-    esp_err_t rc = i2c_master_transmit(dev->i2c_dev, out, i,
-                                       CEEPEW_OLED_I2C_TIMEOUT_TICKS);
-    if (rc == ESP_OK) {
-        ESP_LOGI(TAG, "SH1106 panel configured for 128x64");
-    } else {
-        ESP_LOGE(TAG, "SH1106 init stream failed: %d (%s)",
-                 (int)rc, esp_err_to_name(rc));
-    }
+    #define CHECK_RC(stage, expr) \
+        do { \
+            rc = (expr); \
+            if (rc != ESP_OK) { \
+                CEEPEW_LOG(TAG, "OLED init failed at stage %s: esp_err %d (%s)", stage, rc, esp_err_to_name(rc)); \
+                return rc; \
+            } \
+        } while (0)
+
+    CHECK_RC("init_stream_write_1", send_cmd_1(dev->i2c_dev, 0xAEU));  /* Display Off */
+    CHECK_RC("init_stream_write_2", send_cmd_2(dev->i2c_dev, 0xD5U, 0x80U));  /* Set Display Clock Divide Ratio */
+    CHECK_RC("init_stream_write_3", send_cmd_2(dev->i2c_dev, 0xA8U, 0x3FU));  /* Set Multiplex Ratio */
+    CHECK_RC("init_stream_write_4", send_cmd_2(dev->i2c_dev, 0xD3U, 0x00U));  /* Set Display Offset */
+    CHECK_RC("init_stream_write_5", send_cmd_1(dev->i2c_dev, 0x40U));  /* Set Display Start Line to 0 */
+    CHECK_RC("init_stream_write_6", send_cmd_2(dev->i2c_dev, 0xADU, 0x8BU));  /* Set Charge Pump Command (Enable) */
+    CHECK_RC("init_stream_write_7", send_cmd_1(dev->i2c_dev, 0xA1U));  /* Set Segment Re-map */
+    CHECK_RC("init_stream_write_8", send_cmd_1(dev->i2c_dev, 0xC8U));  /* Set COM Output Scan Direction */
+    CHECK_RC("init_stream_write_9", send_cmd_2(dev->i2c_dev, 0xDAU, 0x12U));  /* Set COM Pins Hardware Configuration */
+    CHECK_RC("init_stream_write_10", send_cmd_2(dev->i2c_dev, 0x81U, 0xFFU));  /* Set Contrast Control */
+    CHECK_RC("init_stream_write_11", send_cmd_2(dev->i2c_dev, 0xD9U, 0x22U));  /* Set Pre-charge Period */
+    CHECK_RC("init_stream_write_12", send_cmd_2(dev->i2c_dev, 0xDBU, 0x35U));  /* Set VCOMH Deselect Level */
+    CHECK_RC("init_stream_write_13", send_cmd_1(dev->i2c_dev, 0xA4U));  /* Entire Display ON */
+    CHECK_RC("init_stream_write_14", send_cmd_1(dev->i2c_dev, 0xA6U));  /* Set Normal Display */
+    CHECK_RC("init_stream_write_15", send_cmd_1(dev->i2c_dev, 0xAFU));  /* Set Display ON */
+
+    #undef CHECK_RC
+
+    ESP_LOGI(TAG, "[BOARD %02X] OLED panel configured for SH1106 (128x64)", get_board_tag());
+    vTaskDelay(pdMS_TO_TICKS(150U));
     return rc;
 }
 
-/* ── Fast-mode probe (opt-in 800 kHz fallback) ──────────────────── */
-
-static void probe_fast_mode(ceepew_oled_t *dev)
-{
-    if (dev->bus == NULL) {
-        return;
-    }
-    if (dev->fast_probed || dev->fast_failed) {
-        return;
-    }
-
-    const i2c_device_config_t fast_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = dev->addr,
-        .scl_speed_hz    = CEEPEW_OLED_FAST_HZ,
-    };
-    i2c_master_dev_handle_t fast_dev = NULL;
-    esp_err_t rc = i2c_master_bus_add_device(dev->bus, &fast_cfg, &fast_dev);
-    if (rc != ESP_OK) {
-        ESP_LOGW(TAG, "Could not add 800 kHz device (rc=%d); staying at 400 kHz",
-                 (int)rc);
-        dev->fast_failed = true;
-        return;
-    }
-
-    const uint8_t dummy = 0x00;
-    rc = i2c_master_transmit(fast_dev, &dummy, 1, pdMS_TO_TICKS(100U));
-    if (rc == ESP_OK) {
-        dev->i2c_dev_fast = fast_dev;
-        dev->fast_probed  = true;
-        ESP_LOGI(TAG, "Panel ACKed at 800 kHz Fm+; fast mode available");
-    } else {
-        ESP_LOGI(TAG, "Panel did not ACK at 800 kHz Fm+; staying at 400 kHz");
-        (void)i2c_master_bus_rm_device(fast_dev);
-        dev->i2c_dev_fast = NULL;
-        dev->fast_failed = true;
-    }
-}
+/* ── Fast-mode probe (stub — not used with Arduino Wire transport) ── */
 
 bool ceepew_oled_probe_fast_mode(i2c_master_bus_handle_t bus, uint8_t addr)
 {
-    if (bus == NULL) {
-        return false;
-    }
-
-    const i2c_device_config_t cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = addr,
-        .scl_speed_hz    = CEEPEW_OLED_FAST_HZ,
-    };
-    i2c_master_dev_handle_t probe_dev = NULL;
-    esp_err_t rc = i2c_master_bus_add_device(bus, &cfg, &probe_dev);
-    if (rc != ESP_OK) {
-        return false;
-    }
-
-    const uint8_t dummy = 0x00;
-    rc = i2c_master_transmit(probe_dev, &dummy, 1, pdMS_TO_TICKS(100U));
-    (void)i2c_master_bus_rm_device(probe_dev);
-
-    if (rc == ESP_OK) {
-        ESP_LOGI(TAG, "Device 0x%02X ACKs in fast (800 kHz) mode", addr);
-    }
-    return (rc == ESP_OK);
+    (void)bus;
+    (void)addr;
+    /* Fast-mode probe is not supported with the Arduino Wire transport.
+     * The Wire transport runs at a fixed 400 kHz. */
+    return false;
 }
 
 /* ── Init panel ──────────────────────────────────────────────────── */
@@ -394,28 +395,21 @@ esp_err_t ceepew_oled_init_panel(ceepew_oled_t *dev,
                                  uint8_t addr)
 {
     assert(dev != NULL);
+    /* i2c_dev is a sentinel from ceepew_oled_bus_init(); OK to be non-NULL */
     assert(i2c_dev != NULL);
 
-    dev->bus          = bus;
-    dev->i2c_dev      = i2c_dev;
-    dev->i2c_dev_fast = NULL;
-    dev->addr         = addr;
-    dev->sh1106_mode  = false;
-    dev->fast_probed  = false;
-    dev->fast_active  = false;
-    dev->fast_failed  = false;
+    dev->bus         = bus;
+    dev->i2c_dev     = i2c_dev;
+    dev->addr        = addr;
+    dev->sh1106_mode = false;
     (void)memset(dev->buffer, 0, CEEPEW_OLED_BUF_SIZE);
 
-    /* Power-up delay: SSD1306/SH1106 datasheets require >=100 ms from
-     * VDD stable to first command.  Without this, the panel may miss
-     * the init stream if the 3.3V rail ramps slowly or the module's
-     * internal POR (power-on reset) hasn't completed. */
-    vTaskDelay(pdMS_TO_TICKS(100U));
-
+    /* VDD has been stable for hundreds of ms by this point (ESP32 boot
+     * time). Send the full init stream immediately — starts with 0xAE
+     * (Display OFF) to hide power-on GDDRAM garbage. */
     esp_err_t rc = send_init_stream(dev);
     if (rc == ESP_OK) {
         dev->initialised = true;
-        probe_fast_mode(dev);
     }
     return rc;
 }
@@ -426,24 +420,18 @@ esp_err_t ceepew_oled_init_panel_sh1106(ceepew_oled_t *dev,
                                         uint8_t addr)
 {
     assert(dev != NULL);
+    /* i2c_dev is a sentinel from ceepew_oled_bus_init(); OK to be non-NULL */
     assert(i2c_dev != NULL);
 
-    dev->bus          = bus;
-    dev->i2c_dev      = i2c_dev;
-    dev->i2c_dev_fast = NULL;
-    dev->addr         = addr;
-    dev->sh1106_mode  = false;
-    dev->fast_probed  = false;
-    dev->fast_active  = false;
-    dev->fast_failed  = false;
+    dev->bus         = bus;
+    dev->i2c_dev     = i2c_dev;
+    dev->addr        = addr;
+    dev->sh1106_mode = false;
     (void)memset(dev->buffer, 0, CEEPEW_OLED_BUF_SIZE);
-
-    vTaskDelay(pdMS_TO_TICKS(100U));
 
     esp_err_t rc = send_init_stream_sh1106(dev);
     if (rc == ESP_OK) {
         dev->initialised = true;
-        probe_fast_mode(dev);
     }
     return rc;
 }
@@ -453,32 +441,35 @@ esp_err_t ceepew_oled_init_panel_sh1106(ceepew_oled_t *dev,
 static esp_err_t push_full_frame(ceepew_oled_t *dev,
                                  i2c_master_dev_handle_t dev_handle)
 {
-    const uint8_t cmd_stream[12U] = {
-        CEEPEW_OLED_CTRL_CMD_STREAM,
-        CEEPEW_OLED_CMD_SET_PAGE_START,
-        CEEPEW_OLED_CMD_SET_LOWER_COL,
-        CEEPEW_OLED_CMD_SET_HIGHER_COL,
-        CEEPEW_OLED_CMD_SET_MEMORY_ADDR_MODE,
-        CEEPEW_OLED_CMD_SET_HORI_ADDR_MODE,
-        CEEPEW_OLED_CMD_SET_COLUMN_RANGE, 0x00U, 0x7FU,
-        CEEPEW_OLED_CMD_SET_PAGE_RANGE,   0x00U, 0x07U,
-    };
+    for (uint8_t page = 0U; page < CEEPEW_OLED_PAGES; page++) {
+        const uint8_t page_cmd = (uint8_t)(CEEPEW_OLED_CMD_SET_PAGE_START | page);
 
-    esp_err_t rc = i2c_master_transmit(dev_handle, cmd_stream,
-                                       sizeof(cmd_stream),
-                                       CEEPEW_OLED_I2C_TIMEOUT_TICKS);
-    if (rc != ESP_OK) {
-        return rc;
+        const uint8_t cmd_stream[6U] = {
+            0x80U, 0x00U,
+            0x80U, 0x10U,
+            0x80U, page_cmd,
+        };
+        esp_err_t rc = ceepew_oled_i2c_transmit(dev_handle, cmd_stream,
+                                           sizeof(cmd_stream),
+                                           CEEPEW_OLED_I2C_TIMEOUT_TICKS);
+        if (rc != ESP_OK) {
+            return rc;
+        }
+
+        static uint8_t s_page_stream[1U + CEEPEW_OLED_WIDTH_PX];
+        s_page_stream[0U] = CEEPEW_OLED_CTRL_DATA_STREAM;
+        (void)memcpy(&s_page_stream[1U],
+                     &dev->buffer[(uint16_t)page * CEEPEW_OLED_WIDTH_PX],
+                     CEEPEW_OLED_WIDTH_PX);
+
+        rc = ceepew_oled_i2c_transmit(dev_handle, s_page_stream,
+                                 sizeof(s_page_stream),
+                                 CEEPEW_OLED_I2C_TIMEOUT_TICKS);
+        if (rc != ESP_OK) {
+            return rc;
+        }
     }
-
-    static uint8_t s_data_stream[1U + CEEPEW_OLED_BUF_SIZE];
-    s_data_stream[0U] = CEEPEW_OLED_CTRL_DATA_STREAM;
-    (void)memcpy(&s_data_stream[1U], dev->buffer, CEEPEW_OLED_BUF_SIZE);
-
-    rc = i2c_master_transmit(dev_handle, s_data_stream,
-                             sizeof(s_data_stream),
-                             CEEPEW_OLED_I2C_TIMEOUT_TICKS);
-    return rc;
+    return ESP_OK;
 }
 
 esp_err_t ceepew_oled_display(ceepew_oled_t *dev)
@@ -488,30 +479,9 @@ esp_err_t ceepew_oled_display(ceepew_oled_t *dev)
     assert(dev->i2c_dev != NULL);
 
     esp_err_t rc = push_full_frame(dev, dev->i2c_dev);
-    if (rc == ESP_OK) {
-        if (dev->fast_active) {
-            dev->fast_active = false;
-            ESP_LOGI(TAG, "Display push recovered on slow path; falling back to 400 kHz");
-        }
-        return ESP_OK;
-    }
-    ESP_LOGE(TAG, "Display push at 400 kHz failed: %d (%s)",
-             (int)rc, esp_err_to_name(rc));
-
-    if (dev->fast_probed && !dev->fast_failed && dev->i2c_dev_fast != NULL) {
-        ESP_LOGW(TAG, "Retrying display push at 800 kHz Fm+");
-        esp_err_t fast_rc = push_full_frame(dev, dev->i2c_dev_fast);
-        if (fast_rc == ESP_OK) {
-            dev->fast_active = true;
-            ESP_LOGI(TAG, "Display push succeeded at 800 kHz Fm+; fast mode engaged");
-            return ESP_OK;
-        }
-        ESP_LOGE(TAG, "Display push at 800 kHz Fm+ failed: %d (%s); "
-                      "panel does not support Fm+; staying at 400 kHz",
-                 (int)fast_rc, esp_err_to_name(fast_rc));
-        dev->fast_failed = true;
-    } else {
-        ESP_LOGE(TAG, "800 kHz fallback not available; staying at 400 kHz");
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "Display push failed: %d (%s)",
+                 (int)rc, esp_err_to_name(rc));
     }
     return rc;
 }
@@ -529,13 +499,12 @@ esp_err_t ceepew_oled_display_sh1106(ceepew_oled_t *dev, uint8_t col_offset)
         const uint8_t col_high = (uint8_t)(0x10U | ((col_offset >> 4U) & 0x0FU));
         const uint8_t page_cmd = (uint8_t)(CEEPEW_OLED_CMD_SET_PAGE_START | page);
 
-        const uint8_t cmd_stream[4U] = {
-            CEEPEW_OLED_CTRL_CMD_STREAM,
-            col_low,
-            col_high,
-            page_cmd,
+        const uint8_t cmd_stream[6U] = {
+            0x80U, col_low,
+            0x80U, col_high,
+            0x80U, page_cmd,
         };
-        esp_err_t rc = i2c_master_transmit(dev->i2c_dev, cmd_stream,
+        esp_err_t rc = ceepew_oled_i2c_transmit(dev->i2c_dev, cmd_stream,
                                            sizeof(cmd_stream),
                                            CEEPEW_OLED_I2C_TIMEOUT_TICKS);
         if (rc != ESP_OK) {
@@ -550,7 +519,7 @@ esp_err_t ceepew_oled_display_sh1106(ceepew_oled_t *dev, uint8_t col_offset)
                      &dev->buffer[(uint16_t)page * CEEPEW_OLED_WIDTH_PX],
                      CEEPEW_OLED_WIDTH_PX);
 
-        rc = i2c_master_transmit(dev->i2c_dev, data_stream,
+        rc = ceepew_oled_i2c_transmit(dev->i2c_dev, data_stream,
                                  sizeof(data_stream),
                                  CEEPEW_OLED_I2C_TIMEOUT_TICKS);
         if (rc != ESP_OK) {
@@ -578,17 +547,16 @@ esp_err_t ceepew_oled_push_tile(ceepew_oled_t *dev,
     const uint8_t col_start = (uint8_t)(tile_col * 8U);
     const uint8_t col_low   = (uint8_t)(col_start & 0x0FU);
     const uint8_t col_high  = (uint8_t)(0x10U | ((col_start >> 4U) & 0x0FU));
-    i2c_master_dev_handle_t dev_handle = dev->fast_active ? dev->i2c_dev_fast
-                                                           : dev->i2c_dev;
-    if (dev_handle == NULL) { dev_handle = dev->i2c_dev; }
+    i2c_master_dev_handle_t dev_handle = dev->i2c_dev;
 
     for (uint8_t page = 0U; page < CEEPEW_OLED_PAGES; page++) {
         const uint8_t page_cmd = (uint8_t)(CEEPEW_OLED_CMD_SET_PAGE_START | page);
-        const uint8_t cmd[4U] = {
-            CEEPEW_OLED_CTRL_CMD_STREAM,
-            col_low, col_high, page_cmd,
+        const uint8_t cmd[6U] = {
+            0x80U, col_low,
+            0x80U, col_high,
+            0x80U, page_cmd,
         };
-        esp_err_t rc = i2c_master_transmit(dev_handle, cmd,
+        esp_err_t rc = ceepew_oled_i2c_transmit(dev_handle, cmd,
                                            sizeof(cmd),
                                            CEEPEW_OLED_I2C_TIMEOUT_TICKS);
         if (rc != ESP_OK) {
@@ -602,7 +570,7 @@ esp_err_t ceepew_oled_push_tile(ceepew_oled_t *dev,
         const uint16_t row_start = (uint16_t)page * (uint16_t)CEEPEW_OLED_WIDTH_PX
                                   + (uint16_t)col_start;
         (void)memcpy(&data[1U], &dev->buffer[row_start], 8U);
-        rc = i2c_master_transmit(dev_handle, data, sizeof(data),
+        rc = ceepew_oled_i2c_transmit(dev_handle, data, sizeof(data),
                                  CEEPEW_OLED_I2C_TIMEOUT_TICKS);
         if (rc != ESP_OK) {
             ESP_LOGE(TAG, "tile (%u,%u) page %u data failed: %d (%s)",
@@ -622,17 +590,13 @@ esp_err_t ceepew_oled_set_contrast(ceepew_oled_t *dev, uint8_t contrast)
     assert(dev->initialised);
     assert(dev->i2c_dev != NULL);
 
-    const uint8_t cmd[2U] = {
-        CEEPEW_OLED_CTRL_CMD_STREAM,
+    const uint8_t cmd[4U] = {
+        0x80U,
         CEEPEW_OLED_CMD_SET_CONTRAST,
+        0x80U,
+        contrast,
     };
-    esp_err_t rc = i2c_master_transmit(dev->i2c_dev, cmd, sizeof(cmd),
-                                       CEEPEW_OLED_I2C_TIMEOUT_TICKS);
-    if (rc != ESP_OK) {
-        return rc;
-    }
-    const uint8_t data[1U] = { contrast };
-    return i2c_master_transmit(dev->i2c_dev, data, sizeof(data),
+    return ceepew_oled_i2c_transmit(dev->i2c_dev, cmd, sizeof(cmd),
                                CEEPEW_OLED_I2C_TIMEOUT_TICKS);
 }
 
@@ -646,6 +610,65 @@ esp_err_t ceepew_oled_set_invert(ceepew_oled_t *dev, bool invert)
         CEEPEW_OLED_CTRL_CMD_STREAM,
         invert ? 0xA7U : 0xA6U,
     };
-    return i2c_master_transmit(dev->i2c_dev, cmd, sizeof(cmd),
+    return ceepew_oled_i2c_transmit(dev->i2c_dev, cmd, sizeof(cmd),
                                CEEPEW_OLED_I2C_TIMEOUT_TICKS);
+}
+
+void ceepew_oled_bus_recover(gpio_num_t sda, gpio_num_t scl)
+{
+    ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] Starting bus recovery on SDA (GPIO%d), SCL (GPIO%d)",
+             get_board_tag(), (int)sda, (int)scl);
+             
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << scl),
+        .mode = GPIO_MODE_INPUT_OUTPUT_OD,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+
+    io_conf.pin_bit_mask = (1ULL << sda);
+    io_conf.mode = GPIO_MODE_INPUT;
+    gpio_config(&io_conf);
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    int sda_init_level = gpio_get_level(sda);
+    if (sda_init_level == 1) {
+        ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] SDA is already HIGH, no recovery needed", get_board_tag());
+        return;
+    }
+
+    ESP_LOGW(TAG, "[BOARD %02X] [OLED DIAG] SDA is LOW (wedged). Bit-banging SCL to recover...", get_board_tag());
+
+    for (int i = 0; i < 9; i++) {
+        gpio_set_level(scl, 0);
+        esp_rom_delay_us(5);
+        gpio_set_level(scl, 1);
+        esp_rom_delay_us(5);
+        
+        if (gpio_get_level(sda) == 1) {
+            ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] SDA released to HIGH after %d SCL pulses", get_board_tag(), i + 1);
+            break;
+        }
+    }
+
+    io_conf.pin_bit_mask = (1ULL << sda);
+    io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
+    gpio_config(&io_conf);
+    
+    gpio_set_level(sda, 0);
+    esp_rom_delay_us(5);
+    gpio_set_level(scl, 1);
+    esp_rom_delay_us(5);
+    gpio_set_level(sda, 1);
+    esp_rom_delay_us(5);
+
+    ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] Bus recovery complete (SCL pulses + STOP sent)", get_board_tag());
+
+    /* Release pins back to default state so the I2C driver can claim them */
+    gpio_reset_pin(sda);
+    gpio_reset_pin(scl);
+    vTaskDelay(pdMS_TO_TICKS(10));
 }

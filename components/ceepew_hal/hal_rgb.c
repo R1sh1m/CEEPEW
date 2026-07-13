@@ -1,6 +1,5 @@
 #include "hal_rgb.h"
 
-#include "ceepew_config.h"
 #include "hal_pins.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -8,7 +7,6 @@
 #include "freertos/semphr.h"
 #include "freertos/timers.h"
 #include <limits.h>
-#include <math.h>
 
 typedef struct{
     uint8_t r;
@@ -412,7 +410,7 @@ CeePewErr_t rgb_set_pattern(RgbPattern_t pattern)
         if (err == CEEPEW_OK && s_state.timer != NULL) {
             /* Repurpose the single static timer at 4 ms for PWM stepping */
             (void)xTimerStop(s_state.timer, 0U);
-            (void)xTimerChangePeriod(s_state.timer, pdMS_TO_TICKS(4U), 0U);
+            (void)xTimerChangePeriod(s_state.timer, rgb_ms_to_ticks(4U), 0U);
             /* Switch timer to auto-reload for continuous PWM */
             vTimerSetReloadMode(s_state.timer, pdTRUE);
             (void)xTimerStart(s_state.timer, 0U);
@@ -469,7 +467,7 @@ CeePewErr_t rgb_set_pwm_mode(uint8_t r_intensity, uint8_t g_intensity, uint8_t b
     if (err == CEEPEW_OK && s_state.timer != NULL) {
         /* Repurpose the single static timer at 4 ms for PWM stepping */
         (void)xTimerStop(s_state.timer, 0U);
-        (void)xTimerChangePeriod(s_state.timer, pdMS_TO_TICKS(4U), 0U);
+        (void)xTimerChangePeriod(s_state.timer, rgb_ms_to_ticks(4U), 0U);
         /* Switch timer to auto-reload for continuous PWM */
         vTimerSetReloadMode(s_state.timer, pdTRUE);
         (void)xTimerStart(s_state.timer, 0U);

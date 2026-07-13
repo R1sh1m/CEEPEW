@@ -6,6 +6,15 @@ set(IDF_TARGET esp32)
 # Keep CMake output focused on warnings and errors.
 set(CMAKE_MESSAGE_LOG_LEVEL NOTICE)
 
+# GCC 15.2.0 toolchain requires explicit dynconfig to load Xtensa CPU
+# config (rer opcode, MUL16, etc.). Without this the assembler errors
+# on xtensa-specific instructions and cmake C/C++ compiler detection
+# fails because the Rust wrapper in bin/ (which we bypass) normally
+# passes this flag.  The flag tells GCC which xtensa .so to load.
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mdynconfig=xtensa_esp32.so")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mdynconfig=xtensa_esp32.so")
+set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -mdynconfig=xtensa_esp32.so")
+
 # Custom component directories
 set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/components

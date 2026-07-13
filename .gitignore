@@ -25,6 +25,11 @@ skills-lock.json
 logs/
 *.log
 
+# IDF managed components & dependencies
+managed_components/
+dependencies.lock
+partitions.csv
+
 # CI / AI assistant internals (keep workflows/)
 .github/agents/
 .github/instructions/
@@ -41,6 +46,8 @@ tools/eim_config.toml
 tools/monitor_both_*.txt
 tools/dual_capture.ps1
 tools/dual_capture.py
+opencode.jsonc
 
 # Workspace coding agent customizations
-.agents/
+.agents/
+digest.txt

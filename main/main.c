@@ -10,7 +10,6 @@
 #include "esp_bt.h"
 #endif
 #include "ceepew_config.h"
-#include "ceepew_assert.h"
 #include "session_memory.h"
 #include "ceepew_pipeline.h"
 #include "task_ui.h"
@@ -26,7 +25,6 @@
 #include "hal_ui.h"
 #include "ui_manager.h"
 #include "task_arch.h"
-#include "esp_wifi.h"
 #include "esp_mac.h"
 #include "transport_ble.h"
 #include "hal_temp.h"
@@ -35,8 +33,37 @@ static const char *TAG = "CEE-PEW-MAIN";
 
 static void rng_failure_session_wipe(void) { session_request_wipe(); }
 
+static uint8_t get_board_tag(void)
+{
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) {
+        return mac[5];
+    }
+    return 0;
+}
+
+static const char *reset_reason_to_str(esp_reset_reason_t reason)
+{
+    switch (reason) {
+        case ESP_RST_POWERON:   return "POWERON";
+        case ESP_RST_EXT:       return "EXT_PIN";
+        case ESP_RST_SW:        return "SOFTWARE";
+        case ESP_RST_PANIC:     return "PANIC";
+        case ESP_RST_INT_WDT:   return "INT_WDG";
+        case ESP_RST_TASK_WDT:  return "TASK_WDG";
+        case ESP_RST_WDT:       return "OTHER_WDG";
+        case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+        case ESP_RST_BROWNOUT:  return "BROWNOUT";
+        case ESP_RST_SDIO:      return "SDIO";
+        default:                return "UNKNOWN";
+    }
+}
+
 void app_main(void){
-    ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup ===");
+    ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup === [BOARD %02X]", get_board_tag());
+
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    ESP_LOGI(TAG, "[BOARD %02X] Boot reset reason: %s (%d)", get_board_tag(), reset_reason_to_str(reset_reason), (int)reset_reason);
 
     /* Suppress i2c.common false-positive GPIO reservation warnings */
     esp_log_level_set("i2c.common", ESP_LOG_ERROR);
@@ -55,7 +82,10 @@ void app_main(void){
         return;
     }
 
-    /* Boot-time I2C scan when DIAG switch held LOW */
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+    /* Boot-time I2C scan when DIAG switch held LOW — dev mode only.
+     * In production builds the I2C bus is NOT touched before hal_ui_init()
+     * to avoid corrupting the I2C0 peripheral state. */
     {
         gpio_config_t io_cfg = {
             .pin_bit_mask = (1ULL << CEEPEW_PIN_DIAG_SWITCH),
@@ -67,12 +97,11 @@ void app_main(void){
         (void)gpio_config(&io_cfg);
         vTaskDelay(pdMS_TO_TICKS(50));
         if (gpio_get_level(CEEPEW_PIN_DIAG_SWITCH) == CEEPEW_DIAG_SWITCH_ACTIVE) {
-            ESP_LOGI(TAG, "DIAG switch active — running I2C scanner");
+            ESP_LOGI(TAG, "[BOARD %02X] DIAG switch active — running I2C scanner...", get_board_tag());
             (void)hal_i2c_scanner_scan_bus();
-        } else {
-            ESP_LOGI(TAG, "DIAG switch inactive — skipping I2C scanner");
         }
     }
+#endif /* CONFIG_CEEPEW_DEVELOPMENT_MODE */
 
     err = hal_adc_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "hal_adc_init failed: %d", (int)err); return; }
@@ -83,12 +112,18 @@ void app_main(void){
     err = hal_rng_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "hal_rng_init failed: %d", (int)err); return; }
 
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+    ESP_LOGI(TAG, "[BOARD %02X] Running boot-time I2C scan...", get_board_tag());
+    (void)hal_i2c_scanner_scan_bus();
+#endif
+
     /* hal_ui_init wraps ceepew_oled. If the OLED is absent, it sets a
      * display-absent flag and the rest of the firmware runs headless. */
     err = hal_ui_init();
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "hal_ui_init failed: %d — continuing headless", (int)err);
     }
+
 
 #ifdef CONFIG_BT_ENABLED
     /* Release Classic BT memory — BLE only */

@@ -8,6 +8,7 @@ idf_component_register(
         "."
     REQUIRES
         ceepew_common
+        ceepew_oled_arduino
         driver
         esp_driver_gpio
         esp_driver_i2c

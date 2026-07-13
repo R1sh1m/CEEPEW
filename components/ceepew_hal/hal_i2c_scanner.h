@@ -20,8 +20,8 @@
  *
  * Usable device addresses: 0x03–0x77
  */
-#define I2C_SCAN_ADDR_MIN  0x03U
-#define I2C_SCAN_ADDR_MAX  0x77U
+#define I2C_SCAN_ADDR_MIN  0x3CU
+#define I2C_SCAN_ADDR_MAX  0x3DU
 #define I2C_SCAN_PROBE_TIMEOUT_MS 20U
 
 /* Scan the I2C bus on the primary pins (CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL)

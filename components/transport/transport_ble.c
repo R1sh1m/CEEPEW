@@ -147,9 +147,6 @@ static esp_gatt_srvc_id_t s_service_id = {
     },
     .is_primary = true,
 };
-#endif
-
-#ifdef CONFIG_BT_ENABLED
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 static void gattc_event_handler(esp_gattc_cb_event_t event,
                                 esp_gatt_if_t gattc_if,
@@ -159,7 +156,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                                 esp_ble_gatts_cb_param_t *param);
 
 static const char *transport_ble_state_name(BleState_t state);
-#endif
 
 #define CEEPEW_RESTART_DEBOUNCE_MS  2000U
 #define CEEPEW_SCAN_STUCK_TIMEOUT_MS 15000U
@@ -270,10 +266,6 @@ static uint32_t s_recovery_started_ms = 0U;
 static void transport_ble_supervisor_task(void *arg);
 static void transport_ble_supervisor_check_stall(void);
 static void transport_ble_supervisor_tick_recovery(void);
-static CeePewErr_t transport_ble_handle_event_internal(const PairingEvent_t *event);
-static uint32_t transport_ble_phase_timeout_ms(PairingPhase_t phase);
-static const char *transport_ble_phase_name(PairingPhase_t phase);
-static const char *transport_ble_event_name(PairingEventType_t type);
 static void transport_ble_enter_phase_unlocked(PairingPhase_t phase);
 
 static bool s_ble_initialised = false;
@@ -1816,7 +1808,6 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
     return err;
 }
 
-#ifdef CONFIG_BT_ENABLED
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param){
     ESP_LOGI(TAG, "gap_event_handler: event=%d", event);
     switch (event) {

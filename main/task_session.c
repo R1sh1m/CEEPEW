@@ -21,12 +21,11 @@
 #include "compress_huffman.h"
 #include "crypto_box_wrap.h"
 #include "crypto_ctx.h"
-#include "ecc_crc32.h"
 #include "ecc_hamming.h"
-#include "esp_coexist.h"
 #include "esp_random.h"
 #include "esp_crc.h"
 #include "esp_wifi.h"
+#include "esp_coexist.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -37,7 +36,6 @@
 #include "session_fsm.h"
 #include "session_memory.h"
 #include "session_msgstore.h"
-#include "task_ui.h"
 #include "transport_ble.h"
 #include "transport_esl.h"
 #include "ui_manager.h"
@@ -857,11 +855,10 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
      * 5. Inject mandatory vTaskDelay(pdMS_TO_TICKS(150)) block for radio PHY settle before hal_radio_init() */
     (void)transport_ble_teardown();
 
-    /* Reclaim full RF for WiFi/ESP-NOW after BLE teardown.
-     * BT controller and Bluedroid are fully deinitialized, so coexistence arbiter
-     * no longer allocates RF time slices to BLE, giving WiFi 100% of the RF. */
+#ifdef CONFIG_BT_ENABLED
     esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
     esp_coex_status_bit_clear(ESP_COEX_ST_TYPE_BLE, 0x3FU);
+#endif
 
 #if CONFIG_CEEPEW_WIFI_FULL_RESTART
     /* Full WiFi stop+start — forces coexistence hardware re-query.
