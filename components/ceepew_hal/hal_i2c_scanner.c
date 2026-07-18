@@ -78,7 +78,7 @@ static void scan_pin_combination(gpio_num_t sda, gpio_num_t scl, const char *lab
     }
 
     /* Allow bus to stabilize */
-    vTaskDelay(pdMS_TO_TICKS(50U));
+    vTaskDelay(pdMS_TO_TICKS(75U));
 
     uint8_t device_count = 0U;
     bool found_3c = false;
@@ -106,7 +106,7 @@ static void scan_pin_combination(gpio_num_t sda, gpio_num_t scl, const char *lab
      * clock out data bytes (symptoms: probe OK, transmit NACK). */
     gpio_reset_pin(sda);
     gpio_reset_pin(scl);
-    vTaskDelay(pdMS_TO_TICKS(25U));
+    vTaskDelay(pdMS_TO_TICKS(75U));
 
     ESP_LOGI(TAG, "[BOARD %02X] [%s] Scan complete. %u device(s) discovered. 0x3C: %s, 0x3D: %s",
              get_board_tag(), label, (unsigned int)device_count,

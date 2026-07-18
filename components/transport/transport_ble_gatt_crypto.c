@@ -125,7 +125,7 @@ static void gatt_crypto_sort_ids(const uint8_t id_self[6],
     CEEPEW_ASSERT_VOID(id_self != NULL && id_peer != NULL);
     CEEPEW_ASSERT_VOID(lo_out != NULL && hi_out != NULL);
 
-    if (memcmp(id_self, id_peer, 6U) <= 0) {
+    if (!ceepew_ct_less(id_peer, id_self, 6U)) {
         memcpy(lo_out, id_self, 6U);
         memcpy(hi_out, id_peer, 6U);
     } else {

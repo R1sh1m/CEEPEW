@@ -1,25 +1,27 @@
 /* components/crypto/crypto_box_wrap.c */
 
 #include "crypto_box_wrap.h"
+#include "crypto_ecdh.h"
 #include "crypto_stream.h"
 #include "crypto_sha256.h"
 #include "ceepew_security_utils.h"
 #include "../../main/session_fsm.h"
 
+#include "crypto_hmac.h"
 #include "curve25519.h"
 
 #include "esp_log.h"
 #include <string.h>
 
 /* Buffers are stack-local in encrypt/decrypt.
- * Each is CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES = 192 bytes.
+ * Each is CRYPTO_BOX_ZEROBYTES + CRYPTO_BOX_INNER_MAX_BYTES = 108 bytes.
  * Stack budget: session task has 8 KB, these fit comfortably. */
 
-static CeePewErr_t hmac_sha256(const uint8_t *key,
-                               uint16_t key_len,
-                               const uint8_t *msg,
-                               uint16_t msg_len,
-                               uint8_t out[32U])
+CeePewErr_t crypto_box_hmac_sha256_old(const uint8_t *key,
+                                       uint16_t key_len,
+                                       const uint8_t *msg,
+                                       uint16_t msg_len,
+                                       uint8_t out[32U])
 {
     CEEPEW_ASSERT(key != NULL || key_len == 0U, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
@@ -75,6 +77,15 @@ static CeePewErr_t hmac_sha256(const uint8_t *key,
     return err;
 }
 
+static CeePewErr_t hmac_sha256(const uint8_t *key,
+                               uint16_t key_len,
+                               const uint8_t *msg,
+                               uint16_t msg_len,
+                               uint8_t out[32U])
+{
+    return crypto_hmac_sha256(key, key_len, msg, (uint32_t)msg_len, out);
+}
+
 static void box_make_nonce_from_counter(const CryptoCtx_t *ctx, uint64_t nonce_counter, uint8_t nonce[CRYPTO_BOX_NONCEBYTES])
 {
     memcpy(nonce, ctx->session_id, 8U);
@@ -88,14 +99,33 @@ static CeePewErr_t box_derive_shared_secret(const CryptoCtx_t *ctx,
                                             const uint8_t peer_public_key[32U],
                                             uint8_t shared_secret[32U])
 {
+    /* RFC 7748 §6.1: reject known low-order public keys */
+    CeePewErr_t err = crypto_ecdh_reject_low_order(peer_public_key);
+    if (err != CEEPEW_OK) {
+        return CEEPEW_ERR_CRYPTO;
+    }
+
     /* X25519 ECDH: both peers derive same shared secret.
      * Local privkey from CSPRNG at derive; peer pubkey from BLE sign_pk exchange. */
     uint8_t scalar[32U];
     memcpy(scalar, ctx->box_privkey, sizeof(scalar));
     curve25519_clamp(scalar);
     int rc = curve25519_scalarmult(shared_secret, scalar, peer_public_key);
+    if (rc != 0) {
+        ceepew_secure_zero(scalar, (uint32_t)sizeof(scalar));
+        ceepew_secure_zero(shared_secret, 32U);
+        return CEEPEW_ERR_CRYPTO;
+    }
+
+    /* RFC 7748 §6: reject all-zero shared secret (small-subgroup output) */
+    if (ceepew_is_all_zero(shared_secret, 32U)) {
+        ceepew_secure_zero(scalar, (uint32_t)sizeof(scalar));
+        ceepew_secure_zero(shared_secret, 32U);
+        return CEEPEW_ERR_CRYPTO;
+    }
+
     ceepew_secure_zero(scalar, (uint32_t)sizeof(scalar));
-    return (rc == 0) ? CEEPEW_OK : CEEPEW_ERR_CRYPTO;
+    return CEEPEW_OK;
 }
 
 static CeePewErr_t box_derive_stream_key(const uint8_t shared_secret[32U],
@@ -115,7 +145,7 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     CEEPEW_ASSERT(peer_public_key != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(msg_len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(msg_len <= CRYPTO_BOX_INNER_MAX_BYTES, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(*out_len >= (uint16_t)(msg_len + CRYPTO_BOX_BOXZEROBYTES),
                   CEEPEW_ERR_BOUNDS);
 
@@ -136,8 +166,6 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
         return err;
     }
 
-
-
     StreamCipher_t stream;
     err = crypto_stream_init(&stream, stream_key, nonce);
     if (err != CEEPEW_OK) {
@@ -146,8 +174,8 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
         return err;
     }
 
-    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
-    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CRYPTO_BOX_INNER_MAX_BYTES];
+    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CRYPTO_BOX_INNER_MAX_BYTES];
     memset(nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
     if (msg_len > 0U) {
         memcpy(nacl_pt_buf + CRYPTO_BOX_ZEROBYTES, msg, msg_len);
@@ -209,7 +237,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     CEEPEW_ASSERT(in != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(in_len >= CRYPTO_BOX_BOXZEROBYTES, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT((uint16_t)(in_len - CRYPTO_BOX_BOXZEROBYTES) <= CEEPEW_MAX_MSG_BYTES,
+    CEEPEW_ASSERT((uint16_t)(in_len - CRYPTO_BOX_BOXZEROBYTES) <= CRYPTO_BOX_INNER_MAX_BYTES,
                   CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(*out_len >= (uint16_t)(in_len - CRYPTO_BOX_BOXZEROBYTES),
                   CEEPEW_ERR_BOUNDS);
@@ -228,8 +256,6 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-
-
     StreamCipher_t stream;
     err = crypto_stream_init(&stream, stream_key, nonce);
     if (err != CEEPEW_OK) {
@@ -238,8 +264,8 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
         return err;
     }
 
-    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
-    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CEEPEW_MAX_MSG_BYTES];
+    uint8_t nacl_pt_buf[CRYPTO_BOX_ZEROBYTES + CRYPTO_BOX_INNER_MAX_BYTES];
+    uint8_t nacl_ct_buf[CRYPTO_BOX_ZEROBYTES + CRYPTO_BOX_INNER_MAX_BYTES];
     memset(nacl_pt_buf, 0, CRYPTO_BOX_ZEROBYTES);
     uint16_t work_len = CRYPTO_BOX_ZEROBYTES;
     uint16_t out_work_len = work_len;

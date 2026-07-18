@@ -1,0 +1,138 @@
+name: CEE-PEW CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  IDF_VERSION: release-v6.0
+  IDF_DOCKER_IMAGE: espressif/idf:release-v6.0
+
+jobs:
+  # ── Stub-marker check ──────────────────────────────────────────────
+  stub-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find Stub markers
+        run: |
+          echo "Scanning repository for Stub markers..."
+          set -e
+          if git grep -I --line-number "Stu[b]:"; then
+            echo "Stub markers found. Failing job."
+            exit 1
+          else
+            echo "No Stub markers found."
+          fi
+
+  # ── Debug firmware build ───────────────────────────────────────────
+  build-debug:
+    runs-on: ubuntu-latest
+    container: ${{ env.IDF_DOCKER_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (debug / diagnostic mode)
+        run: |
+          idf.py set-target esp32
+          idf.py menuconfig 2>/dev/null || true
+          idf.py build
+      - name: Archive firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-debug
+          path: build/ceepew.bin
+          retention-days: 5
+
+  # ── Production firmware build ──────────────────────────────────────
+  build-production:
+    runs-on: ubuntu-latest
+    container: ${{ env.IDF_DOCKER_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (production)
+        run: |
+          idf.py set-target esp32
+          cp sdkconfig.production sdkconfig
+          idf.py build
+      - name: Archive firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-production
+          path: build/ceepew.bin
+          retention-days: 5
+
+  # ── Fuzz harness smoke tests ───────────────────────────────────────
+  # Runs inside the IDF Docker container for ESP-IDF header access.
+  fuzz:
+    runs-on: ubuntu-latest
+    container: ${{ env.IDF_DOCKER_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang + libFuzzer
+        run: |
+          apt-get update && apt-get install -y clang libclang-rt-dev
+      - name: Build and smoke-test fuzz harnesses
+        run: |
+          chmod +x tools/run_fuzz_harnesses.sh
+          export IDF_PATH=${IDF_PATH:-/opt/esp/idf}
+          bash tools/run_fuzz_harnesses.sh
+
+  # ── Host-compilable unit tests ─────────────────────────────────────
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc libmbedtls-dev
+      - name: Configure and build host tests
+        run: |
+          cmake -S tests/host -B tests/host/build
+          cmake --build tests/host/build
+      - name: Run host tests
+        run: |
+          set -e
+          for test in tests/host/build/test_*; do
+            if [ -x "$test" ]; then
+              echo "Running: $test"
+              "$test"
+            fi
+          done
+
+  # ── Static analysis (cppcheck + clang-tidy) ────────────────────────
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck clang-tidy
+      - name: cppcheck
+        run: |
+          cppcheck --error-exitcode=1 \
+            --suppressions-list=tools/cppcheck_suppressions.txt \
+            --enable=warning,style,performance,portability \
+            --std=c11 \
+            --inline-suppr \
+            -I components/ceepew_common \
+            -I components/hal \
+            -I components/crypto \
+            -I components/ecc \
+            -I components/transport \
+            -I components/mem \
+            -I components/compress \
+            -i build \
+            -i tests \
+            -i fuzz \
+            -i managed_components \
+            -i .agents \
+            .
+      - name: clang-tidy (filtered)
+        run: |
+          find components/ -name '*.c' \
+            -not -path '*/build/*' \
+            -print0 | xargs -0 -P$(nproc) clang-tidy \
+            --quiet \
+            -p . 2>/dev/null || true

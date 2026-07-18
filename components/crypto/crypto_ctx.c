@@ -5,7 +5,6 @@
 #include "crypto_hkdf.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_assert.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 #include <string.h>
@@ -109,7 +108,7 @@ CeePewErr_t crypto_espnow_derive_pmk(uint8_t pmk_out[16])
 {
     static const uint8_t INFO[] = "ceepew-espnow-pmk-v1";
     return crypto_hkdf_expand(
-        g_crypto_ctx.ascon_key,   /* HKDF PRK, 32 bytes */
+        g_crypto_ctx.box_seed,    /* HKDF PRK, 32 bytes */
         INFO, sizeof(INFO) - 1,
         pmk_out, 16
     );
@@ -124,11 +123,11 @@ CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk
      * each side to derive a different LMK (COM5 uses COM6's MAC, COM6
      * uses COM5's MAC), so encrypted ESP-NOW frames were silently dropped
      * at the receiver (decrypt-failed → no recv callback). The session
-     * key (ascon_key) already uniquely binds this LMK to the session. */
+     * seed (box_seed) already uniquely binds this LMK to the session. */
     (void)peer_wifi_mac;
     uint8_t info[] = "ceepew-espnow-lmk-v1";
     return crypto_hkdf_expand(
-        g_crypto_ctx.ascon_key,
+        g_crypto_ctx.box_seed,
         info, (uint8_t)(sizeof(info) - 1U),
         lmk_out, 16
     );

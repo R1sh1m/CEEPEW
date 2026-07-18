@@ -30,9 +30,7 @@
 #include <stdio.h>
 #include <esp_timer.h>
 #include "esp_log.h"
-#include "esp_wifi.h"
 #include "esp_coexist.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -124,9 +122,6 @@ static esp_attr_value_t s_sign_pk_attr_val_cfg = {
     .attr_value = s_sign_pk_attr_val
 };
 
-static esp_attr_control_t s_sign_pk_attr_control = {
-    .auto_rsp = ESP_GATT_AUTO_RSP
-};
 static esp_bt_uuid_t s_service_uuid_filter = {
     .len = ESP_UUID_LEN_16,
     .uuid = { .uuid16 = BLE_SERVICE_UUID }
@@ -909,11 +904,11 @@ CeePewErr_t transport_ble_init(void)
             }
         }
 
-        /* Restore balanced RF coexistence now that BLE is active again.
-         * task_session.c sets ESP_COEX_PREFER_WIFI after BLE deinit to
-         * ensure ESP-NOW TX succeeds during post-derive sync; reverse
-         * that once BLE reclaims the radio. */
-        esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+        /* Prioritise BLE over WiFi during discovery/pairing so the two
+         * devices find each other despite WiFi STA + ESP-NOW running on
+         * channel 1.  task_session.c reverts to ESP_COEX_PREFER_WIFI
+         * after BLE teardown in Phase 3. */
+        esp_coex_preference_set(ESP_COEX_PREFER_BT);
     } else {
         ESP_LOGI(TAG, "BLE stack already initialised — skipping controller+bluedroid init");
     }
@@ -1930,7 +1925,14 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                 s_scan_start_failed = false;
                 s_scan_retry_after_ms = 0U;
             }
-            else {
+            else if (g_ble_ctx.is_scanning || g_ble_ctx.state == BLE_SCANNING ||
+                     g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING) {
+                ESP_LOGW(TAG, "Scan start failed (status=%d) but scan already active — ignoring stale callback",
+                         param->scan_start_cmpl.status);
+                s_scan_requested = false;
+                s_scan_start_failed = false;
+                s_scan_retry_after_ms = 0U;
+            } else {
                 ESP_LOGE(TAG, "Scan start FAILED: status=%d",
                          param->scan_start_cmpl.status);
                 s_scan_requested    = false;
@@ -2068,10 +2070,23 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             service_uuid_match = true;
         }
 
+        /* Also check for manufacturer-specific company ID 0xCEEE in scan response data */
+        bool mfr_ceepew = false;
+        if (raw_adv != NULL && total_adv_len >= 6U) {
+            uint8_t mfr_len = 0U;
+            uint8_t *mfr_ptr = esp_ble_resolve_adv_data_by_type(
+                raw_adv, total_adv_len, ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE, &mfr_len);
+            if (mfr_ptr != NULL && mfr_len >= 2U &&
+                mfr_ptr[0] == 0xEEU && mfr_ptr[1] == 0xCEU) {
+                mfr_ceepew = true;
+            }
+        }
+
         bool is_ceepew_peer = ((found_name_len >= 6U &&
                                 memcmp(found_name, "CEEPEW", 6U) == 0) ||
                               service_uuid_match ||
-                              payload_has_ceepew_name);
+                              payload_has_ceepew_name ||
+                              mfr_ceepew);
 
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
         bool in_pairing_flow = (g_ui_ctx.current_state >= UI_STATE_CODE_ENTRY &&
@@ -2101,13 +2116,38 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             }
         }
 
-        ESP_LOGI(TAG, "Scan signal: evt=%u peer=%s rssi=%d adv_len=%u name=%s svc=%s match=%s",
+        /* Diagnostic: dump raw advertising bytes for every 200th scan result
+         * to see exactly what data each device receives. */
+        if (g_ble_ctx.scan_seen_count % 200U == 1U) {
+            if (raw_adv != NULL && total_adv_len > 0U) {
+                uint8_t dump_len = (total_adv_len < 24U) ? total_adv_len : 24U;
+                char hexbuf[73] = {0};
+                for (uint8_t di = 0U; di < dump_len && di < 36U; di++) {
+                    (void)snprintf(&hexbuf[di * 2], 3, "%02X", raw_adv[di]);
+                }
+                ESP_LOGI(TAG, "SCAN_DUMP[%lu]: peer=%s rssi=%d adv_len=%u rsp_len=%u raw[0..%u]=%s",
+                         (unsigned long)g_ble_ctx.scan_seen_count, found_mac,
+                         (int)param->scan_rst.rssi,
+                         (unsigned)param->scan_rst.adv_data_len,
+                         (unsigned)param->scan_rst.scan_rsp_len,
+                         (unsigned)(dump_len - 1U), hexbuf);
+            } else {
+                ESP_LOGW(TAG, "SCAN_DUMP[%lu]: raw_adv=%p adv_len=%u rsp_len=%u",
+                         (unsigned long)g_ble_ctx.scan_seen_count,
+                         (void*)raw_adv,
+                         (unsigned)param->scan_rst.adv_data_len,
+                         (unsigned)param->scan_rst.scan_rsp_len);
+            }
+        }
+
+        ESP_LOGI(TAG, "Scan signal: evt=%u peer=%s rssi=%d adv_len=%u name=%s svc=%s mfr=%s match=%s",
                  (unsigned)param->scan_rst.search_evt,
                  found_mac,
                  (int)param->scan_rst.rssi,
                  (unsigned)param->scan_rst.adv_data_len,
                  (found_name_len > 0U) ? found_name : "<none>",
                  service_uuid_match ? "0xFFF0" : "none",
+                 mfr_ceepew ? "0xCEEE" : "none",
                  is_ceepew_peer ? "ceepew" : "other");
 
         if (!is_ceepew_peer) { break; }
@@ -2314,9 +2354,9 @@ static void sign_pk_delayed_dispatch(void *arg)
     if (!g_ble_ctx.pending_sign_pk_write || !g_ble_ctx.gattc_connected) {
         return;
     }
-    if (g_ble_ctx.gattc_mtu < 90U) {
-        ESP_LOGW(TAG, "delayed dispatch: MTU %u < 90, aborting",
-                 (unsigned)g_ble_ctx.gattc_mtu);
+    if (g_ble_ctx.gattc_mtu < GATT_MIN_MTU) {
+        ESP_LOGW(TAG, "delayed dispatch: MTU %u < %u, aborting",
+                 (unsigned)g_ble_ctx.gattc_mtu, (unsigned)GATT_MIN_MTU);
         ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
                            sizeof(g_ble_ctx.pending_sign_pk_encrypted));
         g_ble_ctx.pending_sign_pk_write = false;
@@ -2398,7 +2438,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 g_ble_ctx.gattc_sign_pk_mtu_negotiated = true;
             ESP_LOGI(TAG, "GATTC MTU negotiated: %u (need >= 90 for sign_pk+box_pk+wifi_mac)",
                      (unsigned)g_ble_ctx.gattc_mtu);
-            if (g_ble_ctx.gattc_mtu < 90U) {
+            if (g_ble_ctx.gattc_mtu < GATT_MIN_MTU) {
                     ESP_LOGW(TAG, "MTU %u below sign_pk+box_pk threshold — write will be rejected",
                              (unsigned)g_ble_ctx.gattc_mtu);
                     if (g_ble_ctx.pending_sign_pk_write) {
@@ -2573,6 +2613,12 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 break;
             }
             memcpy(plaintext + 64U, wifi_mac, 6U);
+            /* Append local boot uptime in seconds */
+            uint32_t local_uptime_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+            plaintext[70U] = (uint8_t)(local_uptime_s & 0xFFU);
+            plaintext[71U] = (uint8_t)((local_uptime_s >> 8U) & 0xFFU);
+            plaintext[72U] = (uint8_t)((local_uptime_s >> 16U) & 0xFFU);
+            plaintext[73U] = (uint8_t)((local_uptime_s >> 24U) & 0xFFU);
             ceepew_secure_zero(sign_pk, sizeof(sign_pk));
             ceepew_secure_zero(box_pk, sizeof(box_pk));
             ceepew_secure_zero(wifi_mac, sizeof(wifi_mac));
@@ -2605,9 +2651,9 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                        sizeof(g_ble_ctx.pending_sign_pk_encrypted));
                 g_ble_ctx.pending_sign_pk_write = true;
                 ceepew_secure_zero(encrypted, sizeof(encrypted));
-            } else if (g_ble_ctx.gattc_mtu < 90U) {
-                ESP_LOGW(TAG, "MTU %u < 90 — cannot send sign_pk, aborting",
-                         (unsigned)g_ble_ctx.gattc_mtu);
+            } else if (g_ble_ctx.gattc_mtu < GATT_MIN_MTU) {
+                ESP_LOGW(TAG, "MTU %u < %u — cannot send sign_pk, aborting",
+                         (unsigned)g_ble_ctx.gattc_mtu, (unsigned)GATT_MIN_MTU);
                 ceepew_secure_zero(encrypted, sizeof(encrypted));
                 (void)transport_ble_disconnect();
             } else if (!g_ble_ctx.gattc_connected) {
@@ -2815,7 +2861,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 ESP_GATT_PERM_WRITE,
                 ESP_GATT_CHAR_PROP_BIT_WRITE,
                 &s_sign_pk_attr_val_cfg,
-                &s_sign_pk_attr_control);
+                NULL);
             break;
 
         case ESP_GATTS_ADD_CHAR_EVT:
@@ -2850,7 +2896,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             g_ble_ctx.gatts_sign_pk_mtu_negotiated = true;
             ESP_LOGI(TAG, "GATTS MTU negotiated: %u (need >= 90 for sign_pk+box_pk+wifi_mac)",
                      (unsigned)g_ble_ctx.gatts_mtu);
-            if (g_ble_ctx.gatts_mtu < 90U) {
+            if (g_ble_ctx.gatts_mtu < GATT_MIN_MTU) {
                 ESP_LOGW(TAG, "GATTS MTU %u below sign_pk+box_pk+wifi_mac threshold — peer write may fail",
                          (unsigned)g_ble_ctx.gatts_mtu);
             }
@@ -2941,15 +2987,12 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 
         case ESP_GATTS_WRITE_EVT:
             if (param->write.need_rsp) {
-                esp_gatt_rsp_t rsp = {0};
-                rsp.attr_value.handle = param->write.handle;
-                rsp.attr_value.len = 0U;
                 (void)esp_ble_gatts_send_response(
                     gatts_if,
                     param->write.conn_id,
                     param->write.trans_id,
                     ESP_GATT_OK,
-                    &rsp);
+                    NULL);
             }
 
             if (!param->write.is_prep &&
@@ -3091,6 +3134,18 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 uint8_t peer_wifi_mac[6];
                 memcpy(peer_wifi_mac, decrypted + 64U, 6U);
                 CeePewErr_t wifi_mac_err = session_set_peer_wifi_mac(peer_wifi_mac);
+
+                /* Extract and store the peer's uptime offset for ESL clock sync */
+                uint32_t peer_uptime_s = (uint32_t)decrypted[70U]
+                                       | ((uint32_t)decrypted[71U] << 8U)
+                                       | ((uint32_t)decrypted[72U] << 16U)
+                                       | ((uint32_t)decrypted[73U] << 24U);
+                uint32_t local_now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+                int32_t peer_offset_s = (int32_t)(peer_uptime_s - local_now_s);
+                (void)session_set_peer_uptime_offset(peer_offset_s);
+                ESP_LOGI(TAG, "GATTS: Peer uptime=%lu s, local=%lu s, offset=%ld s",
+                         (unsigned long)peer_uptime_s, (unsigned long)local_now_s, (long)peer_offset_s);
+
                 ceepew_secure_zero(peer_wifi_mac, sizeof(peer_wifi_mac));
                 ceepew_secure_zero(decrypted, sizeof(decrypted));
                 if (pk_err == CEEPEW_OK && wifi_mac_err == CEEPEW_OK) {

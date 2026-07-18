@@ -66,14 +66,25 @@ idf.py -p /dev/ttyUSB0 flash
 idf.py -p /dev/ttyUSB0 monitor
 ```
 
+### Diagnostic Mode
+
+Enable the on-device test suite for development:
+
+```powershell
+idf.py menuconfig          # CEE-PEW Build Options → Diagnostic Mode → [*]
+idf.py build flash monitor
+```
+
+The boot log prints a `=== DIAGNOSTIC REPORT ===` block. See [tests/README.md](tests/README.md).
+
 ### Two-Device Pairing Test
 
-Two ESP32s are required. Flash both, then run the monitor script:
+Two ESP32s are required. Flash both, then run the unified monitor:
 
 ```bash
 pip install pyserial  # if needed
-python tools/monitor_both.py --ports COM5,COM6  # Windows
-python tools/monitor_both.py --ports /dev/ttyUSB0,/dev/ttyUSB1  # Linux
+python tools/ceepew_monitor.py --ports COM5,COM6  # Windows
+python tools/ceepew_monitor.py --ports /dev/ttyUSB0,/dev/ttyUSB1  # Linux
 ```
 
 ## Project Structure
@@ -91,8 +102,11 @@ main/                    App entry, session FSM, FreeRTOS tasks
 └── ceepew_security_utils.c  Constant-time comparison, secure zero
 
 components/
-├── hal/                Public HAL headers (pins, GPIO, RNG)
+├── ceepew_common/      Shared types, config, asserts, security utils
 ├── ceepew_hal/         HAL implementations + UI manager + OLED driver
+├── ceepew_oled/        SSD1306 OLED driver (native I2C)
+├── ceepew_oled_arduino/OLED Arduino Wire transport layer
+├── hal/                Public HAL headers (pins, GPIO, RNG)
 ├── crypto/             Ascon-128 AEAD, HKDF, Ed25519, Curve25519, SHA-256
 ├── ecc/                Hamming(15,11) FEC, CRC-32, Stop-and-Wait ARQ
 ├── compress/           Static Huffman coding
@@ -101,6 +115,22 @@ components/
 └── mem/                Region allocator (48 KB, no heap)
 
 tests/                  On-device test suite (development mode only)
+├── main/               Integration tests (FSM, nonce, replay, ARQ, etc.)
+├── components/         Component-level self-tests
+└── CMakeLists.txt      Gated build (development mode only)
+
+tools/                  Host-side scripts
+├── ceepew_monitor.py   Unified serial monitor (single/dual port)
+├── ceepew_diagnose.ps1 Test driver (diagnose / pairing / build modes)
+├── ceepew_log_pipeline.py  Log ingestion + signature analysis
+└── flash_both.ps1      Flash two ESP32s then monitor
+
+fuzz/                   Off-host fuzzing harnesses (AFL/libFuzzer)
+├── fuzz_ascon/         Ascon-128 AEAD fuzz target
+├── fuzz_sha256/        SHA-256 fuzz target
+├── fuzz_hamming/       Hamming(15,11) FEC fuzz target
+├── fuzz_hkdf/          HKDF-SHA256 fuzz target
+└── fuzz_arq/           ARQ seq/state logic fuzz target
 ```
 
 ## Cryptographic Stack

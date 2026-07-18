@@ -68,8 +68,8 @@ static void run_vector(const char *label, const char *k_hex, const char *u_hex, 
 static void test_crypto_box_loopback(void) {
     printf("CEEPEW: Running crypto_box loopback test\n");
 
-    CryptoCtx_t ctxA;
-    CryptoCtx_t ctxB;
+    static CryptoCtx_t ctxA;
+    static CryptoCtx_t ctxB;
 
     memset(&ctxA, 0, sizeof(ctxA));
     memset(&ctxB, 0, sizeof(ctxB));
@@ -98,10 +98,10 @@ static void test_crypto_box_loopback(void) {
     memcpy(ctxB.session_id, dummy_sid, 8U);
 
     /* Encrypt a test message from A to B */
-    const uint8_t plaintext[] = "Hello World! This is a test message.";
+    static const uint8_t plaintext[] = "Hello World! This is a test message.";
     uint16_t pt_len = (uint16_t)strlen((char *)plaintext);
 
-    uint8_t ciphertext[128];
+    static uint8_t ciphertext[128];
     uint16_t ct_len = sizeof(ciphertext);
 
     /* Set nonce counter override for A encrypt */
@@ -115,7 +115,7 @@ static void test_crypto_box_loopback(void) {
     }
 
     /* Build the nonce that B expects */
-    uint8_t nonce[CRYPTO_BOX_NONCEBYTES];
+    static uint8_t nonce[CRYPTO_BOX_NONCEBYTES];
     memcpy(nonce, ctxB.session_id, 8U);
     for (uint8_t i = 0U; i < 8U; i++) {
         nonce[8U + i] = (uint8_t)((nonce_ctr >> (8U * i)) & 0xFFU);
@@ -123,7 +123,7 @@ static void test_crypto_box_loopback(void) {
     memset(nonce + 16U, 0, 8U);
 
     /* Decrypt at B */
-    uint8_t decrypted[128];
+    static uint8_t decrypted[128];
     uint16_t dec_len = sizeof(decrypted);
     err = crypto_box_decrypt(&ctxB, nonce, ctxB.peer_box_pubkey, ciphertext, ct_len, decrypted, &dec_len);
     if (err != CEEPEW_OK) {
@@ -139,6 +139,69 @@ static void test_crypto_box_loopback(void) {
     }
 }
 
+extern CeePewErr_t crypto_box_hmac_sha256_old(const uint8_t *key,
+                                              uint16_t key_len,
+                                              const uint8_t *msg,
+                                              uint16_t msg_len,
+                                              uint8_t out[32U]);
+
+extern CeePewErr_t crypto_hmac_sha256(const uint8_t *key, uint16_t key_len,
+                                      const uint8_t *msg, uint32_t msg_len,
+                                      uint8_t out[32]);
+
+static void test_hmac_sha256_compatibility(void) {
+    printf("CEEPEW: Running HMAC-SHA256 old vs new compatibility test\n");
+
+    /* RFC 4231 Test Case 1 */
+    const uint8_t key[20] = {
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+    };
+    const uint8_t data[8] = {
+        0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65 /* "Hi There" */
+    };
+    const uint8_t expected[32] = {
+        0xb0, 0x34, 0x4c, 0x7a, 0x43, 0xfa, 0x00, 0x34, 0x74, 0x3c, 0x77, 0x8f, 0x68, 0x1a, 0x07, 0x36,
+        0x63, 0x57, 0xbe, 0x59, 0xbe, 0x09, 0x00, 0x9a, 0x0f, 0x44, 0x3b, 0x74, 0xdb, 0xbb, 0x6f, 0x0b
+    };
+
+    uint8_t out_old[32] = {0};
+    uint8_t out_new[32] = {0};
+
+    CeePewErr_t err_old = crypto_box_hmac_sha256_old(key, sizeof(key), data, sizeof(data), out_old);
+    if (err_old != CEEPEW_OK) {
+        printf("  old HMAC path returned error %d\n", err_old);
+        printf("HMAC compatibility: FAIL\n");
+        return;
+    }
+
+    CeePewErr_t err_new = crypto_hmac_sha256(key, sizeof(key), data, sizeof(data), out_new);
+    if (err_new != CEEPEW_OK) {
+        printf("  new HMAC path returned error %d\n", err_new);
+        printf("HMAC compatibility: FAIL\n");
+        return;
+    }
+
+    if (memcmp(out_old, expected, 32) != 0) {
+        printf("  old HMAC output does not match RFC 4231 Test Case 1\n");
+        printf("HMAC compatibility: FAIL\n");
+        return;
+    }
+
+    if (memcmp(out_new, expected, 32) != 0) {
+        printf("  new HMAC output does not match RFC 4231 Test Case 1\n");
+        printf("HMAC compatibility: FAIL\n");
+        return;
+    }
+
+    if (memcmp(out_old, out_new, 32) == 0) {
+        printf("HMAC compatibility: PASS\n");
+    } else {
+        printf("  old vs new HMAC output mismatch\n");
+        printf("HMAC compatibility: FAIL\n");
+    }
+}
+
 void curve25519_selftest_run(void) {
     printf("CEEPEW: Running X25519 RFC7748 self-tests\n");
 
@@ -149,6 +212,7 @@ void curve25519_selftest_run(void) {
     run_vector("X25519-TV-2", "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d", "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493", "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957");
 
     test_crypto_box_loopback();
+    test_hmac_sha256_compatibility();
 
     printf("CEEPEW: X25519 self-tests complete\n");
 }

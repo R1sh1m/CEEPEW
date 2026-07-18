@@ -14,4 +14,8 @@ uint8_t ceepew_ct_equal(const uint8_t *a, const uint8_t *b, uint32_t len);
  */
 uint8_t ceepew_ct_less(const uint8_t *a, const uint8_t *b, uint32_t len);
 
+/* Constant-time all-zero check: returns 1 if all bytes are zero, 0 otherwise.
+ * Runs in constant time regardless of input content. */
+uint8_t ceepew_is_all_zero(const uint8_t *buf, uint32_t len);
+
 #endif /* CEEPEW_SECURITY_UTILS_H */

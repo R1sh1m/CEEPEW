@@ -35,10 +35,13 @@ static void transport_send_status_cb(esp_now_send_status_t status)
 {
     s_last_send_status = status;
     
-    #ifdef CEEPEW_DEBUG_SERIAL
-    ESP_LOGI(TAG, "espnow_send_cb: status=%s", 
-        status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
-    #endif
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        #ifdef CEEPEW_DEBUG_SERIAL
+        ESP_LOGI(TAG, "espnow_send_cb: OK");
+        #endif
+    } else {
+        ESP_LOGW(TAG, "espnow_send_cb: FAIL");
+    }
     
     if (s_send_sem != NULL) {
         BaseType_t was_woken = pdFALSE;

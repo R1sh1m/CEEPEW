@@ -28,13 +28,16 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialise Wire I2C on GPIO26(SDA)/GPIO27(SCL) at 400 kHz.
+ * @brief Initialise Wire I2C on GPIO26(SDA)/GPIO27(SCL).
  *
+ * The bus clock is set to @p freq_hz (e.g. 800000 for 800 kHz).
  * Must be called once at boot, before any FreeRTOS tasks are created,
  * to avoid race conditions on the I2C peripheral. Safe to call again
  * (Wire re-init is idempotent).
+ *
+ * @param freq_hz  I2C clock frequency in Hz.
  */
-esp_err_t ceepew_oled_arduino_init(void);
+esp_err_t ceepew_oled_arduino_init(uint32_t freq_hz);
 
 /**
  * @brief Transmit a raw buffer to the SSD1306 over Wire.

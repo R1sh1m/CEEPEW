@@ -177,11 +177,18 @@ CeePewErr_t compress_huffman_compress(
     BitWriter_t bw;
     bitwriter_init(&bw, out, max_out_len);
 
-    /* Write compressed mode flag (0b10) into first 2 bits */
-    CeePewErr_t err = bitwriter_write(&bw, CEEPEW_HUFFMAN_FLAG_COMPRESSED, 2U);
-    if (err != CEEPEW_OK) {
-        return err;
-    }
+    /* Write compressed mode flag into first 2 bits of byte 0.
+     * NOTE: bitwriter writes bits MSB-first into LSB-order byte positions.
+     * For a 2-bit code AB, the byte's lower 2 bits become BA (bit-reversed).
+     * COMPRESSED = 0x02 means the byte must read as 0x02 (bits 1:0 = 10),
+     * which requires writing MSB=0, LSB=1 → code 0x01.
+     * To avoid the reversal confusion we set byte[0] directly.
+     */
+    out[0] = CEEPEW_HUFFMAN_FLAG_COMPRESSED; /* 0x02 → bits 1:0 = 10 */
+    bw.bit_pos = 2U;
+    bw.total_bits_written = 2U;
+
+    CeePewErr_t err;
 
     /* Encode each input symbol using Huffman table or escape sequence */
     for (uint16_t i = 0U; i < in_len; i++) {
@@ -316,14 +323,21 @@ CeePewErr_t compress_huffman_decompress(
     uint16_t out_pos = 0U;
 
     while (byte_pos < in_len && out_pos < max_out_len) {
-        /* Read bits from stream (LSB-first) to match a code */
-        uint32_t code_bits = 0U;
-        uint8_t code_len = 0U;
-        bool found = false;
+        /* Save stream position before this symbol */
+        uint32_t save_byte = byte_pos;
+        uint8_t save_bit  = bit_pos;
 
-        /* Try to match codes of increasing length (1-12 bits) */
+        uint32_t code_bits = 0U;
+        uint8_t  code_len = 0U;
+        bool     found    = false;
+        uint8_t  best_len = 0U;
+        uint8_t  best_idx = 0U;
+        bool     is_escape = false;
+
+        /* Read up to 12 bits, tracking the longest valid match to
+         * resolve prefix ambiguity (canonical Huffman property).
+         * Also apply mask to stored code for correct comparison. */
         for (uint8_t try_len = 1U; try_len <= 12U; try_len++) {
-            /* Read one more bit */
             if (byte_pos >= in_len) {
                 break;
             }
@@ -336,48 +350,67 @@ CeePewErr_t compress_huffman_decompress(
                 byte_pos++;
             }
 
-            /* Check if code_bits matches any entry with this code_len */
             for (uint8_t t = 0U; t < CEEPEW_HUFFMAN_PRIMARY_SYMBOLS; t++) {
-                if (g_huffman_table[t].code_len == code_len &&
-                    g_huffman_table[t].code == code_bits) {
-                    /* Check for escape code (always 12 bits, 0x0FFF) */
-                    if (code_bits == CEEPEW_HUFFMAN_ESCAPE_CODE && code_len == 12U) {
-                        /* Read 8-bit escaped symbol */
-                        uint16_t escaped_sym = 0U;
-                        for (uint8_t b = 0U; b < 8U; b++) {
-                            if (byte_pos >= in_len) {
-                                return CEEPEW_ERR_BOUNDS;
-                            }
-                            uint8_t bit = (uint8_t)((in[byte_pos] >> bit_pos) & 1U);
-                            escaped_sym = (escaped_sym << 1U) | bit;
-                            bit_pos++;
-                            if (bit_pos == 8U) {
-                                bit_pos = 0U;
-                                byte_pos++;
-                            }
-                        }
-                        if (out_pos >= max_out_len) {
-                            return CEEPEW_ERR_BOUNDS;
-                        }
-                        out[out_pos++] = (uint8_t)escaped_sym;
-                    } else {
-                        if (out_pos >= max_out_len) {
-                            return CEEPEW_ERR_BOUNDS;
-                        }
-                        out[out_pos++] = g_huffman_table[t].symbol;
-                    }
-                    found = true;
-                    break;
+                if (g_huffman_table[t].code_len != code_len) {
+                    continue;
                 }
-            }
-            if (found) {
-                break;
+                /* Mask: compare only the lower code_len bits */
+                uint16_t masked = g_huffman_table[t].code & ((1U << code_len) - 1U);
+                if (masked == (uint16_t)code_bits) {
+                    best_len = code_len;
+                    best_idx = t;
+                    found = true;
+                }
             }
         }
 
+        /* If no table entry matched, check for 12-bit escape code */
+        if (!found && code_len >= 12U &&
+            (code_bits & 0xFFFU) == CEEPEW_HUFFMAN_ESCAPE_CODE) {
+            is_escape = true;
+            found = true;
+            best_len = 12U;
+        }
+
         if (!found) {
-            /* No valid code found — bitstream corruption or end */
-            break;
+            break;  /* Bitstream corruption */
+        }
+
+        if (is_escape) {
+            /* Stream already advanced past the 12-bit escape code;
+             * read 8 more bits for the literal symbol. */
+            uint16_t escaped_sym = 0U;
+            for (uint8_t b = 0U; b < 8U; b++) {
+                if (byte_pos >= in_len) {
+                    return CEEPEW_ERR_BOUNDS;
+                }
+                uint8_t bit = (uint8_t)((in[byte_pos] >> bit_pos) & 1U);
+                escaped_sym = (escaped_sym << 1U) | bit;
+                bit_pos++;
+                if (bit_pos == 8U) {
+                    bit_pos = 0U;
+                    byte_pos++;
+                }
+            }
+            if (out_pos >= max_out_len) {
+                return CEEPEW_ERR_BOUNDS;
+            }
+            out[out_pos++] = (uint8_t)escaped_sym;
+        } else {
+            /* Rewind to start of symbol and consume exactly best_len bits */
+            byte_pos = save_byte;
+            bit_pos  = save_bit;
+            for (uint8_t c = 0U; c < best_len; c++) {
+                bit_pos++;
+                if (bit_pos == 8U) {
+                    bit_pos = 0U;
+                    byte_pos++;
+                }
+            }
+            if (out_pos >= max_out_len) {
+                return CEEPEW_ERR_BOUNDS;
+            }
+            out[out_pos++] = g_huffman_table[best_idx].symbol;
         }
     }
 

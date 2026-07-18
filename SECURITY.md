@@ -23,6 +23,11 @@ CEE-PEW is NOT designed to resist:
 4. **No secure boot / flash encryption** — Production deployments should enable both in `sdkconfig.production`.
 5. **BLE advertisement commitment** — The truncated 16-byte commitment in the BLE scan response could theoretically be brute-forced offline (2^128 preimage resistance, but truncated to 128 bits).
 6. **Device identity = ephemeral Ed25519 keypair** — No long-term identity; MITM resistance relies entirely on the user-verified PIN.
+7. **Identity-degraded (no-Ed25519) fallback mode** — If the peer's Ed25519 signature public key (`sign_pk`) is never received over the BLE GATT channel after `CEEPEW_MAX_RECONNECT_ATTEMPTS` (5) retries, the pairing attempt transitions to a dedicated `UI_STATE_PAIRING_DEGRADED` screen rather than silently continuing. The user must explicitly press the button (short click) to confirm degraded operation, or long-press (1.5 s) to cancel entirely. In degraded mode:
+    - **Ed25519 signature verification is permanently disabled** for the session. Incoming frames are authenticated only by Ascon-128 AEAD tag verification and the X25519 ECDH-derived box layer — no per-frame identity binding via Ed25519.
+    - **All chat UI screens display a persistent "UNVERIFIED IDENTITY" banner** (analogous to Signal/WhatsApp "safety number changed" warnings) indicating that peer identity is not cryptographically verified.
+    - The `session_is_identity_degraded()` flag persists for the session duration and is visible to UI, transport, and crypto layers.
+    - This mode exists solely as an accessibility/reliability fallback for environments where BLE GATT connections are unreliable (e.g., high RF interference, incompatible BLE controller firmware). It is never the default path and requires active user consent on every occurrence.
 
 ## Build Security Notes
 - `sdkconfig` is gitignored. Use `sdkconfig.debug` for debug builds, `sdkconfig.production` for releases.

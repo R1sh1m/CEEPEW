@@ -1,0 +1,18 @@
+---
+Checks: >
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-macro-parentheses,
+  -bugprone-reserved-identifier,
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+AnalyzeTemporaryDtors: false
+FormatStyle: none
+CheckOptions:
+  - key: bugprone-suspicious-missing-comma.MaxThreshold
+    value: '0.5'
+...

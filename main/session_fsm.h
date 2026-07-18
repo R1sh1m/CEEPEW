@@ -274,6 +274,17 @@ bool session_peer_wifi_mac_valid(void);
  * the UI is permitted to transition to the chat screen. */
 bool session_peer_sign_pk_valid(void);
 
+/* Mark the session as identity-degraded (peer sign_pk was never received
+ * but the user explicitly confirmed they wish to proceed without identity
+ * verification). When set, Ed25519 signature verification is skipped and
+ * the UI displays an "UNVERIFIED IDENTITY" banner throughout the chat.
+ * Must be called before session_phase2_derive_key(). */
+void session_set_identity_degraded(void);
+
+/* Returns true if the current session is operating in identity-degraded
+ * mode (no peer Ed25519 sign_pk available, user-confirmed fallback). */
+bool session_is_identity_degraded(void);
+
 /* Copy the 32-byte human-verified session code into out. Used by the
  * transport layer to derive the GATT-side sign_pk encryption key (see
  * transport_ble_gatt_crypto.c). The session code is the trust anchor:
@@ -482,6 +493,12 @@ bool session_is_active(void);
 /* Get current nonce counter (for diagnostics; incremented by enforce_nonce_limit) */
 uint64_t session_get_nonce_counter(void);
 
+/* Get nonce counter for UI display (cross-core safe).
+ * Unlike session_get_nonce_counter(), this function reads a volatile snapshot
+ * that the session task updates after every increment. Safe to call from
+ * Core 0 (UI task) without a mutex. */
+uint64_t session_get_nonce_counter_display(void);
+
 /* Get session ID (derived from peer MAC + timestamp + self MAC) */
 uint64_t session_get_id(void);
 
@@ -533,6 +550,13 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32]);
 
 /* Check if PFS handshake is complete and PFS-derived key is active. */
 bool session_pfs_active(void);
+
+/* Check if the peer's PFS public key has been received and the PFS shared
+ * secret has been derived (but not yet activated). Returns true once
+ * session_pfs_process_peer_key() has stored the peer's key, regardless of
+ * whether session_pfs_activate() has been called. Used by the PFS retry
+ * loop to stop retransmission as soon as the peer has acknowledged. */
+bool session_pfs_peer_ready(void);
 
 /* Get the PFS ephemeral public key to send to peer.
  * Must be called after session_pfs_initiate() returns success. */

@@ -58,6 +58,8 @@ static diag_subsys_t s_report[] = {
     { "Pairing Converge",  false },
     { "Temp Sensor",       false },
     { "RNG Health",        false },
+    { "ARQ Negative",      false },
+    { "Low Order Reject",  false },
 };
 
 #define REPORT_SET(_label, ok_expr) do {                                        \
@@ -368,6 +370,8 @@ static void test_region_alloc_reset(void){
     free(r);
 }
 
+void test_arq_negative(void);
+
 /* external pipeline test (defined in test_pipeline_memory.c) */
 void test_pipeline_memory(void);
 
@@ -390,6 +394,7 @@ void ui_manager_selftest_run(void);
 void ui_cryptogram_selftest_run(void);
 /* void hal_oled_selftest_run(void);  -- deferred: hal_oled facade not yet implemented */
 void hal_temp_selftest_run(void);
+void loworder_selftest_run(void);
 
 /* session message store test (defined below) */
 static void test_session_message_store(void){
@@ -489,6 +494,8 @@ void integration_tests_run_all(void){
     bool pairing_converge_ok  = false;
     bool temp_sensor_ok       = false;
     bool rng_health_ok        = false;
+    bool arq_negative_ok      = false;
+    bool low_order_ok         = false;
 
     uint32_t pass_before = s_tests_passed;
     uint32_t fail_before = s_tests_failed;
@@ -581,6 +588,15 @@ void integration_tests_run_all(void){
     test_rng_health_run_all();
     rng_health_ok = (s_tests_failed == fail_before);
 
+    /* ARQ negative / edge-case tests */
+    fail_before = s_tests_failed;
+    test_arq_negative();
+    arq_negative_ok = (s_tests_failed == fail_before);
+
+    /* Low-order Curve25519 rejection tests (self-contained PASS/FAIL output) */
+    loworder_selftest_run();
+    low_order_ok = true;
+
     /* Update structured report. */
     REPORT_SET("Session FSM",       session_fsm_ok);
     REPORT_SET("Nonce Enforcement", nonce_ok);
@@ -597,6 +613,8 @@ void integration_tests_run_all(void){
     REPORT_SET("Pairing Converge",  pairing_converge_ok);
     REPORT_SET("Temp Sensor",       temp_sensor_ok);
     REPORT_SET("RNG Health",        rng_health_ok);
+    REPORT_SET("ARQ Negative",      arq_negative_ok);
+    REPORT_SET("Low Order Reject",  low_order_ok);
 
     /* Legacy pass/fail summary (preserved for human readability). */
     ESP_LOGI(TAG, "");

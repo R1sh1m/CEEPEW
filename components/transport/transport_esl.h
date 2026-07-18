@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 /* Wrap payload with ESL header + CRC. frame buffer must have headroom for header. */
-CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len);
+CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len, uint64_t nonce_counter);
 CeePewErr_t transport_esl_get_last_nonce_counter(uint64_t *nonce_counter_out);
 
 /* Process incoming ESL frame with full security pipeline.

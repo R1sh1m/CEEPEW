@@ -19,7 +19,6 @@
 #include "esp_chip_info.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"   /* esp_get_free_heap_size() */
-#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
 #include <stdio.h>
@@ -40,7 +39,7 @@ extern BleContext_t g_ble_ctx;
  * Definitions in main/session_fsm.c; test injection via session_test_set_*()
  * setters in session_fsm.h. */
 extern uint64_t session_get_id(void);
-extern uint64_t session_get_nonce_counter(void);
+extern uint64_t session_get_nonce_counter_display(void);
 extern CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES]);
 
 UIContext_t g_ui_ctx = {0};
@@ -1556,9 +1555,11 @@ static const char *ui_pairing_result_reason_text(uint8_t reason)
         case UI_PAIRING_RESULT_TIMED_OUT: return "PAIRING TIMED OUT";
         case UI_PAIRING_RESULT_LINK_FAIL: return "PAIRING LINK FAILED";
         case UI_PAIRING_RESULT_COMMITMENT_FAIL: return "PAIRING MISMATCH";
-        case UI_PAIRING_RESULT_UNKNOWN:
-        case UI_PAIRING_RESULT_NONE:
-        default: return "PAIRING FAILED";
+        case UI_PAIRING_RESULT_IDENTITY_MISSING:
+        return "IDENTITY UNVERIFIED";
+    case UI_PAIRING_RESULT_UNKNOWN:
+    case UI_PAIRING_RESULT_NONE:
+    default: return "PAIRING FAILED";
     }
 }
 
@@ -1573,6 +1574,8 @@ static const char *ui_pairing_result_detail_text(uint8_t reason)
             return "Pairing Failed. Bring devices closer";
         case UI_PAIRING_RESULT_COMMITMENT_FAIL:
             return "Code mismatch. Verify codes match.";
+        case UI_PAIRING_RESULT_IDENTITY_MISSING:
+            return "Peer identity not confirmed. Session will be marked UNVERIFIED.";
         case UI_PAIRING_RESULT_UNKNOWN:
         case UI_PAIRING_RESULT_NONE:
         default:
@@ -1820,6 +1823,48 @@ static CeePewErr_t render_pairing_failed(void)
     return CEEPEW_OK;
 }
 
+/* ── IDENTITY-DEGRADED SCREEN ───────────────────────────────────────────
+ * Shown when the peer's Ed25519 sign_pk was never received over GATT
+ * after CEEPEW_MAX_RECONNECT_ATTEMPTS retries. The user must explicitly
+ * choose whether to proceed without identity verification or cancel.
+ *
+ * Layout:
+ *   Row 0:  "⚠ UNVERIFIED ID"     (warning icon + title)
+ *   Row 2:  divider
+ *   Row 4:  "Peer identity not"
+ *   Row 5:  "confirmed via GATT."
+ *   Row 7:  "Ed25519 verification"
+ *   Row 8:  "will be DISABLED."
+ *   Row 10: "BTN=continue"
+ *   Row 11: "HOLD=cancel"    */
+static CeePewErr_t render_pairing_degraded(void)
+{
+    hal_ui_clear();
+
+    /* Title: warning icon + text */
+    ui_draw_centered_text(0U, "\x7f UNVERIFIED ID");
+    draw_hline(0U, 11U, 128U);
+
+    /* Explanation */
+    ui_draw_centered_text(14U, "Peer identity not");
+    ui_draw_centered_text(22U, "confirmed via GATT.");
+    ui_draw_centered_text(30U, "Ed25519 verification");
+    ui_draw_centered_text(38U, "will be DISABLED.");
+
+    /* Footer: two options */
+    ui_draw_centered_text(48U, "BTN=continue");
+    ui_draw_centered_text(56U, "HOLD=cancel");
+
+    /* Blinking indicator square */
+    if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
+        HalUIRect_t sq = { .x = 62U, .y = 60U, .w = 4U, .h = 4U };
+        hal_ui_rect_fill(&sq, HAL_UI_WHITE);
+    }
+
+    g_ui_ctx.anim.frame_count++;
+    return CEEPEW_OK;
+}
+
 static CeePewErr_t render_confirm(void)
 {
     hal_ui_clear();
@@ -1968,7 +2013,7 @@ static CeePewErr_t render_info(void)
     (void)snprintf(lines[line_count++], sizeof(lines[0]), "Phase:%u", (unsigned)phase);
     uint64_t sid = session_get_id();
     (void)snprintf(lines[line_count++], sizeof(lines[0]), "SessID:0x%08lX", (unsigned long)(sid & 0xFFFFFFFFUL));
-    uint64_t nc = session_get_nonce_counter();
+    uint64_t nc = session_get_nonce_counter_display();
     (void)snprintf(lines[line_count++], sizeof(lines[0]), "Nonce:%lu", (unsigned long)nc);
 
     /* Commitment preview (first 8 bytes as hex) */
@@ -2182,18 +2227,30 @@ CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir, boo
 static CeePewErr_t render_chat_thread(void)
 {
     hal_ui_clear();
+    bool degraded = session_is_identity_degraded();
+    /* When the identity banner is present, all content Y offsets shift
+     * down by 8 pixels to accommodate the warning line. */
+    uint8_t banner_shift = degraded ? 8U : 0U;
 
-    ui_draw_centered_text(1U, "SECURE CHAT");
-    draw_hline(0U, 11U, 128U);
+    /* Identity-degraded banner: if peer sign_pk was never verified, show
+     * a persistent "UNVERIFIED ID" warning at the top of every chat screen.
+     * This is functionally analogous to Signal/WhatsApp "safety number
+     * changed" banners — the user is reminded that Ed25519 identity
+     * verification is not active for this session. */
+    if (degraded) {
+        ui_draw_centered_text(0U, "! UNVERIFIED IDENTITY !");
+    }
+    ui_draw_centered_text((uint8_t)(1U + banner_shift), "SECURE CHAT");
+    draw_hline(0U, (uint8_t)(11U + banner_shift), 128U);
 
     uint8_t count = msg_store_count();
     char badge[16U];
     (void)snprintf(badge, sizeof(badge), "M%u", (unsigned)count);
-    hal_ui_text(102U, 1U, badge, HAL_UI_WHITE);
+    hal_ui_text(102U, (uint8_t)(1U + banner_shift), badge, HAL_UI_WHITE);
 
     if (count == 0U) {
-        ui_draw_centered_text(28U, "No messages yet");
-        ui_draw_centered_text(48U, "BTN=menu");
+        ui_draw_centered_text((uint8_t)(28U + banner_shift), "No messages yet");
+        ui_draw_centered_text((uint8_t)(48U + banner_shift), "BTN=menu");
         return CEEPEW_OK;
     }
 
@@ -2201,8 +2258,8 @@ static CeePewErr_t render_chat_thread(void)
     uint8_t selected_idx = ui_map_pot_to_index(g_ui_ctx.user_input, count);
     g_ui_ctx.chat_selected_idx = selected_idx;
 
-    /* Auto-scrolling list window logic to keep selected message visible */
-    uint8_t visible = 3U;
+    /* Fewer visible messages when banner occupies screen real estate */
+    uint8_t visible = degraded ? 2U : 3U;
     static uint8_t s_scroll_top = 0U;
 
     if (selected_idx < s_scroll_top) {
@@ -2216,6 +2273,7 @@ static CeePewErr_t render_chat_thread(void)
     if (count <= visible) { s_scroll_top = 0U; }
 
     uint8_t shown = (count < visible) ? count : visible;
+    uint8_t list_top = (uint8_t)(14U + banner_shift);
 
     for (uint8_t i = 0U; i < shown; i++) {
         uint8_t idx = (uint8_t)(s_scroll_top + i);
@@ -2224,25 +2282,24 @@ static CeePewErr_t render_chat_thread(void)
         if (msg == NULL) {
             continue;
         }
-        uint8_t y = (uint8_t)(14U + i * 14U);
+        uint8_t y = (uint8_t)(list_top + i * 14U);
         (void)ui_chat_show_bubble(idx, y, msg->meta.dir, (idx == selected_idx));
     }
 
     /* Scrollbar on right edge: thin column showing position */
     if (count > visible) {
-        uint8_t bar_h = 40U;  /* Y=14 to Y=54 */
+        uint8_t bar_top = list_top;
+        uint8_t bar_h = (uint8_t)(54U - bar_top);
         uint8_t thumb_h = (uint8_t)((bar_h * visible) / count);
         if (thumb_h < 4U) { thumb_h = 4U; }
-        uint8_t thumb_y = (uint8_t)(14U + ((uint16_t)s_scroll_top * (uint16_t)(bar_h - thumb_h)) / (uint16_t)max_offset);
-        /* Draw track */
-        HalUIRect_t track = { .x = 126U, .y = 14U, .w = 1U, .h = bar_h };
+        uint8_t thumb_y = (uint8_t)(bar_top + ((uint16_t)s_scroll_top * (uint16_t)(bar_h - thumb_h)) / (uint16_t)max_offset);
+        HalUIRect_t track = { .x = 126U, .y = bar_top, .w = 1U, .h = bar_h };
         hal_ui_rect(&track, HAL_UI_WHITE);
-        /* Draw thumb */
         HalUIRect_t thumb = { .x = 125U, .y = thumb_y, .w = 3U, .h = thumb_h };
         hal_ui_rect_fill(&thumb, HAL_UI_WHITE);
     }
 
-    ui_draw_centered_text(54U, "BTN=menu");
+    ui_draw_centered_text((uint8_t)(54U + banner_shift), "BTN=menu");
 
     return CEEPEW_OK;
 }
@@ -2486,10 +2543,17 @@ static CeePewErr_t render_cryptogram(void)
 static CeePewErr_t render_chat_menu(void)
 {
     hal_ui_clear();
+    bool degraded = session_is_identity_degraded();
+    uint8_t banner_shift = degraded ? 8U : 0U;
+
+    /* Identity-degraded banner */
+    if (degraded) {
+        ui_draw_centered_text(0U, "! UNVERIFIED IDENTITY !");
+    }
 
     /* Title */
-    ui_draw_centered_text(1U, "SECURE CHAT");
-    draw_hline(0U, 11U, 128U);
+    ui_draw_centered_text((uint8_t)(1U + banner_shift), "SECURE CHAT");
+    draw_hline(0U, (uint8_t)(11U + banner_shift), 128U);
 
     /* Two options only */
     static const char *const OPTS[2U] = {
@@ -2502,7 +2566,7 @@ static CeePewErr_t render_chat_menu(void)
     g_ui_ctx.chat_menu_selected = sel;
 
     for (uint8_t i = 0U; i < 2U; i++) {
-        uint8_t y = (uint8_t)(22U + i * 20U);
+        uint8_t y = (uint8_t)((uint8_t)(18U + banner_shift) + i * 20U);
         draw_selected_option_row(8U, y, 112U, 14U, OPTS[i], (i == sel));
     }
 
@@ -2511,10 +2575,10 @@ static CeePewErr_t render_chat_menu(void)
     if (cnt > 0U) {
         char badge[12U];
         (void)snprintf(badge, sizeof(badge), "[%u msg]", (unsigned)cnt);
-        hal_ui_text(4U, 54U, badge, HAL_UI_WHITE);
+        hal_ui_text(4U, (uint8_t)(54U + banner_shift), badge, HAL_UI_WHITE);
     }
 
-    hal_ui_text(66U, 54U, "BTN=select", HAL_UI_WHITE);
+    hal_ui_text(66U, (uint8_t)(54U + banner_shift), "BTN=select", HAL_UI_WHITE);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2712,6 +2776,12 @@ CeePewErr_t ui_manager_update(void)
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
             g_ui_ctx.chat_send_confirm_selected = 0U;
             g_ui_ctx.button_prev = false;
+        } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_DEGRADED) {
+            g_ui_ctx.pairing_result_start_ms = now_ms;
+            g_ui_ctx.button_prev = false;
+            g_ui_ctx.reject_sequence_start_ms = 0U;
+            g_ui_ctx.error_start_ms = 0U;
+            (void)rgb_set_pattern(RGB_YELLOW_RED_BLINK);
         } else if (g_ui_ctx.current_state == UI_STATE_NONCE_EXHAUSTED) {
             g_ui_ctx.error_start_ms = now_ms;
         } else if (g_ui_ctx.current_state == UI_STATE_ERROR) {
@@ -2728,7 +2798,7 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
-#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
+#if defined(CEEPEW_HEADLESS_MODE) && (CEEPEW_HEADLESS_MODE == 1)
     /* ── Headless auto-advance ──────────────────────────────────────────
      * Auto-advances UI through pairing flow without OLED or buttons.
      * Hardcoded session code "ZZZZ" is used for commitment verification.
@@ -2748,7 +2818,7 @@ CeePewErr_t ui_manager_update(void)
                 bool peer = transport_ble_has_peer_cached();
                 ESP_LOGW("headless", "DISC timer elapsed=%lu peer=%d", now_ms - s_disc_entry_ms, (int)peer);
                 if (peer) {
-                    ESP_LOGW("headless", "DISCOVERY → CODE_ENTRY");
+                    ESP_LOGW("headless", "DISCOVERY -> CODE_ENTRY");
                     (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
                     g_ui_ctx.transition_ready = true;
                     s_disc_entry_ms = 0U;
@@ -2784,7 +2854,7 @@ CeePewErr_t ui_manager_update(void)
                     (void)ui_manager_transition_to(UI_STATE_CONFIRM);
                     g_ui_ctx.pairing_start_ms = now_ms;
                     g_ui_ctx.transition_ready = true;
-                    ESP_LOGW("headless", "CODE_ENTRY → CONFIRM (code=ZZZZ) peer=%02x:%02x:%02x:%02x:%02x:%02x",
+                    ESP_LOGW("headless", "CODE_ENTRY -> CONFIRM (code=ZZZZ) peer=%02x:%02x:%02x:%02x:%02x:%02x",
                              g_ble_ctx.peer_mac[0], g_ble_ctx.peer_mac[1], g_ble_ctx.peer_mac[2],
                              g_ble_ctx.peer_mac[3], g_ble_ctx.peer_mac[4], g_ble_ctx.peer_mac[5]);
                 } else {
@@ -2816,14 +2886,14 @@ CeePewErr_t ui_manager_update(void)
                 ESP_LOGW("headless", "CONFIRM entered at %lu", now_ms);
             }
             if (g_ble_ctx.commitment_verified) {
-                ESP_LOGW("headless", "CONFIRM → PAIRING (commitment verified at %lu)",
+                ESP_LOGW("headless", "CONFIRM -> PAIRING (commitment verified at %lu)",
                          now_ms);
                 s_confirm_entry_ms = 0U;
                 (void)ui_manager_transition_to(UI_STATE_PAIRING);
                 g_ui_ctx.pairing_start_ms = now_ms;
                 g_ui_ctx.transition_ready = true;
             } else if ((now_ms - s_confirm_entry_ms) >= CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS) {
-                ESP_LOGW("headless", "CONFIRM → PAIRING_FAILED (timeout %lu ms at %lu)",
+                ESP_LOGW("headless", "CONFIRM -> PAIRING_FAILED (timeout %lu ms at %lu)",
                          (unsigned long)CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS, now_ms);
                 s_confirm_entry_ms = 0U;
                 g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL;
@@ -2833,6 +2903,17 @@ CeePewErr_t ui_manager_update(void)
                 ESP_LOGW("headless", "state=%d (waiting for commitment, elapsed=%lu)",
                          (int)g_ui_ctx.current_state,
                          (unsigned long)(now_ms - s_confirm_entry_ms));
+            }
+        } else if (g_ui_ctx.current_state == UI_STATE_PAIRING_DEGRADED) {
+            static uint32_t s_pdeg_entry_ms = 0U;
+            if (s_pdeg_entry_ms == 0U) {
+                s_pdeg_entry_ms = now_ms;
+                ESP_LOGW("headless", "PAIR_DEGRADED entered at %lu", now_ms);
+            } else if ((now_ms - s_pdeg_entry_ms) >= 1000U) {
+                /* Headless: auto-confirm degraded mode after 1s */;
+                ESP_LOGW("headless", "PAIR_DEGRADED auto-confirming at %lu", now_ms);
+                s_pdeg_entry_ms = 0U;
+                session_set_identity_degraded();
             }
         } else {
             if ((now_ms % 5000U) < 50U) {
@@ -2862,6 +2943,37 @@ CeePewErr_t ui_manager_update(void)
                 (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
             }
             (void)rgb_set_pattern(RGB_BLUE_PULSE);
+        }
+    }
+
+    if (g_ui_ctx.current_state == UI_STATE_PAIRING_DEGRADED) {
+        /* PAIRING_DEGRADED requires an explicit decision:
+         *   Short press (click)  → confirm degraded mode, proceed
+         *   Long press (>= 1500ms) → cancel, go to PAIRING_FAILED
+         * This is handled in the session task via the pairing flow.
+         * Here we just debounce and set the flag that the pairing flow
+         * polls. The actual session_set_identity_degraded() is called
+         * by task_session's PAIRING_FLOW_DEGRADED handler. */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+            ESP_LOGI("ui", "PAIRING_DEGRADED: button pressed");
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                         ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 1500U) {
+                /* Long press = cancel → transition to PAIRING_FAILED */
+                ESP_LOGW("ui", "PAIRING_DEGRADED: long press (%u ms) — cancelling degraded mode",
+                         (unsigned)dur);
+                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_UNKNOWN;
+                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                g_ui_ctx.transition_ready = true;
+            } else {
+                /* Short press = confirm degraded mode */
+                ESP_LOGW("ui", "PAIRING_DEGRADED: short press (%u ms) — confirming degraded identity",
+                         (unsigned)dur);
+                session_set_identity_degraded();
+                (void)rgb_set_pattern(RGB_YELLOW);
+            }
         }
     }
 
@@ -3502,6 +3614,7 @@ CeePewErr_t ui_manager_draw(void)
         case UI_STATE_PAIRING:            err = render_countdown();           break;
         case UI_STATE_CONFIRM:            err = render_confirm();             break;
         case UI_STATE_PAIRING_FAILED:     err = render_pairing_failed();      break;
+        case UI_STATE_PAIRING_DEGRADED:   err = render_pairing_degraded();    break;
         case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
         case UI_STATE_CHAT:               err = render_chat_thread();         break;
         case UI_STATE_CHAT_DETAIL:        err = render_chat_detail();         break;
@@ -3537,10 +3650,13 @@ CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
     CEEPEW_ASSERT(next_state <= UI_STATE_CHAT_DETAIL, CEEPEW_ERR_PARAM);
     if (next_state == UI_STATE_PAIRING_FAILED) {
-        ESP_LOGW("ui_transition", "→ PAIRING_FAILED (was %u)", g_ui_ctx.current_state);
+        ESP_LOGW("ui_transition", "-> PAIRING_FAILED (was %u)", g_ui_ctx.current_state);
+    }
+    if (next_state == UI_STATE_PAIRING_DEGRADED) {
+        ESP_LOGW("ui_transition", "-> PAIRING_DEGRADED (was %u)", g_ui_ctx.current_state);
     }
     if (next_state == UI_STATE_PAIRING) {
-        ESP_LOGI("ui_transition", "→ PAIRING (was %u)", g_ui_ctx.current_state);
+        ESP_LOGI("ui_transition", "-> PAIRING (was %u)", g_ui_ctx.current_state);
     }
     g_ui_ctx.next_state = next_state;
     return CEEPEW_OK;

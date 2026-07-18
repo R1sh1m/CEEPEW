@@ -37,6 +37,7 @@ typedef enum {
     UI_STATE_PAIRING_FAILED = 16U,  /* Pairing outcome: failure banner */
     UI_STATE_CHAT_SEND_CONFIRM = 17U, /* Phase 4: Confirm composed message before send */
     UI_STATE_CHAT_DETAIL = 18U,       /* Detail view of selected message */
+    UI_STATE_PAIRING_DEGRADED = 19U,  /* Peer identity unverified — user must confirm to proceed */
 } UIState_t;
 
 typedef enum {
@@ -46,6 +47,7 @@ typedef enum {
     UI_PAIRING_RESULT_LINK_FAIL = 3U,
     UI_PAIRING_RESULT_COMMITMENT_FAIL = 4U,
     UI_PAIRING_RESULT_UNKNOWN = 5U,
+    UI_PAIRING_RESULT_IDENTITY_MISSING = 6U,  /* Peer sign_pk never received; identity unverified */
 } PairingResultReason_t;
 
 /* Animation frame context */

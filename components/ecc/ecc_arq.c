@@ -2,6 +2,7 @@
 
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#include "ceepew_security_utils.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -85,18 +86,34 @@ CeePewErr_t ecc_arq_init_hop_sync(void)
 }
 
 static uint16_t s_tx_seq = 0U;
-static uint16_t s_expected_rx_seq = 0U;
+static uint16_t s_expected_rx_seq = 0U;  /* full 16-bit counter tracking accepted frames */
 static bool s_rx_init = false;
 
-/* Reset ARQ engine state — zeroes sequence counters for clean slate chat.
- * Called from session_clear_sync_barrier_internal() at the instant the
- * post-derive sync barrier is verified. This ensures no stale sequence
- * numbers from the pairing exchange contaminate the active session. */
+/* Reset ARQ engine state — securely zeroes sequence counters for clean
+ * slate chat. Called from session_clear_sync_barrier_internal() at the
+ * instant the post-derive sync barrier is verified. This ensures no stale
+ * sequence numbers from the pairing exchange contaminate the active session.
+ *
+ * SECURITY: Uses ceepew_secure_zero() rather than direct assignment so that
+ * sequence-state residues are not left in RAM after session teardown,
+ * preventing stale-state side-channel leakage across session boundaries.
+ *
+ * DEFENSE-IN-DEPTH: The ARQ 8-bit wire seq is an ordering/duplicate-rejection
+ * mechanism only.  Its 256-frame window is too small to provide cryptographic
+ * replay protection across wrap boundaries — after exhausting the 8-bit space
+ * an attacker can replay a frame whose wire-seq collides with the next
+ * legitimate wrap value.  TRUE replay protection is provided by:
+ *   1. ESL replay window (transport_replay.c) — 64-bit WireGuard-style bitmap
+ *      sliding over msg_id.
+ *   2. Crypto nonce (crypto_box_wrap.c) — 64-bit counter with parity invariant
+ *      and 2^56 hard limit; no nonce can ever repeat.
+ * Either layer independently prevents the ARQ-layer wrap ambiguity from
+ * becoming an authentication bypass. */
 CeePewErr_t ecc_arq_reset(void)
 {
-    s_tx_seq = 0U;
-    s_expected_rx_seq = 0U;
-    s_rx_init = false;
+    ceepew_secure_zero(&s_tx_seq, sizeof(s_tx_seq));
+    ceepew_secure_zero(&s_expected_rx_seq, sizeof(s_expected_rx_seq));
+    ceepew_secure_zero(&s_rx_init, sizeof(s_rx_init));
     return CEEPEW_OK;
 }
 
@@ -122,27 +139,38 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
     CEEPEW_ASSERT(in_len >= CEEPEW_ARQ_SEQ_BYTES, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT((uint32_t)(in_len - CEEPEW_ARQ_SEQ_BYTES) <= max_out_len, CEEPEW_ERR_BOUNDS);
     uint8_t seq = in[0];
-    if (!s_rx_init){
-        s_rx_init = true;
-        s_expected_rx_seq = seq;
-    }
 
-    /* Wrap-aware sequence comparison: wire format is 8 bits, internal is 16 bits.
-     * Compute delta accounting for 8-bit wrap at 256 boundary. */
-    uint16_t delta = (seq >= (s_expected_rx_seq & 0xFFU))
-                     ? (uint16_t)(seq - (s_expected_rx_seq & 0xFFU))
-                     : (uint16_t)(seq + 0x100U - (s_expected_rx_seq & 0xFFU));
-    
-    if (delta != 1U) {
-        *corrected = false;
-        return CEEPEW_ERR_REPLAY;
+    if (!s_rx_init) {
+        /* First frame since reset: accept unconditionally.
+         * Advance the 16-bit counter so that after N frames expected=N,
+         * fixing the off-by-one where the init path omitted the increment
+         * that every other accepted frame performs. */
+        s_rx_init = true;
+        s_expected_rx_seq = (uint16_t)(seq + 1U);
+    } else {
+        /* Reconstruct the full 16-bit seq from the 8-bit wire byte:
+         * use the upper 8 bits of the expected counter and fall back
+         * through a +0x100 step if the estimate undershoots.  This
+         * correctly disambiguates wraps at the 256-boundary from replays
+         * of frames in the preceding window, unlike the previous formula
+         * which compared only modulo-256 and conflated wrap with replay. */
+        uint16_t seq_estimate = (s_expected_rx_seq & 0xFF00U) | seq;
+        if (seq_estimate < s_expected_rx_seq) {
+            seq_estimate += 0x100U;
+        }
+        uint16_t last_accepted = s_expected_rx_seq - 1U;
+        uint16_t delta = seq_estimate - last_accepted;
+        if (delta != 1U) {
+            *corrected = false;
+            return CEEPEW_ERR_REPLAY;
+        }
+        s_expected_rx_seq = seq_estimate + 1U;
     }
 
     uint16_t payload_len = (uint16_t)(in_len - CEEPEW_ARQ_SEQ_BYTES);
     for (uint16_t i = 0U; i < payload_len; i++){ out[i] = in[1U + i]; }
     *out_len = payload_len;
     *corrected = false;
-    s_expected_rx_seq++;
     return CEEPEW_OK;
 }
 
@@ -174,7 +202,11 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
             vTaskDelay(pdMS_TO_TICKS(2));
         }
 
-        err = transport_espnow_send(peer_mac, frame, frame_len);
+        /* Consume stale send-completion signal (if any) so the
+         * subsequent transport_wait_ack waits on THIS send, not a
+         * leftover from a previous attempt. */
+        (void)transport_wait_ack(peer_mac, seq, 0U);
+        err = hal_radio_send(frame, frame_len);
         if (err != CEEPEW_OK){ return err; }
 
         /* Wait for ACK (stubbed in platforms without ACK path) */
@@ -182,7 +214,7 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
         if (ack_err == CEEPEW_OK){
             return CEEPEW_OK; /* Success */
         }
-        else if (ack_err == CEEPEW_ERR_TIMEOUT){
+        else if (ack_err == CEEPEW_ERR_TIMEOUT || ack_err == CEEPEW_ERR_HW){
             /* Timeout: apply exponential backoff with jitter before retry.
              * Skip delay on final attempt (all retries exhausted after this loop).
              * Also respect hop pauses during backoff. */

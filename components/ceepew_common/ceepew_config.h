@@ -8,14 +8,19 @@
 /* -------------------------------------------------------------------------- */
 /* Message Limits                                                             */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_MAX_MSG_BYTES             160U
-#define CEEPEW_MAX_MSG_CHARS             160U
+#define CEEPEW_MAX_MSG_BYTES             60U    /* fits ESP-NOW v1 250-byte limit */
+#define CEEPEW_MAX_MSG_CHARS             60U
 #define CEEPEW_MAX_FRAGMENTS             4U
 #define CEEPEW_STREAM_MAX_FRAGMENTS      512U
 #define CEEPEW_STREAM_PAYLOAD_MAX        210U   /* bytes per fragment payload */
 #define CEEPEW_HUFF_BUF_MAX              200U   /* worst-case compressed      */
-#define CEEPEW_FEC_BUF_MAX               300U   /* worst-case FEC-encoded     */
+#define CEEPEW_FEC_BUF_MAX               224U   /* worst-case FEC-encoded     */
 #define CEEPEW_PACKET_MAX_BYTES          512U   /* max total frame size       */
+/* Max input to ecc_hamming_encode that fits ESP-NOW v1 (250-byte limit).
+ * Derivation: 2-byte LE box_ct_len prefix + (max box_ct) + 64-byte sig
+ *           = 2 + (76+16) + 64 = 158.
+ * Wire frame = ARQ(1) + ESL(24) + FEC(216) + inner-CRC(4) + ESL-CRC(4) = 249. */
+#define CEEPEW_PAYLOAD_MAX_BYTES         158U
 
 /* -------------------------------------------------------------------------- */
 /* Crypto Parameters                                                           */
@@ -84,8 +89,8 @@
 /* -------------------------------------------------------------------------- */
 /* ARQ (Stop-and-Wait)                                                         */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_ARQ_MAX_RETRIES           3U
-#define CEEPEW_ARQ_TIMEOUT_MS            500U
+#define CEEPEW_ARQ_MAX_RETRIES           4U
+#define CEEPEW_ARQ_TIMEOUT_MS            600U
 #define CEEPEW_SEQ_WINDOW_SIZE           32U
 
 /* Post-derive sync barrier — 1-byte magic plaintexts exchanged inside the
@@ -101,6 +106,7 @@
 #define CEEPEW_KEY_SYNC_TIMEOUT_MS       20000U  /* Give up → PAIRING_FAILED */
 #define CEEPEW_KEY_SYNC_RETRY_MS         250U    /* Initiator retransmit cadence */
 #define CEEPEW_PFS_RETRY_INTERVAL_MS     3000U   /* PFS retransmit interval */
+#define CEEPEW_PFS_TIMEOUT_MS            60000U  /* abandon PFS after 60s, use base key */
 
 /* -------------------------------------------------------------------------- */
 /* Session                                                                     */
@@ -191,7 +197,7 @@
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_CORE0_STACK_BYTES         10240U
 #define CEEPEW_CORE1_STACK_BYTES         16384U
-#define CEEPEW_QUEUE_DEPTH               32U
+#define CEEPEW_QUEUE_DEPTH               64U
 #define CEEPEW_TASK_UI_PRIORITY          3U
 #define CEEPEW_TASK_SESSION_PRIORITY     3U
 
@@ -300,5 +306,14 @@
  *   [0] = major, [1] = minor, [2] = patch,
  *   [3..6] = first 4 bytes of git hash (truncated) */
 #define CEEPEW_VERSION_ADV_BYTES         7U
+
+/* -------------------------------------------------------------------------- */
+/* Production Configuration Validation                                       */
+/* -------------------------------------------------------------------------- */
+#if defined(CONFIG_SECURE_BOOT_V2_ENABLED) && defined(CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED)
+#if !defined(CONFIG_CEEPEW_EFUSE_HMAC_KEY)
+#error "PRODUCTION BUILD ERROR: Secure Boot and Flash Encryption are enabled, but CONFIG_CEEPEW_EFUSE_HMAC_KEY is not set. Production builds must enable device-binding via eFuse HMAC key!"
+#endif
+#endif
 
 #endif /* CEEPEW_CONFIG_H */

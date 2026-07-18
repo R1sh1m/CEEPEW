@@ -70,8 +70,20 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
-$IdfProfile = "C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1"
-$PythonExe  = "C:\Espressif\tools\python\v6.0.1\venv\Scripts\python.exe"
+$IdfProfile = if (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
+    "C:\esp\v6.0.2\esp-idf\export.ps1"
+} elseif (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
+    "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1"
+} else {
+    "C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1"
+}
+$PythonExe  = if (Test-Path -LiteralPath "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe") {
+    "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe"
+} elseif (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
+    "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+} else {
+    "C:\Espressif\tools\python\v6.0.1\venv\Scripts\python.exe"
+}
 $MonitorPy  = Join-Path $PSScriptRoot "ceepew_monitor.py"
 
 # -- Fallback: if TimeoutSec was passed (old diagnose.ps1 convention), use it

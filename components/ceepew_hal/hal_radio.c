@@ -27,9 +27,9 @@
  */
 
 #include "hal_radio.h"
-#include "hal_pins.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
+#include "ceepew_security_utils.h"
 #include "../transport/transport_hop.h"
 #include "../transport/transport_esl.h"
 #include "../crypto/crypto_ctx.h"
@@ -44,7 +44,6 @@
 #include "esp_now.h"
 #include "esp_wifi.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/timers.h"
 #include "nvs_flash.h"
@@ -65,6 +64,13 @@ static bool    s_peer_added     = false;
  * MUST be used with portENTER_CRITICAL_ISR / portEXIT_CRITICAL_ISR to
  * guarantee cross-core safety when Core 1 task and Core 0 ISR race. */
 static portMUX_TYPE s_peer_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* Send spinlock: serialises hal_radio_send() calls across cores.
+ * session_send_message (Core 0) and the PFS retry loop (Core 1) both call
+ * hal_radio_send() via ecc_arq_send().  esp_now_send() is not guaranteed
+ * reentrant, so concurrent calls can corrupt TX state or produce
+ * CEEPEW_ERR_HW.  This short-duration spinlock serialises all sends. */
+static portMUX_TYPE s_radio_send_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* RX Queue — created in hal_radio_init(), accessed via hal_radio_get_rx_queue() */
 static QueueHandle_t s_rx_queue = NULL;
@@ -88,8 +94,15 @@ static esp_timer_handle_t s_hop_timer = NULL;
 /* Crypto context pointer for channel hopping callback — set by caller */
 static const CryptoCtx_t *s_hop_crypto_ctx = NULL;
 
-/* Nonce counter getter callback — set by caller */
+/* Nonce counter getter callback — set by caller (kept for API compat) */
 static hal_radio_get_nonce_counter_cb_t s_nonce_getter = NULL;
+
+/* Shared hop epoch: incremented once per hop interval on both devices.
+ * Used instead of per-device nonce_counter to compute the hop channel.
+ * Both devices' hop timers fire at the same wall-clock interval, so this
+ * counter stays synchronized — eliminating the channel-hopping desync
+ * that occurs when per-device (even/odd) nonce counters diverge. */
+static uint64_t s_hop_epoch = 0;
 
 /* Hop task control */
 static volatile bool s_hop_task_running = false;
@@ -145,11 +158,6 @@ static bool mac_equal_ct(const uint8_t a[6], const uint8_t b[6]){
         diff |= (uint8_t)(a[i] ^ b[i]);
     }
     return (diff == 0U);
-}
-
-static bool mac_is_zero(const uint8_t mac[6]){
-    static const uint8_t zero[6] = {0};
-    return mac_equal_ct(mac, zero);
 }
 
 /* Compute absolute difference of two uint64 values, clamped to INT32_MAX
@@ -342,9 +350,14 @@ static void hal_radio_hop_task(void *pvParameters)
             continue;
         }
 
-        /* Get next channel from session state */
+        /* Get next channel from session state using shared hop epoch.
+         * Both devices increment s_hop_epoch once per hop interval (5 s),
+         * keeping the epoch synchronized across the pair.  Using per-device
+         * nonce_counter (even vs odd) would cause permanent desync as soon
+         * as one side's message count diverges from the other's. */
         uint8_t next_ch = 0U;
-        uint64_t nonce_counter = s_nonce_getter();
+        s_hop_epoch++;
+        uint64_t nonce_counter = s_hop_epoch;
         CeePewErr_t err = transport_get_current_channel(s_hop_crypto_ctx, nonce_counter, &next_ch);
         if (err != CEEPEW_OK) {
             ESP_LOGD(TAG, "Hop failed: transport_get_current_channel returned %d", (int)err);
@@ -398,7 +411,7 @@ static void hal_radio_hop_task(void *pvParameters)
                 peer_info.channel = next_ch;
                 esp_err_t mod_rc = esp_now_mod_peer(&peer_info);
                 if (mod_rc != ESP_OK) {
-                    ESP_LOGD(TAG, "peer channel update to %u: %d (%s)",
+                    ESP_LOGW(TAG, "peer channel update to %u FAILED: %d (%s)",
                              (unsigned)next_ch, mod_rc, esp_err_to_name(mod_rc));
                 }
             }
@@ -506,6 +519,24 @@ CeePewErr_t hal_radio_init(void)
     esp_err_t rc = esp_now_init();
     if (rc != ESP_OK) { radio_cleanup(); return CEEPEW_ERR_HW; }
 
+    /* Configure max TX power (78 = 19.5 dBm, near regulatory limit) */
+    rc = esp_wifi_set_max_tx_power(78);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_max_tx_power failed: %d (%s)", rc, esp_err_to_name(rc));
+    }
+    ESP_LOGI(TAG, "TX power set to max (requested 19.5 dBm)");
+
+    /* Lock PHY rate to 1 Mbps long-preamble for maximum range */
+    rc = esp_wifi_config_80211_tx_rate(WIFI_IF_STA, WIFI_PHY_RATE_1M_L);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_config_80211_tx_rate(STA) failed: %d (%s)", rc, esp_err_to_name(rc));
+    }
+    rc = esp_wifi_config_80211_tx_rate(WIFI_IF_AP, WIFI_PHY_RATE_1M_L);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_config_80211_tx_rate(AP) failed: %d (%s)", rc, esp_err_to_name(rc));
+    }
+    ESP_LOGI(TAG, "PHY rate locked to 1 Mbps long-preamble for max range");
+
     rc = esp_now_register_send_cb(radio_send_cb);
     if (rc != ESP_OK) { radio_cleanup(); return CEEPEW_ERR_HW; }
 
@@ -565,6 +596,28 @@ CeePewErr_t hal_radio_espnow_reinit(void)
         ESP_LOGE(TAG, "esp_now_init FAILED after reinit: %d (%s)", rc, esp_err_to_name(rc));
         return CEEPEW_ERR_HW;
     }
+
+    /* Reset WiFi channel to the default ESP-NOW channel. After an
+     * esp_wifi_stop()/start() cycle the channel may be undefined; this
+     * ensures the rendezvous handshake works on the agreed initial channel
+     * before channel hopping takes over. */
+    rc = esp_wifi_set_channel((uint8_t)CEEPEW_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_channel reinit: %d (%s)", rc, esp_err_to_name(rc));
+    }
+
+    /* Re-apply max TX power and 1 Mbps long-range rate after WiFi restart */
+    rc = esp_wifi_set_max_tx_power(78);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_max_tx_power reinit: %d (%s)", rc, esp_err_to_name(rc));
+    }
+    ESP_LOGI(TAG, "TX power re-applied (19.5 dBm)");
+    rc = esp_wifi_config_80211_tx_rate(WIFI_IF_STA, WIFI_PHY_RATE_1M_L);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_config_80211_tx_rate reinit: %d (%s)", rc, esp_err_to_name(rc));
+    }
+    ESP_LOGI(TAG, "PHY rate re-applied (1 Mbps long-preamble)");
+
     rc = esp_now_register_send_cb(radio_send_cb);
     if (rc != ESP_OK) { return CEEPEW_ERR_HW; }
     rc = esp_now_register_recv_cb(radio_recv_cb);
@@ -685,6 +738,7 @@ CeePewErr_t hal_radio_set_peer_with_lmk(const uint8_t peer_mac[6], const uint8_t
 
 CeePewErr_t hal_radio_send(const uint8_t *buf, uint16_t len){
     CEEPEW_ASSERT(buf != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len <= ESP_NOW_MAX_DATA_LEN, CEEPEW_ERR_BOUNDS);
 
     if (!s_initialised) {
         return CEEPEW_ERR_BUSY;
@@ -701,7 +755,13 @@ CeePewErr_t hal_radio_send(const uint8_t *buf, uint16_t len){
         return CEEPEW_ERR_PARAM;
     }
 
+    /* Serialise against concurrent hal_radio_send from the other core
+     * (e.g. message send on Core 0 vs PFS retry on Core 1).  The
+     * spinlock is held only for the esp_now_send call itself. */
+    taskENTER_CRITICAL(&s_radio_send_mux);
     esp_err_t rc = esp_now_send(peer_mac, buf, (size_t)len);
+    taskEXIT_CRITICAL(&s_radio_send_mux);
+
     switch (rc) {
         case ESP_OK:                    return CEEPEW_OK;
         case ESP_ERR_ESPNOW_NOT_FOUND:  return CEEPEW_ERR_PARAM;
@@ -712,6 +772,7 @@ CeePewErr_t hal_radio_send(const uint8_t *buf, uint16_t len){
 
 CeePewErr_t hal_radio_send_broadcast(const uint8_t *buf, uint16_t len){
     CEEPEW_ASSERT(buf != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(len <= ESP_NOW_MAX_DATA_LEN, CEEPEW_ERR_BOUNDS);
     if (!s_initialised) { return CEEPEW_ERR_BUSY; }
     static bool s_bcast_peer_added = false;
     if (!s_bcast_peer_added) {
@@ -785,6 +846,20 @@ CeePewErr_t hal_radio_start_channel_hopping(void)
 {
     if (!s_initialised) {
         return CEEPEW_ERR_PARAM;
+    }
+
+    if (s_hop_timer == NULL) {
+        ESP_LOGI(TAG, "Hop timer handle NULL — recreating");
+        const esp_timer_create_args_t timer_args = {
+            .callback = hop_timer_cb,
+            .arg = NULL,
+            .name = "hop_timer"
+        };
+        esp_err_t timer_rc = esp_timer_create(&timer_args, &s_hop_timer);
+        if (timer_rc != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to recreate hop timer: %d", timer_rc);
+            return CEEPEW_ERR_HW;
+        }
     }
 
     esp_err_t rc = esp_timer_start_periodic(s_hop_timer, CEEPEW_HOP_INTERVAL_MS * 1000U);
@@ -914,7 +989,7 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
     if (session_get_phase() >= 3U) {
         uint8_t peer_wifi_mac[6];
         if (session_get_peer_wifi_mac(peer_wifi_mac) == CEEPEW_OK) {
-            if (memcmp(src_mac, peer_wifi_mac, 6U) != 0) {
+            if (!ceepew_ct_equal(src_mac, peer_wifi_mac, 6U)) {
                 ESP_LOGW(TAG, "Rendezvous: discarding frame from unauthenticated MAC");
                 return CEEPEW_ERR_AUTH_FAIL;
             }

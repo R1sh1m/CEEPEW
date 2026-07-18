@@ -22,7 +22,7 @@
  */
 #define I2C_SCAN_ADDR_MIN  0x3CU
 #define I2C_SCAN_ADDR_MAX  0x3DU
-#define I2C_SCAN_PROBE_TIMEOUT_MS 20U
+#define I2C_SCAN_PROBE_TIMEOUT_MS 50U
 
 /* Scan the I2C bus on the primary pins (CEEPEW_PIN_I2C_SDA, CEEPEW_PIN_I2C_SCL)
  * at the standard frequency (CEEPEW_I2C_FREQ_HZ).

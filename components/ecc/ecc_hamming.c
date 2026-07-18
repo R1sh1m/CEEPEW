@@ -209,7 +209,7 @@ CeePewErr_t ecc_hamming_encode(const uint8_t *in, uint16_t in_len, uint8_t *out,
     CEEPEW_ASSERT(in != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(s_ctx.initialised, CEEPEW_ERR_FEC);
-    CEEPEW_ASSERT(in_len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(in_len <= CEEPEW_PAYLOAD_MAX_BYTES, CEEPEW_ERR_BOUNDS);
 
     uint16_t out_capacity = *out_len;
     CEEPEW_ASSERT(out_capacity > 0U, CEEPEW_ERR_BOUNDS);
@@ -222,7 +222,7 @@ CeePewErr_t ecc_hamming_encode(const uint8_t *in, uint16_t in_len, uint8_t *out,
 
     memset(out, 0, (size_t)required_bytes);
 
-    /* loop bound: ceil((CEEPEW_MAX_MSG_BYTES*8)/11) */
+    /* loop bound: ceil((CEEPEW_PAYLOAD_MAX_BYTES*8)/11) */
     for (uint32_t cw = 0U; cw < codewords; cw++) {
         uint16_t data11 = extract_11_bits(in, cw * CEEPEW_HAMMING_DATA_BITS, in_bits);
         uint16_t code = hamming_encode_word(data11);

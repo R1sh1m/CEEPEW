@@ -453,6 +453,99 @@ static void test_beacon_nonce_bit15_flag(void)
           "peer_gatt_ready extracted from bit 15 of accepted beacon");
 }
 
+/*
+ * Regression test: key derivation MUST be blocked when peer sign_pk
+ * was never received AND the user has NOT explicitly confirmed the
+ * identity-degraded path. This test verifies the fix for the silent
+ * degraded-mode bug in STEP 6 of task_session_drive_ble_pairing().
+ *
+ * Test flow:
+ *   1. Set up a peer with matching session_code but NO sign_pk exchange
+ *      (simulates CEEPEW_MAX_RECONNECT_ATTEMPTS exhaustion)
+ *   2. WITHOUT calling session_set_identity_degraded(), attempt key
+ *      derivation — must FAIL
+ *   3. Call session_set_identity_degraded() to simulate user confirmation
+ *   4. Retry key derivation — must SUCCEED
+ *   5. Verify session_is_identity_degraded() returns true
+ *   6. Verify session_peer_sign_pk_valid() still returns false
+ *      (the key was never received, just the degraded flag was set)
+ */
+static void test_identity_degraded_blocks_derivation(void)
+{
+    ESP_LOGI(TAG, "--- test_identity_degraded_blocks_derivation ---");
+
+    /* ── Set up peer A (initiator) with NO sign_pk ── */
+    CeePewErr_t err = session_reset_to_discovery();
+    check(err == CEEPEW_OK, "degA: reset");
+    err = session_phase1_init(MAC_A);
+    check(err == CEEPEW_OK, "degA: phase1_init");
+    err = session_phase1_accept_peer(MAC_B);
+    check(err == CEEPEW_OK, "degA: accept_peer");
+
+    /* Start phase 2 (generates local sign_pk, box keypair) but do NOT
+     * call session_set_peer_public_key() — simulates GATT identity
+     * exchange never completing. */
+    err = session_phase2_initiate(CODE_32);
+    check(err == CEEPEW_OK, "degA: phase2_initiate");
+    err = session_set_role(true);
+    check(err == CEEPEW_OK, "degA: set_role(initiator)");
+    err = session_set_self_wifi_mac(MAC_A);
+    check(err == CEEPEW_OK, "degA: set_self_wifi_mac");
+    err = session_set_peer_wifi_mac(MAC_B);
+    check(err == CEEPEW_OK, "degA: set_peer_wifi_mac");
+
+    /* CRITICAL: peer sign_pk is NOT set — identity exchange never completed.
+     * session_set_peer_public_key() is NOT called. */
+
+    /* Verify flag state before derivation attempt */
+    check(session_peer_sign_pk_valid() == false,
+          "degA: peer_sign_pk_valid is false before derive");
+    check(session_is_identity_degraded() == false,
+          "degA: identity_degraded is false before any action");
+
+    /* ── Attempt 1: WITHOUT degraded confirmation — MUST FAIL ── */
+    err = session_phase2_derive_key();
+    check(err != CEEPEW_OK,
+          "degA: derive_key WITHOUT degraded confirmation MUST fail");
+
+    /* Verify session is NOT active after blocked derivation */
+    check(session_is_active() == false,
+          "degA: session NOT active after blocked derivation");
+    check(session_get_phase() == 2U,
+          "degA: phase still 2 after blocked derivation");
+
+    /* ── Now simulate USER CONFIRMATION of degraded mode ── */
+    session_set_identity_degraded();
+    check(session_is_identity_degraded() == true,
+          "degA: identity_degraded is true after user confirmation");
+    check(session_peer_sign_pk_valid() == false,
+          "degA: peer_sign_pk_valid still false "
+          "(sign_pk was never exchanged)");
+
+    /* ── Attempt 2: WITH degraded confirmation — MUST SUCCEED ── */
+    err = session_phase2_derive_key();
+    check(err == CEEPEW_OK,
+          "degA: derive_key WITH degraded confirmation MUST succeed");
+
+    /* Verify session is active after degraded derivation */
+    check(session_is_active() == true,
+          "degA: session active after degraded derivation");
+    check(session_get_phase() == 3U,
+          "degA: phase is 3 after degraded derivation");
+
+    /* Verify degraded flag persists */
+    check(session_is_identity_degraded() == true,
+          "degA: identity_degraded remains true after derivation");
+    check(session_peer_sign_pk_valid() == false,
+          "degA: peer_sign_pk_valid still false after degraded derivation");
+
+    /* Verify nonce parity is correct for initiator */
+    check(session_get_nonce_counter() == 0ULL,
+          "degA: nonce starts at 0 (even parity for degraded initiator)");
+
+    ESP_LOGI(TAG, "--- test_identity_degraded_blocks_derivation PASS ---");
+}
+
 uint32_t test_pairing_convergence_run(void)
 {
     ESP_LOGI(TAG, "=== Pairing convergence + sync barrier test ===");
@@ -466,6 +559,7 @@ uint32_t test_pairing_convergence_run(void)
     test_gatt_crypto_tamper();
     test_gatt_crypto_wrong_session_code();
     test_beacon_nonce_bit15_flag();
+    test_identity_degraded_blocks_derivation();
 
     /* Cleanup: reset to phase 1 so production state is preserved. */
     (void)session_reset_to_discovery();

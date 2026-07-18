@@ -16,10 +16,10 @@
 #include "hal_radio.h"
 #include "ceepew_pipeline.h"
 #include "ceepew_region.h"  /* Phase 4: For region_reset */
+#include "session_msgstore.h"
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
 #include "crypto_ecdh.h"
-#include "crypto_hmac_efuse.h"
 #include "ecc_hamming.h"
 #include "session_fsm.h"
 #include "session_memory.h"  /* For g_ui_event_queue and UIEvent_t */
@@ -52,6 +52,10 @@ extern void ui_manager_reset_to_discovery(void);
 
 /* ARQ engine reset — zeroes s_tx_seq, s_expected_rx_seq, s_rx_init in ecc_arq.c */
 extern CeePewErr_t ecc_arq_reset(void);
+
+/* PFS deferred activation — copies pfs_ascon_key into ascon_key when the
+ * sync barrier clears, ensuring both sides switch atomically. */
+static void session_pfs_activate(void);
 
 /* Session state machine context */
 typedef struct {
@@ -88,6 +92,12 @@ typedef struct {
     bool     rendezvous_initiated;               /* true once rendezvous handshake started */
     bool     rendezvous_synced;                  /* true once both sides confirmed sync */
     int32_t  rendezvous_offset_us;               /* Timing offset from peer (responder - initiator) */
+
+    /* Identity-degraded mode: peer sign_pk was never received over GATT,
+     * but the user explicitly confirmed they wish to proceed without
+     * Ed25519 identity verification. When true, Ed25519 signature checks
+     * are skipped and the UI shows an "UNVERIFIED IDENTITY" banner. */
+    bool     identity_degraded;
 } SessionCtx_t;
 
 /* Global session context (per-device; single active session at a time) */
@@ -109,6 +119,12 @@ static uint8_t  s_test_commitment[CEEPEW_COMMITMENT_BYTES] = {0U};
  * key convergence across pairing retry cycles. */
 static uint8_t  s_saved_self_wifi[6] = {0U};
 static bool     s_saved_self_wifi_valid = false;
+
+/* Cross-core nonce counter snapshot for UI task (Core 0) display.
+ * Updated by session_enforce_nonce_limit() on Core 1 after every increment.
+ * Declared volatile so the UI task's read on Core 0 is never elided by
+ * the compiler and always sees a consistent value. */
+static volatile uint64_t s_nonce_counter_display = 0ULL;
 
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
@@ -195,7 +211,7 @@ static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6])
      * causing the fingerprint comparison to fail even though both devices agree
      * on the session code.
      */
-    if (memcmp(s_session.device_id_self, s_session.device_id_peer, 6U) <= 0) {
+    if (!ceepew_ct_less(s_session.device_id_peer, s_session.device_id_self, 6U)) {
         memcpy(id_a, s_session.device_id_self, 6U);
         memcpy(id_b, s_session.device_id_peer, 6U);
     } else {
@@ -209,6 +225,8 @@ static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6])
 static void session_secure_zero_context(void)
 {
     ceepew_secure_zero(&s_session, (uint32_t)sizeof(s_session));
+    ceepew_secure_zero((void *)&s_nonce_counter_display,
+                       (uint32_t)sizeof(s_nonce_counter_display));
 }
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -389,7 +407,7 @@ CeePewErr_t session_phase2_derive_key(void){
 
     const uint8_t *id_a = s_session.device_id_self;
     const uint8_t *id_b = s_session.device_id_peer;
-    if (memcmp(id_a, id_b, 6U) > 0) {
+    if (ceepew_ct_less(id_b, id_a, 6U)) {
         const uint8_t *tmp = id_a;
         id_a = id_b;
         id_b = tmp;
@@ -413,7 +431,7 @@ CeePewErr_t session_phase2_derive_key(void){
         s_session.device_id_self_wifi_valid) {
         const uint8_t *wifi_a = s_session.device_id_self_wifi;
         const uint8_t *wifi_b = s_session.device_id_peer_wifi;
-        if (memcmp(wifi_a, wifi_b, 6U) > 0) {
+        if (ceepew_ct_less(wifi_b, wifi_a, 6U)) {
             const uint8_t *tmp = wifi_a;
             wifi_a = wifi_b;
             wifi_b = tmp;
@@ -482,6 +500,13 @@ CeePewErr_t session_phase2_derive_key(void){
     /* Initialize session-permuted Hamming FEC using the derived session key */
     err = ecc_hamming_init_session(s_session.session_key);
     if (err != CEEPEW_OK) { goto error_cleanup; }
+    /* Wipe any stale messages (test artifacts, prior session leftovers) and
+     * re-initialize the message store for the new session. Order matters:
+     * wipe first (zeros all slots, resets count to 0), then init sets
+     * timestamps — init ASSERTs count == 0 internally. */
+    msg_store_wipe_all();
+    err = msg_store_init();
+    if (err != CEEPEW_OK) { goto error_cleanup; }
     session_init_ttl();  /* Phase 4: Initialize TTL tracking */
 
     /* Success: secure zero all sensitive intermediates */
@@ -527,6 +552,7 @@ CeePewErr_t session_enforce_nonce_limit(void){
      * Both peers start at complementary parity from MAC ordering,
      * so the two nonce sequences are guaranteed disjoint. */
     s_session.nonce_counter += 2U;
+    s_nonce_counter_display = s_session.nonce_counter;
 
     /* Check for 90% warning level — session should warn but can continue briefly */
     if (s_session.nonce_counter >= CEEPEW_NONCE_WARNING_LIMIT) {
@@ -768,6 +794,17 @@ bool session_peer_sign_pk_valid(void)
     return s_session.peer_sign_pk_valid;
 }
 
+void session_set_identity_degraded(void)
+{
+    s_session.identity_degraded = true;
+    ESP_LOGW("session_fsm", "Session marked IDENTITY-DEGRADED — Ed25519 peer verification disabled");
+}
+
+bool session_is_identity_degraded(void)
+{
+    return s_session.identity_degraded;
+}
+
 CeePewErr_t session_get_session_code(uint8_t out[32])
 {
     CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
@@ -944,6 +981,13 @@ static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx)
      * sequence counters start from zero for the first chat message. */
     session_flush_arq_and_rx_queue();
 
+    /* ── ACTIVATE PFS KEY ROTATION ───────────────────────────────────
+     * Both sides converge here at the same logical event (HELLO/ACK
+     * round-trip verified), so switching the active Ascon key from the
+     * original session-derived key to the PFS-derived key is safe.
+     * session_pfs_activate() is a no-op if no PFS key was exchanged. */
+    session_pfs_activate();
+
     /* Post UI_EVENT_SESSION_ESTABLISHED to notify UI task (Core 0) that
      * the encrypted HELLO/ACK round-trip completed and session is ready.
      * This triggers transition from UI_STATE_KEYDER to UI_STATE_CHAT_MENU.
@@ -1008,12 +1052,18 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
          * Mark peer-encrypted proof received but do NOT clear the barrier yet.
          * Return CEEPEW_ERR_NEED_TX so the caller sends the ACK.
          * The barrier will be cleared by session_confirm_ack_sent() once
-         * the ACK has been successfully enqueued for transmission. */
-        if (s_session.sync_peer_encrypted_received) {
-            return CEEPEW_OK;
-        }
+         * the ACK has been successfully enqueued for transmission.
+         *
+         * ACK RETRY: if sync_peer_encrypted_received is already true but the
+         * barrier has NOT cleared, the previous ACK may have been lost over
+         * ESP-NOW (unreliable transport). Re-request an ACK send so the
+         * caller retries. Without this retry, a single lost ACK permanently
+         * stalls the rendezvous until KEYDER timeout. */
         s_session.sync_peer_encrypted_received = true;
-        return CEEPEW_ERR_NEED_TX;
+        if (!s_session.sync_barrier_cleared) {
+            return CEEPEW_ERR_NEED_TX;
+        }
+        return CEEPEW_OK;
     }
 }
 
@@ -1166,11 +1216,15 @@ CeePewErr_t session_end(void){
     esl_reset_callbacks();
     /* Reset session-permuted Hamming FEC to prevent stale permutation reuse */
     (void)ecc_hamming_deinit();
-    /* Securely zero X25519 ECDH key material */
+    /* Stop channel hopping if active */
+    (void)hal_radio_stop_channel_hopping();
+    /* Secure securely zero X25519 ECDH key material */
     ceepew_secure_zero(g_crypto_ctx.box_privkey, sizeof(g_crypto_ctx.box_privkey));
     ceepew_secure_zero(g_crypto_ctx.peer_box_pubkey, sizeof(g_crypto_ctx.peer_box_pubkey));
     g_crypto_ctx.peer_box_pubkey_valid = false;
     session_secure_zero_context();
+    /* Wipe message store so old messages don't leak between sessions */
+    msg_store_wipe_all();
     region_reset(&g_region);
 
     /* Return to low-power state after session ends */
@@ -1233,6 +1287,10 @@ bool session_is_active(void) { return s_session.session_active; }
 uint64_t session_get_nonce_counter(void) {
     if (s_test_nc_set) { return s_test_nc; }
     return s_session.nonce_counter;
+}
+
+uint64_t session_get_nonce_counter_display(void) {
+    return s_nonce_counter_display;
 }
 
 uint64_t session_get_id(void) {
@@ -1306,7 +1364,7 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
     memcpy(id_b, s_session.device_id_peer, 6U);
 
     /* Deterministic ordering: ensure id_a <= id_b lexicographically */
-    if (memcmp(id_a, id_b, 6U) > 0) {
+    if (ceepew_ct_less(id_b, id_a, 6U)) {
         uint8_t tmp[6]; memcpy(tmp, id_a, 6U); memcpy(id_a, id_b, 6U); memcpy(id_b, tmp, 6U);
     }
 
@@ -1478,6 +1536,8 @@ CeePewErr_t session_wipe(void)
 
     /* Reset session-permuted Hamming FEC */
     (void)ecc_hamming_deinit();
+    /* Stop channel hopping if active */
+    (void)hal_radio_stop_channel_hopping();
 
     /* Secure zero all key material and stale session state */
     session_secure_zero_context();
@@ -1549,12 +1609,31 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32])
         return err;
     }
 
-    /* Switch active session key to PFS-derived key */
-    memcpy(g_crypto_ctx.ascon_key, g_crypto_ctx.pfs_ascon_key, 16U);
-    g_crypto_ctx.pfs_active = true;
+    /* PFS key stored in pfs_ascon_key. The actual key switch (replacing
+     * ascon_key) is deferred to session_pfs_activate(), which is called
+     * from session_clear_sync_barrier_internal() after the encrypted
+     * HELLO/ACK round-trip completes. This ensures BOTH sides switch
+     * atomically — the sync barrier is the convergence point. Without this
+     * deferral, the responder switches to the PFS key upon receiving
+     * PFS_INIT, but if PFS_RESP is lost, the initiator never switches,
+     * creating a permanent one-way crypto deadlock. */
 
-    ESP_LOGI("SESSION", "PFS handshake complete — session key rotated");
+    ESP_LOGI("SESSION", "PFS peer key received — deferred activation");
     return CEEPEW_OK;
+}
+
+static void session_pfs_activate(void)
+{
+    if (g_crypto_ctx.pfs_peer_pubkey_valid && !g_crypto_ctx.pfs_active) {
+        memcpy(g_crypto_ctx.ascon_key, g_crypto_ctx.pfs_ascon_key, 16U);
+        g_crypto_ctx.pfs_active = true;
+        ESP_LOGI("SESSION", "PFS handshake complete — session key rotated");
+    }
+}
+
+bool session_pfs_peer_ready(void)
+{
+    return g_crypto_ctx.pfs_peer_pubkey_valid;
 }
 
 bool session_pfs_active(void)

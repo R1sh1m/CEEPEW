@@ -23,7 +23,6 @@
 #define SSD1306_ADDR       0x3C
 #define SSD1306_WIDTH      128
 #define SSD1306_PAGES      8
-#define SSD1306_I2C_FREQ   400000
 
 /* Wire's internal TX buffer is 128 bytes (I2C_BUFFER_LENGTH on ESP32).
  * We keep one byte reserved within each transaction for a control-byte
@@ -48,11 +47,11 @@ static esp_err_t wire_transmit(const uint8_t *data, size_t len)
 
 /* ── Public API ─────────────────────────────────────────────────────── */
 
-extern "C" esp_err_t ceepew_oled_arduino_init(void)
+extern "C" esp_err_t ceepew_oled_arduino_init(uint32_t freq_hz)
 {
     s_addr = SSD1306_ADDR;
     Wire.begin(26, 27);
-    Wire.setClock(SSD1306_I2C_FREQ);
+    Wire.setClock(freq_hz);
     s_initialised = true;
     return ESP_OK;
 }

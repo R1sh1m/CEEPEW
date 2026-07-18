@@ -223,7 +223,6 @@ esp_err_t ceepew_oled_bus_init(i2c_master_bus_handle_t *out_bus,
 
     (void)sda;
     (void)scl;
-    (void)speed_hz;
     (void)addr;
 
     /* Raw GPIO pre-init — confirm bus lines are pulled HIGH */
@@ -237,11 +236,11 @@ esp_err_t ceepew_oled_bus_init(i2c_master_bus_handle_t *out_bus,
     ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] GPIO pre-init: SDA(GPIO%d)=%d, SCL(GPIO%d)=%d",
              get_board_tag(), (int)sda, sda_lvl, (int)scl, scl_lvl);
 
-    /* Initialise the Arduino Wire transport on GPIO26/27 at 400 kHz */
-    esp_err_t rc = ceepew_oled_arduino_init();
-    ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] ceepew_oled_arduino_init (SDA=GPIO%d, SCL=GPIO%d, freq=400000) returned: %d (%s)",
+    /* Initialise the Arduino Wire transport on GPIO26/27 at requested frequency */
+    esp_err_t rc = ceepew_oled_arduino_init(speed_hz);
+    ESP_LOGI(TAG, "[BOARD %02X] [OLED DIAG] ceepew_oled_arduino_init (SDA=GPIO%d, SCL=GPIO%d, freq=%lu) returned: %d (%s)",
              get_board_tag(), (int)sda, (int)scl,
-             (int)rc, esp_err_to_name(rc));
+             (unsigned long)speed_hz, (int)rc, esp_err_to_name(rc));
     if (rc != ESP_OK) {
         CEEPEW_LOG(TAG, "OLED Arduino init failed: esp_err %d (%s)", rc, esp_err_to_name(rc));
         return rc;

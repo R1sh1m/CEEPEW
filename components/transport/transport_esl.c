@@ -9,8 +9,8 @@
  *   4. FEC decode (single-bit correction, returns NACK on uncorrectable errors)
  *   5. Timestamp check (±15s, silent fail — timing attack mitigation)
  *   6. WireGuard replay window (64-bit bitmap, silent fail)
- *   7. Ascon-128 AEAD decrypt + tag verify (silent fail — must not produce response)
- *   8. crypto_box decrypt (silent fail)
+ *   7. crypto_box decrypt (silent fail)
+ *   8. Ascon-128 AEAD decrypt + tag verify (silent fail — must not produce response)
  *   9. Ed25519 signature verification (silent fail — no diagnostic response)
  *   10. Deliver to session layer
  *
@@ -230,7 +230,7 @@ static CeePewErr_t dos_verify_cookie(const uint8_t sender_mac[6], uint32_t times
 /* Outgoing (TX) Wrapper                                                       */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
-CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len) {
+CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len, uint64_t nonce_counter) {
     CEEPEW_ASSERT(frame != NULL && len != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= CEEPEW_PACKET_MAX_BYTES, CEEPEW_ERR_BOUNDS);
     CEEPEW_ASSERT(max_len >= (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES), CEEPEW_ERR_BOUNDS);
@@ -239,7 +239,6 @@ CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16
     uint16_t payload_len = *len;
     memmove(frame + CEEPEW_ESL_HEADER_BYTES, frame, payload_len);
 
-    uint64_t nonce_counter = session_get_nonce_counter();
     EslHeader_t hdr = {
         .magic0    = CEEPEW_ESL_MAGIC0,
         .magic1    = CEEPEW_ESL_MAGIC1,
@@ -325,21 +324,21 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
         return CEEPEW_ERR_TRANSPORT;  /* CRC mismatch — can return NACK */
     }
 
-    /* ═ STEP 5: Timestamp Validation (±15s, silent fail) ═
+    /* ═ STEP 5: Timestamp Validation (±45s, silent fail) ═
      * 
      * SECURITY: This check prevents several attacks:
      * 1. Replay attacks via timestamp spoofing — old messages with crafted timestamps
      * 2. Preplay attacks — injecting future-dated messages to bypass the window
      * 3. Clock skew attacks — exploiting mismatched device clocks
      * 
-     * LIMITATION: The ±15 second window assumes:
-     * - Both device clocks are synchronized within ±15 seconds (via NTP or similar)
+     * LIMITATION: The ±45 second window assumes:
+     * - Both device clocks are synchronized within ±45 seconds (via NTP or similar)
      * - Legitimate messages are encrypted and transmitted within milliseconds
      * - Attackers cannot predict the session_code and timestamps simultaneously
      * 
-     * The window CEEPEW_TIMESTAMP_SLACK_S (15 seconds) is chosen to:
+     * The window CEEPEW_TIMESTAMP_SLACK_S (45 seconds) is chosen to:
      * - Allow for typical clock drift on ESP32 devices without NTP
-     * - Prevent a 15-second replay window that an attacker could exploit
+     * - Prevent a 45-second replay window that an attacker could exploit
      * - Be short enough that replaying old messages becomes impractical
      *
      * If devices have unsynchronized clocks (> ±45s apart by default), legitimate
@@ -415,37 +414,23 @@ CeePewErr_t transport_esl_peek_msg_type(const uint8_t *frame, uint16_t len, uint
     return CEEPEW_OK;
 }
 
-CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *frame, uint16_t len,
+CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *payload, uint16_t len,
                                                  const uint8_t peer_mac[6],
                                                  uint8_t peer_pfs_pubkey_out[32])
 {
-    CEEPEW_ASSERT(frame != NULL && peer_pfs_pubkey_out != NULL, CEEPEW_ERR_NULL_PTR);
-    if (len < CEEPEW_ESL_HEADER_BYTES + 1U + 32U + CEEPEW_ESL_CRC_BYTES) {
-        return CEEPEW_ERR_PARAM;
-    }
-
-    /* Verify CRC first */
-    uint32_t rx_crc = 0U;
-    memcpy(&rx_crc, frame + len - CEEPEW_ESL_CRC_BYTES, sizeof(rx_crc));
-    uint32_t calc_crc = esp_crc32_le(0U, frame, (size_t)(len - CEEPEW_ESL_CRC_BYTES));
-    if (rx_crc != calc_crc) {
-        ESP_LOGW("ESL", "PFS handshake CRC mismatch");
-        return CEEPEW_ERR_TRANSPORT;
-    }
-
-    /* Validate magic and version */
-    if (frame[0] != CEEPEW_ESL_MAGIC0 || frame[1] != CEEPEW_ESL_MAGIC1 || frame[2] != CEEPEW_ESL_VERSION) {
-        return CEEPEW_ERR_PARAM;
+    CEEPEW_ASSERT(payload != NULL && peer_pfs_pubkey_out != NULL, CEEPEW_ERR_NULL_PTR);
+    if (len < 1U + 32U) {
+        return CEEPEW_ERR_BOUNDS;
     }
 
     /* Extract message type */
-    uint8_t msg_type = frame[CEEPEW_ESL_HEADER_BYTES] & CEEPEW_ESL_MSG_TYPE_MASK;
+    uint8_t msg_type = payload[0] & CEEPEW_ESL_MSG_TYPE_MASK;
     if (msg_type != CEEPEW_ESL_MSG_TYPE_PFS_INIT && msg_type != CEEPEW_ESL_MSG_TYPE_PFS_RESP) {
         return CEEPEW_ERR_PARAM;
     }
 
     /* Extract 32-byte PFS public key */
-    memcpy(peer_pfs_pubkey_out, frame + CEEPEW_ESL_HEADER_BYTES + 1U, 32U);
+    memcpy(peer_pfs_pubkey_out, payload + 1U, 32U);
 
     ESP_LOGI("ESL", "PFS handshake received: type=%u", (unsigned)msg_type);
     return CEEPEW_OK;

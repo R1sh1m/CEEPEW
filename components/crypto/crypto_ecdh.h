@@ -14,4 +14,10 @@ CeePewErr_t crypto_ecdh_shared_secret(const uint8_t priv[32],
                                       const uint8_t pub[32],
                                       uint8_t ss[32]);
 
+/* Reject peer public keys that belong to the Curve25519 8-torsion subgroup.
+ * Returns CEEPEW_ERR_CRYPTO if pub matches one of the 7 known low-order
+ * u-coordinate encodings, CEEPEW_OK otherwise.  Constant-time.
+ * Reference: libsodium x25519_ref10.c blocklist, RFC 7748 §6.1. */
+CeePewErr_t crypto_ecdh_reject_low_order(const uint8_t pub[32]);
+
 #endif /* CRYPTO_ECDH_H */

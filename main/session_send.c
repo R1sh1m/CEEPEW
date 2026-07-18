@@ -33,6 +33,10 @@
 
 static const char *TAG = "session_send";
 
+/* ARQ send — declared in components/ecc/ecc_arq.c, no header file. */
+extern CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6],
+                                const uint8_t *payload, uint16_t payload_len);
+
 CeePewErr_t crypto_ascon_aead_encrypt(const uint8_t key[16],
                                       const uint8_t nonce[16],
                                       const uint8_t *ad,
@@ -77,7 +81,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     (void)peer_public_key;
 
     uint8_t local_compressed[CEEPEW_HUFF_BUF_MAX];
-    uint8_t local_ascon_ct[CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES];
+    uint8_t local_ascon_ct[CRYPTO_BOX_INNER_MAX_BYTES];
     uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
     uint8_t local_sig[64U];
     uint8_t local_payload[CEEPEW_MAX_MSG_BYTES + 128U];
@@ -116,6 +120,8 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     uint8_t nonce_24[24U];
     err = session_get_nonce(nonce_24);
     if (err != CEEPEW_OK) { (void)crypto_mutex_unlock(); goto cleanup; }
+
+    uint64_t tx_nonce_counter = session_get_nonce_counter();
 
     uint8_t ascon_nonce[16U];
     memcpy(ascon_nonce, nonce_24, sizeof(ascon_nonce));
@@ -159,16 +165,15 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     memcpy(local_frame + fec_len, &crc, sizeof(crc));
 
     uint16_t frame_len = (uint16_t)(fec_len + sizeof(uint32_t));
-    err = transport_esl_process_outgoing(local_frame, &frame_len, (uint16_t)sizeof(local_frame));
+    err = transport_esl_process_outgoing(local_frame, &frame_len, (uint16_t)sizeof(local_frame), tx_nonce_counter);
     if (err != CEEPEW_OK) { goto cleanup; }
 
-    /* hal_radio_init() is idempotent — safe to call every send to ensure
-     * radio is up. The ESP-NOW peer is now registered ONCE after key
-     * derivation in task_session.c, not per-message. */
-    err = hal_radio_init();
-    if (err != CEEPEW_OK) { goto cleanup; }
-
-    err = hal_radio_send(local_frame, frame_len);
+    /* Wrap the fully-constructed frame with ARQ (1-byte sequence prefix)
+     * and send with retry/backoff until confirmed by the local radio stack.
+     * ecc_arq_send internally calls ecc_arq_encode to prepend the seq byte,
+     * then loops: hal_radio_send → transport_wait_ack with exponential
+     * backoff for up to CEEPEW_ARQ_MAX_RETRIES attempts. */
+    err = ecc_arq_send(peer_mac, local_frame, frame_len);
     if (err != CEEPEW_OK) { goto cleanup; }
 
     /* Do not store handshake sync messages (HELLO/ACK) in the message store */
@@ -216,28 +221,32 @@ CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_
         return err;
     }
 
+    uint32_t start_count = msg_store_count();
+
     /* Send the message */
     err = session_send_message(payload, len, peer_mac, NULL);
     if (err != CEEPEW_OK) {
         return err;
     }
 
-    /* Wait for echo response via session RX queue (handled by session task)
-     * For this test, we'll use a simple polling approach with a timeout.
-     * In a real implementation, this would use a semaphore or callback. */
     uint32_t start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
     uint32_t elapsed_ms = 0U;
 
     while (elapsed_ms < timeout_ms) {
-        /* Check if we received a message that matches our payload */
-        /* This is a simplified test - in reality, the session RX task would
-         * need to signal completion via a semaphore or event. */
-        vTaskDelay(pdMS_TO_TICKS(50));
+        uint32_t current_count = msg_store_count();
+        if (current_count > start_count) {
+            const StoredMsg_t *msg = msg_store_get(current_count - 1);
+            if (msg != NULL) {
+                if (msg->meta.dir == 0U && msg->meta.payload_len == len &&
+                    memcmp(msg->plaintext, payload, len) == 0) {
+                    return CEEPEW_OK;
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
         elapsed_ms = (uint32_t)((esp_timer_get_time() / 1000ULL) - start_ms);
     }
 
-    /* For now, just return success if send succeeded.
-     * A full implementation would verify the echo was received. */
-    return CEEPEW_OK;
+    return CEEPEW_ERR_TIMEOUT;
 }
 

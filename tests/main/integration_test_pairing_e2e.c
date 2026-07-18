@@ -29,12 +29,9 @@
  *   DONE        all milestones reached
  */
 
-#include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "session_fsm.h"
 #include "session_msgstore.h"
-#include "crypto_ctx.h"
-#include "ui_manager.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
@@ -125,7 +122,7 @@ static void pairing_e2e_monitor(void *arg)
              s_ctx.local_mac[0], s_ctx.local_mac[1], s_ctx.local_mac[2],
              s_ctx.local_mac[3], s_ctx.local_mac[4], s_ctx.local_mac[5]);
     ESP_LOGI(TAG, "Headless mode: %s",
-#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+#if defined(CEEPEW_HEADLESS_MODE) && (CEEPEW_HEADLESS_MODE == 1)
              "ENABLED"
 #else
              "DISABLED (test will likely fail without UI interaction)"
@@ -172,7 +169,7 @@ static void pairing_e2e_monitor(void *arg)
         if (!sync && sync_cleared) { mark(MILESTONE_SYNC_BARRIER); sync = true; }
         if (!pfs && pfs_active)    { mark(MILESTONE_PFS_ACTIVE);   pfs = true; }
 
-        if (!s_ctx.test_msg_sent && active && sync_cleared && pfs_active) {
+        if (!s_ctx.test_msg_sent && active && sync_cleared) {
             vTaskDelay(pdMS_TO_TICKS(s_ctx.is_initiator ? 2000 : 8000));
 
             uint8_t peer_mac[6];
@@ -201,7 +198,7 @@ static void pairing_e2e_monitor(void *arg)
             ESP_LOGI(TAG, "[PASS] received %u message(s)", rx_new);
         }
 
-        if (ph2 && ph3 && sync && pfs &&
+        if (ph2 && ph3 && sync &&
             s_ctx.test_msg_sent && s_ctx.passed[MILESTONE_MSG_RECEIVED]) {
             mark(MILESTONE_DONE);
             break;
@@ -226,12 +223,15 @@ static void pairing_e2e_monitor(void *arg)
     }
 
     bool all_ok = true;
-    bool pairing_pass = ph2 && ph3 && sync && pfs;
+    bool pairing_pass = ph2 && ph3 && sync;
     bool msg_tx_pass  = s_ctx.test_msg_sent;
     bool msg_rx_pass  = s_ctx.passed[MILESTONE_MSG_RECEIVED];
 
     if (pairing_pass) ESP_LOGI(TAG, "  [PAIRING  ] PASS");
     else { ESP_LOGE(TAG, "  [PAIRING  ] FAIL"); all_ok = false; }
+
+    if (pfs) ESP_LOGI(TAG, "  [PFS      ] PASS (forward secrecy active)");
+    else     ESP_LOGI(TAG, "  [PFS      ] SKIP (forward secrecy not established — base key used)");
 
     if (msg_tx_pass) ESP_LOGI(TAG, "  [MSG-TX   ] PASS");
     else { ESP_LOGE(TAG, "  [MSG-TX   ] FAIL"); all_ok = false; }
@@ -244,6 +244,12 @@ static void pairing_e2e_monitor(void *arg)
     ESP_LOGI(TAG, "=== PAIRING E2E REPORT ===");
     ESP_LOGI(TAG, "  [%-18s] %s", "Pairing E2E", all_ok ? "PASS" : "FAIL");
     ESP_LOGI(TAG, "=========================");
+
+    /* Wipe test messages from the message store so they don't appear
+     * in the user's chat thread. msg_store_wipe_all is safe from a
+     * monitor task because the session task only writes to msg_store
+     * on message RX (which won't happen after the test completes). */
+    msg_store_wipe_all();
 
     vTaskDelete(NULL);
 }

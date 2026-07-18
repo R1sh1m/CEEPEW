@@ -213,7 +213,7 @@ void test_pairing_handoff_run(void)
     ESP_LOGI(TAG, "=== Pairing handoff (beacon) test ===");
 
     /* Save the entire BLE context before any test mutates it. */
-    BleContext_t saved_ctx;
+    static BleContext_t saved_ctx;
     memcpy(&saved_ctx, &g_ble_ctx, sizeof(BleContext_t));
 
     uint32_t passed = 0U, failed = 0U;

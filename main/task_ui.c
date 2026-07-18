@@ -84,7 +84,7 @@ static CeePewErr_t ui_handle_events(void)
             break;
 
         case UI_EVENT_SESSION_STATE_CHANGED:
-            ESP_LOGI("UI", "Session state → %u",
+            ESP_LOGI("UI", "Session state -> %u",
                      event.payload.state_changed.new_state);
             break;
 

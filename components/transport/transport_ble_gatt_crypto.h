@@ -40,13 +40,14 @@ extern "C" {
 #endif
 
 /* Total length of the encrypted GATT payload.
- * Wire format: [1B ctr][70B ciphertext][16B tag] = 87B.
- * Plaintext carries sign_pk[32] || box_pubkey[32] || wifi_mac[6] = 70B. */
+ * Wire format: [1B ctr][74B ciphertext][16B tag] = 91B.
+ * Plaintext carries sign_pk[32] || box_pubkey[32] || wifi_mac[6] || local_uptime_s[4] = 74B. */
 #define GATT_COUNTER_BYTES      1U
-#define GATT_PLAINTEXT_BYTES    70U
-#define GATT_CIPHERTEXT_BYTES   70U
+#define GATT_PLAINTEXT_BYTES    74U
+#define GATT_CIPHERTEXT_BYTES   74U
 #define GATT_TAG_BYTES          16U
 #define GATT_CRYPTO_TOTAL_BYTES (GATT_COUNTER_BYTES + GATT_CIPHERTEXT_BYTES + GATT_TAG_BYTES)
+#define GATT_MIN_MTU            (GATT_CRYPTO_TOTAL_BYTES + 3U)
 
 /* Ascon-128 key and nonce are both 16 bytes. */
 #define GATT_KEY_BYTES         16U

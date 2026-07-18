@@ -56,3 +56,16 @@ uint8_t ceepew_ct_less(const uint8_t *a, const uint8_t *b, uint32_t len)
 
     return less_than;
 }
+
+uint8_t ceepew_is_all_zero(const uint8_t *buf, uint32_t len)
+{
+    if (buf == NULL) {
+        return 0U;
+    }
+
+    uint8_t acc = 0U;
+    for (uint32_t i = 0U; i < len; i++) {
+        acc |= buf[i];
+    }
+    return (uint8_t)(acc == 0U);
+}

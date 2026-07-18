@@ -95,6 +95,24 @@ static void hal_ui_clear_tile_dirty(void)
     s_framebuffer_dirty = false;
 }
 
+static inline void hal_ui_mark_tiles_in_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
+{
+    if (w == 0U || h == 0U) { return; }
+    const uint8_t tc0 = (uint8_t)(x >> 3U);
+    const uint8_t tc1 = (uint8_t)((uint8_t)(x + w - 1U) >> 3U);
+    const uint8_t tr0 = (uint8_t)(y >> 3U);
+    const uint8_t tr1 = (uint8_t)((uint8_t)(y + h - 1U) >> 3U);
+    for (uint8_t tc = tc0; tc <= tc1 && tc < HAL_UI_NUM_TILE_COLS; tc++) {
+        for (uint8_t tr = tr0; tr <= tr1 && tr < 8U; tr++) {
+            const uint8_t mask = (uint8_t)(1U << tr);
+            if ((s_tile_dirty[tc] & mask) == 0U) {
+                s_tile_dirty[tc] = (uint8_t)(s_tile_dirty[tc] | mask);
+                s_framebuffer_dirty = true;
+            }
+        }
+    }
+}
+
 /* ── Boot bring-up ────────────────────────────────────────────────── */
 
 static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
@@ -397,7 +415,9 @@ CeePewErr_t hal_ui_clear(void)
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
     (void)memset(s_fb, 0, ceepew_oled_get_buffer_size(s_oled));
-    hal_ui_clear_tile_dirty();
+    for (uint8_t tc = 0U; tc < HAL_UI_NUM_TILE_COLS; tc++) {
+        s_tile_dirty[tc] = 0xFFU;
+    }
     s_framebuffer_dirty = true;
     return CEEPEW_OK;
 }
@@ -537,7 +557,15 @@ CeePewErr_t hal_ui_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, HalUICol
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
-    return ceepew_oled_gfx_line(s_oled, x0, y0, x1, y1, color);
+    CeePewErr_t err = ceepew_oled_gfx_line(s_oled, x0, y0, x1, y1, color);
+    if (err == CEEPEW_OK) {
+        uint8_t min_x = (x0 < x1) ? x0 : x1;
+        uint8_t max_x = (x0 > x1) ? x0 : x1;
+        uint8_t min_y = (y0 < y1) ? y0 : y1;
+        uint8_t max_y = (y0 > y1) ? y0 : y1;
+        hal_ui_mark_tiles_in_rect(min_x, min_y, (uint8_t)(max_x - min_x + 1U), (uint8_t)(max_y - min_y + 1U));
+    }
+    return err;
 }
 
 CeePewErr_t hal_ui_rect(const HalUIRect_t *r, HalUIColor_t color)
@@ -545,7 +573,11 @@ CeePewErr_t hal_ui_rect(const HalUIRect_t *r, HalUIColor_t color)
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
-    return ceepew_oled_gfx_rect(s_oled, r, color);
+    CeePewErr_t err = ceepew_oled_gfx_rect(s_oled, r, color);
+    if (err == CEEPEW_OK) {
+        hal_ui_mark_tiles_in_rect(r->x, r->y, r->w, r->h);
+    }
+    return err;
 }
 
 CeePewErr_t hal_ui_rect_fill(const HalUIRect_t *r, HalUIColor_t color)
@@ -553,21 +585,39 @@ CeePewErr_t hal_ui_rect_fill(const HalUIRect_t *r, HalUIColor_t color)
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(r != NULL, CEEPEW_ERR_NULL_PTR);
-    return ceepew_oled_gfx_rect_fill(s_oled, r, color);
+    CeePewErr_t err = ceepew_oled_gfx_rect_fill(s_oled, r, color);
+    if (err == CEEPEW_OK) {
+        hal_ui_mark_tiles_in_rect(r->x, r->y, r->w, r->h);
+    }
+    return err;
 }
 
 CeePewErr_t hal_ui_circle(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
-    return ceepew_oled_gfx_circle(s_oled, cx, cy, radius, color);
+    CeePewErr_t err = ceepew_oled_gfx_circle(s_oled, cx, cy, radius, color);
+    if (err == CEEPEW_OK) {
+        uint8_t r = radius;
+        uint8_t min_x = (uint8_t)((cx >= r) ? (uint8_t)(cx - r) : 0U);
+        uint8_t min_y = (uint8_t)((cy >= r) ? (uint8_t)(cy - r) : 0U);
+        hal_ui_mark_tiles_in_rect(min_x, min_y, (uint8_t)(uint8_t)(cx + r) - min_x + 1U, (uint8_t)(uint8_t)(cy + r) - min_y + 1U);
+    }
+    return err;
 }
 
 CeePewErr_t hal_ui_circle_fill(uint8_t cx, uint8_t cy, uint8_t radius, HalUIColor_t color)
 {
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
-    return ceepew_oled_gfx_circle_fill(s_oled, cx, cy, radius, color);
+    CeePewErr_t err = ceepew_oled_gfx_circle_fill(s_oled, cx, cy, radius, color);
+    if (err == CEEPEW_OK) {
+        uint8_t r = radius;
+        uint8_t min_x = (uint8_t)((cx >= r) ? (uint8_t)(cx - r) : 0U);
+        uint8_t min_y = (uint8_t)((cy >= r) ? (uint8_t)(cy - r) : 0U);
+        hal_ui_mark_tiles_in_rect(min_x, min_y, (uint8_t)(uint8_t)(cx + r) - min_x + 1U, (uint8_t)(uint8_t)(cy + r) - min_y + 1U);
+    }
+    return err;
 }
 
 CeePewErr_t hal_ui_text(uint8_t x, uint8_t y, const char *str, HalUIColor_t color)
@@ -575,7 +625,12 @@ CeePewErr_t hal_ui_text(uint8_t x, uint8_t y, const char *str, HalUIColor_t colo
     CEEPEW_ASSERT(s_ui_initialised, CEEPEW_ERR_BUSY);
     if (s_display_absent) { return CEEPEW_OK; }
     CEEPEW_ASSERT(str != NULL, CEEPEW_ERR_NULL_PTR);
-    return ceepew_oled_gfx_text(s_oled, x, y, str, color);
+    CeePewErr_t err = ceepew_oled_gfx_text(s_oled, x, y, str, color);
+    if (err == CEEPEW_OK) {
+        uint16_t tw = hal_ui_text_width(str);
+        hal_ui_mark_tiles_in_rect(x, y, (uint8_t)((tw < 128U) ? tw : 128U), 8U);
+    }
+    return err;
 }
 
 CeePewErr_t hal_ui_char(uint8_t x, uint8_t y, char c, HalUIColor_t color)
