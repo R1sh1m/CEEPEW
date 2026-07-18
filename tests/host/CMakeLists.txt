@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(ceepew-host-tests C)
+enable_testing()
 
 # ── Include paths ────────────────────────────────────────────────────
 set(COMMON_INCLUDES
@@ -27,6 +28,7 @@ set(PORTABLE_SRCS
     ${COMPONENT_DIR}/components/ceepew_common/ceepew_security_utils.c
     ${COMPONENT_DIR}/components/crypto/crypto_ascon.c
     ${COMPONENT_DIR}/components/ecc/ecc_hamming.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/ceepew_assert_stub.c
 )
 
 add_library(ceepew_portable OBJECT ${PORTABLE_SRCS})
@@ -43,6 +45,15 @@ add_library(ceepew_mbedtls OBJECT ${MBEDTLS_SRCS})
 target_include_directories(ceepew_mbedtls PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(ceepew_mbedtls PUBLIC mbedcrypto)
 
+# MinGW static linking workaround: -static avoids WDAC/DeviceGuard
+# blocking executables that import from external DLLs.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND MINGW)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
+    set(MBEDCRYPTO_STATIC_LIBS "-Wl,-Bstatic" mbedcrypto "-Wl,-Bdynamic" bcrypt)
+else()
+    set(MBEDCRYPTO_STATIC_LIBS mbedcrypto)
+endif()
+
 # ── Test executables ─────────────────────────────────────────────────
 
 # test_security_utils — tests ceepew_ct_equal and ceepew_secure_zero
@@ -51,6 +62,7 @@ add_executable(test_security_utils
 )
 target_link_libraries(test_security_utils PRIVATE ceepew_portable)
 target_include_directories(test_security_utils PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_security_utils COMMAND test_security_utils)
 
 # test_ascon — tests crypto_ascon_aead encrypt/decrypt
 add_executable(test_ascon
@@ -58,6 +70,7 @@ add_executable(test_ascon
 )
 target_link_libraries(test_ascon PRIVATE ceepew_portable)
 target_include_directories(test_ascon PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_ascon COMMAND test_ascon)
 
 # test_hamming — tests ecc_hamming encode/decode round-trip
 add_executable(test_hamming
@@ -65,19 +78,22 @@ add_executable(test_hamming
 )
 target_link_libraries(test_hamming PRIVATE ceepew_portable)
 target_include_directories(test_hamming PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_hamming COMMAND test_hamming)
 
 # test_sha256 — tests crypto_sha256_compute
 add_executable(test_sha256
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sha256.c
 )
 target_link_libraries(test_sha256 PRIVATE ceepew_mbedtls ceepew_portable)
-target_link_libraries(test_sha256 PRIVATE mbedcrypto)
+target_link_libraries(test_sha256 PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_sha256 PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_sha256 COMMAND test_sha256)
 
 # test_hkdf — tests crypto_hkdf_derive
 add_executable(test_hkdf
     ${CMAKE_CURRENT_SOURCE_DIR}/test_hkdf.c
 )
 target_link_libraries(test_hkdf PRIVATE ceepew_mbedtls ceepew_portable)
-target_link_libraries(test_hkdf PRIVATE mbedcrypto)
+target_link_libraries(test_hkdf PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_hkdf PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_hkdf COMMAND test_hkdf)

@@ -1050,9 +1050,9 @@ static CeePewErr_t render_boot_anim(void)
 
     uint32_t f = g_ui_ctx.anim.frame_count;
 
-    /* ── Phase 1 (f 0–29): Star particles converge ── */
-    if (f < 60U) {
-       uint32_t progress = (f < 30U) ? f : 30U;  /* clamp at 30 */
+    /* ── Phase 1 (f 0–14): Star particles converge ── */
+    if (f < 40U) {
+       uint32_t progress = (f < 20U) ? f : 20U;  /* clamp at 20 */
        for (uint8_t i = 0U; i < 12U; i++) {
            int16_t px = (int16_t)BOOT_STARS[i].sx
                       + (int16_t)((((int32_t)64 - BOOT_STARS[i].sx) * (int32_t)progress) / 30);
@@ -1068,14 +1068,14 @@ static CeePewErr_t render_boot_anim(void)
        }
     }
 
-    /* ── Phase 2 (f 30–59): Logo letter-by-letter, each drops from top ── */
-    if (f >= 30U) {
+    /* ── Phase 2 (f 20–39): Logo letter-by-letter, each drops from top ── */
+    if (f >= 20U) {
        const char   letters[7U]   = { 'C','E','E','-','P','E','W' };
        const uint8_t lx[7U]       = { 43U,50U,57U,64U,71U,78U,85U };
        const uint8_t FINAL_Y      = 12U;
 
        for (uint8_t i = 0U; i < 7U; i++) {
-           uint32_t letter_start = 30U + (uint32_t)i * 4U;
+           uint32_t letter_start = 20U + (uint32_t)i * 3U;
            if (f < letter_start) { break; }
 
            uint32_t drop_f = f - letter_start;
@@ -1088,9 +1088,9 @@ static CeePewErr_t render_boot_anim(void)
            hal_ui_text(lx[i], y_pos, tmp, HAL_UI_WHITE);
        }
 
-       /* Underline grows from left under the logo — match logo width exactly */
-       if (f >= 58U) {
-           uint32_t ul_f = f - 58U;
+        /* Underline grows from left under the logo — match logo width exactly */
+        if (f >= 41U) {
+            uint32_t ul_f = f - 41U;
            uint8_t ul_x = lx[0];
            uint8_t ul_final_w = (uint8_t)((lx[6] + 5U) - lx[0]); /* char width 5 */
            uint8_t ul_w = (ul_f < 20U) ? (uint8_t)(((uint32_t)ul_f * (uint32_t)ul_final_w) / 20U) : ul_final_w;
@@ -1098,15 +1098,15 @@ static CeePewErr_t render_boot_anim(void)
        }
     }
 
-    /* ── Phase 3 (f 60–89): Chunky loading bar fills ── */
-    if (f >= 60U) {
+    /* ── Phase 3 (f 42–57): Chunky loading bar fills ── */
+    if (f >= 42U) {
        /* Bar border (moved up to increase gap below with frame) */
        HalUIRect_t border = { .x = 14U, .y = 42U, .w = 100U, .h = 9U };
        hal_ui_rect(&border, HAL_UI_WHITE);
 
        /* Chunky fill — 4-px wide segments with 1-px gaps */
-       uint32_t elapsed = f - 60U;
-       uint8_t  seg_count = (elapsed < 30U) ? (uint8_t)((elapsed * 12U) / 30U) : 12U;
+       uint32_t elapsed = f - 42U;
+       uint8_t  seg_count = (elapsed < 16U) ? (uint8_t)((elapsed * 12U) / 16U) : 12U;
        for (uint8_t s = 0U; s < seg_count; s++) {
            uint8_t seg_x = (uint8_t)(16U + s * 8U);
            /* Safety clamp: prevent segment from extending beyond 120px boundary */
@@ -1122,9 +1122,9 @@ static CeePewErr_t render_boot_anim(void)
        hal_ui_text(50U, 54U, pct_str, HAL_UI_WHITE);
     }
 
-    /* ── Phase 4 (f 90–109): Border frame draws in from corners ── */
-    if (f >= 90U) {
-       uint32_t bf = f - 90U;
+    /* ── Phase 4 (f 58–69): Border frame draws in from corners ── */
+    if (f >= 58U) {
+       uint32_t bf = f - 58U;
        uint8_t arm = (bf < 20U) ? (uint8_t)(bf * 3U) : 60U;
        if (arm > 60U) { arm = 60U; }
 
@@ -1156,8 +1156,8 @@ static CeePewErr_t render_boot_anim(void)
        }
     }
 
-    /* ── Phase 5 (f 110–129): READY pulses, tick-mark flash ── */
-    if (f >= 110U) {
+    /* ── Phase 5 (f 70–79): READY pulses, tick-mark flash ── */
+    if (f >= 70U) {
        uint8_t blink = (uint8_t)((f / 5U) % 10U);
        /* Text continues from phase 4 (already rendered at 16,30) */
 
@@ -1177,8 +1177,8 @@ static CeePewErr_t render_boot_anim(void)
        }
     }
 
-    /* ── Phase 6 (f >= 130): Transition ── */
-    if (f >= 130U) {
+    /* ── Phase 6 (f >= 80): Transition ── */
+    if (f >= 80U) {
        g_ui_ctx.anim.frame_count = 0U;
        (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
        g_ui_ctx.transition_ready = true;
@@ -2111,10 +2111,6 @@ static CeePewErr_t render_keyder_anim(void)
             }
         }
     }
-
-    /* Horizontal scan-bar sweeps down slowly -- overlaps matrix */
-    uint8_t scan_y = (uint8_t)((f / 2U) % 40U);
-    draw_hline(0U, (uint8_t)(scan_y + 4U), 128U);
 
     /* Color-inverting progress bar with text inside.
      *

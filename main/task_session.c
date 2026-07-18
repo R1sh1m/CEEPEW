@@ -405,7 +405,7 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
   bool peer_mismatch = false;
   if (session_get_peer_device_id(current_fsm_peer) == CEEPEW_OK) {
     peer_mismatch =
-        (peer != NULL && memcmp(current_fsm_peer, peer->peer_mac, 6U) != 0);
+        (peer != NULL && ceepew_ct_equal(current_fsm_peer, peer->peer_mac, 6U) == 0);
   }
 
   if (phase == 1U && peer != NULL && (!s_ble_peer_latched || peer_mismatch)) {

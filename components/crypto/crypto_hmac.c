@@ -66,15 +66,10 @@ CeePewErr_t crypto_hmac_sha256(const uint8_t *key, uint16_t key_len,
     mbedtls_md_free(&ctx);
     if (rc != 0) { return CEEPEW_ERR_CRYPTO; }
 
-    volatile uint8_t *vk = (volatile uint8_t *)key_block;
-    volatile uint8_t *vi = (volatile uint8_t *)inner_pad;
-    volatile uint8_t *vo = (volatile uint8_t *)outer_pad;
-    volatile uint8_t *vh = (volatile uint8_t *)inner_hash;
-    for (uint32_t i = 0U; i < sizeof(key_block); i++) { vk[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(inner_pad); i++) { vi[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(outer_pad); i++) { vo[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(inner_hash); i++) { vh[i] = 0U; }
-    __asm__ __volatile__("" ::: "memory");
+    ceepew_secure_zero(key_block, sizeof(key_block));
+    ceepew_secure_zero(inner_pad, sizeof(inner_pad));
+    ceepew_secure_zero(outer_pad, sizeof(outer_pad));
+    ceepew_secure_zero(inner_hash, sizeof(inner_hash));
 
     return CEEPEW_OK;
 }

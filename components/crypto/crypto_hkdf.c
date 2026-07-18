@@ -3,6 +3,7 @@
 #include "crypto_hkdf.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#include "ceepew_security_utils.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -167,11 +168,8 @@ CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_
         previous_len = 32U;
     }
 
-    volatile uint8_t *vp = (volatile uint8_t *)prk;
-    volatile uint8_t *vt = (volatile uint8_t *)t;
-    for (uint32_t i = 0U; i < sizeof(prk); i++) { vp[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(t); i++) { vt[i] = 0U; }
-    __asm__ __volatile__("" ::: "memory");
+    ceepew_secure_zero(prk, sizeof(prk));
+    ceepew_secure_zero(t, sizeof(t));
 
     return CEEPEW_OK;
 }

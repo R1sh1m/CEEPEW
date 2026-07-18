@@ -21,7 +21,7 @@ static const uint8_t ad[4] = { 0xDE, 0xAD, 0xBE, 0xEF };
 static int test_ascon_roundtrip(void)
 {
     uint8_t ct[64];
-    uint16_t ct_len = 0;
+    uint16_t ct_len = sizeof(ct);
 
     CeePewErr_t err = crypto_ascon_aead_encrypt(
         key, nonce, ad, sizeof(ad),
@@ -39,7 +39,7 @@ static int test_ascon_roundtrip(void)
     }
 
     uint8_t pt2[64];
-    uint16_t pt2_len = 0;
+    uint16_t pt2_len = sizeof(pt2);
 
     err = crypto_ascon_aead_decrypt(
         key, nonce, ad, sizeof(ad),
@@ -67,7 +67,7 @@ static int test_ascon_roundtrip(void)
 static int test_ascon_wrong_key_fails(void)
 {
     uint8_t ct[64];
-    uint16_t ct_len = 0;
+    uint16_t ct_len = sizeof(ct);
 
     CeePewErr_t err = crypto_ascon_aead_encrypt(
         key, nonce, ad, sizeof(ad),
@@ -79,7 +79,7 @@ static int test_ascon_wrong_key_fails(void)
     uint8_t wrong_key[16];
     memset(wrong_key, 0xFF, 16);
     uint8_t pt2[64];
-    uint16_t pt2_len = 0;
+    uint16_t pt2_len = sizeof(pt2);
 
     err = crypto_ascon_aead_decrypt(
         wrong_key, nonce, ad, sizeof(ad),
@@ -97,7 +97,7 @@ static int test_ascon_wrong_key_fails(void)
 static int test_ascon_tampered_ct_fails(void)
 {
     uint8_t ct[64];
-    uint16_t ct_len = 0;
+    uint16_t ct_len = sizeof(ct);
 
     CeePewErr_t err = crypto_ascon_aead_encrypt(
         key, nonce, ad, sizeof(ad),
@@ -107,7 +107,7 @@ static int test_ascon_tampered_ct_fails(void)
     ct[0] ^= 0x01; /* flip a bit in ciphertext */
 
     uint8_t pt2[64];
-    uint16_t pt2_len = 0;
+    uint16_t pt2_len = sizeof(pt2);
 
     err = crypto_ascon_aead_decrypt(
         key, nonce, ad, sizeof(ad),

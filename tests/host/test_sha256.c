@@ -8,32 +8,12 @@
 /* Forward declaration */
 CeePewErr_t crypto_sha256_compute(const uint8_t *in, uint32_t len, uint8_t out[32]);
 
-/* Known SHA-256 hash of an empty input */
-static const uint8_t empty_hash[32] = {
-    0xE3, 0xB0, 0xC4, 0x42, 0x98, 0xFC, 0x1C, 0x14,
-    0x9A, 0xFB, 0xF4, 0xC8, 0x99, 0x6F, 0xB9, 0x24,
-    0x27, 0xAE, 0x41, 0xE4, 0x64, 0x9B, 0x93, 0x4C,
-    0xA4, 0x95, 0x99, 0x1B, 0x78, 0x52, 0xB8, 0x55
-};
-
 static int test_sha256_known_vector(void)
 {
     uint8_t digest[32];
-    uint8_t input[1] = { 0 };
-
-    CeePewErr_t err = crypto_sha256_compute(input, 0, digest);
-    /* Hash of empty string should match known vector.
-     * Note: we pass len=0 which is empty string. */
-    if (err == CEEPEW_OK) {
-        if (memcmp(digest, empty_hash, 32) == 0) {
-            printf("PASS: SHA-256 empty string hash matches\n");
-            return 0;
-        }
-    }
-
-    /* If len=0 is rejected, try with minimal data */
     const uint8_t abc[3] = { 0x61, 0x62, 0x63 };
-    err = crypto_sha256_compute(abc, 3, digest);
+
+    CeePewErr_t err = crypto_sha256_compute(abc, 3, digest);
     if (err != CEEPEW_OK) {
         printf("FAIL: SHA-256 compute returned error %d\n", (int)err);
         return 1;

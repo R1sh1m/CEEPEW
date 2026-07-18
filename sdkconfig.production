@@ -18,7 +18,10 @@
 include sdkconfig.defaults
 
 # Development mode MUST be off for production
-# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set
+CONFIG_CEEPEW_DEVELOPMENT_MODE=n
+
+# eFuse HMAC key binding (production security layer)
+CONFIG_CEEPEW_EFUSE_HMAC_KEY=y
 
 # Secure Boot v2 (Release mode)
 # Requires signing key at keys/secure_boot_signing_key.pem

@@ -20,6 +20,7 @@
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
 #include "crypto_ecdh.h"
+#include "crypto_hmac_efuse.h"
 #include "ecc_hamming.h"
 #include "session_fsm.h"
 #include "session_memory.h"  /* For g_ui_event_queue and UIEvent_t */
