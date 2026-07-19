@@ -2,3 +2,8 @@
 # Espressif IoT Development Framework (ESP-IDF) 6.0.2 Project Minimal Configuration
 #
 CONFIG_CEEPEW_DEVELOPMENT_MODE=y
+# CEEPEW_OLED_FORCE_SH1106 is not set — the hardware is SSD1306 (RG0.96 IC V2.0).
+# SH1106 init uses a different charge pump command (0xAD,0x8B instead of 0x8D,0x14)
+# which prevents the SSD1306 internal DC-DC converter from activating, resulting in
+# a blank display. See DEBUG_LOG_OLED_I2C.md.
+# CONFIG_CEEPEW_OLED_FORCE_SH1106 is not set

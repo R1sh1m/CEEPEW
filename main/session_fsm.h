@@ -551,6 +551,16 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32]);
 /* Check if PFS handshake is complete and PFS-derived key is active. */
 bool session_pfs_active(void);
 
+/* Deferred PFS activation: call from the session task main loop to
+ * activate PFS when the peer key has arrived (pfs_peer_pubkey_valid)
+ * but activation has not yet occurred (!pfs_active). This is the
+ * symmetric deferred path — both sides activate independently in their
+ * own main loops rather than one side activating immediately in the
+ * RX callback, which could cause one-sided key mismatch if PFS_RESP
+ * is lost and the initiator falls back to the base key.
+ * Safe no-op if PFS is already active or not ready. */
+void session_pfs_check_activate(void);
+
 /* Check if the peer's PFS public key has been received and the PFS shared
  * secret has been derived (but not yet activated). Returns true once
  * session_pfs_process_peer_key() has stored the peer's key, regardless of

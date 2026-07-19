@@ -430,6 +430,19 @@ function Invoke-Build {
     $output | Out-File -FilePath $buildLog -Encoding utf8
 
     if ($LASTEXITCODE -ne 0) {
+        $outputText = ($output | Out-String)
+        if ($outputText -match "currently active in the environment while the project was configured with") {
+            Write-Warn "[build] Python environment mismatch detected -- running idf.py fullclean and retrying..."
+            idf.py fullclean 2>&1 | Out-Null
+            $sw.Restart()
+            $output = idf.py build 2>&1
+            $sw.Stop()
+            $output | Out-File -FilePath $buildLog -Encoding utf8
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok "[build] OK after fullclean retry ($(Format-Elapsed $sw.Elapsed.TotalSeconds)) log: $(Split-Path $buildLog -Leaf)"
+                return $true
+            }
+        }
         Write-Err "[build] BUILD FAILED (exit $LASTEXITCODE)"
         if (-not $Quiet) { $output | ForEach-Object { Write-Host $_ } }
         Write-Err "[build] Full log: $buildLog"
@@ -588,7 +601,7 @@ function Invoke-Monitoring {
     }
 
     # Offer log pipeline
-    if (Test-Path -LiteralPath $LogPipelinePy -and (Test-Path -LiteralPath $logPath)) {
+    if ((Test-Path -LiteralPath $LogPipelinePy) -and (Test-Path -LiteralPath $logPath)) {
         Write-Host ""
         $runPipeline = Read-Host "Run log analysis pipeline on captured logs? [y/N]"
         if ($runPipeline -eq 'y' -or $runPipeline -eq 'Y') {

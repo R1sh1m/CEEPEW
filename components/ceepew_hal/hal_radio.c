@@ -842,6 +842,11 @@ CeePewErr_t hal_radio_set_hop_context(const void *crypto_ctx, hal_radio_get_nonc
     return CEEPEW_OK;
 }
 
+void hal_radio_set_hop_epoch(uint64_t epoch)
+{
+    s_hop_epoch = epoch;
+}
+
 CeePewErr_t hal_radio_start_channel_hopping(void)
 {
     if (!s_initialised) {
@@ -1048,31 +1053,18 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
 
         s_rendezvous_offset_us = (int32_t)offset_us;
 
-        /* ── Convergence check ──────────────────────────────────────── */
-        /* Compute absolute difference between measured offset and 0
-         * (ideal convergence = 0 offset). For a static channel with
-         * fixed RTT, repeated measurements should converge. */
-        int32_t delta_from_zero = abs_diff_us((uint64_t)((offset_us < 0) ? (uint64_t)(-offset_us) : (uint64_t)offset_us), 0U);
-
-        if (delta_from_zero <= (int32_t)CEEPEW_RENDEZVOUS_TOLERANCE_US) {
-            /* Within tolerance — increment convergence counter */
-            s_converge_count++;
-            if (s_converge_count >= CEEPEW_RENDEZVOUS_CONVERGE_SAMPLES) {
-                s_converge_achieved = true;
-                s_rendezvous_state = RENDEZVOUS_SYNCED;
-                ESP_LOGI(TAG, "Rendezvous: SYNCED (offset=%ld us, converge=%lu)",
-                         (long)s_rendezvous_offset_us, (unsigned long)s_converge_count);
-            } else {
-                ESP_LOGI(TAG, "Rendezvous: offset=%ld us within tolerance (%lu/%lu samples)",
-                         (long)offset_us, (unsigned long)s_converge_count,
-                         (unsigned long)CEEPEW_RENDEZVOUS_CONVERGE_SAMPLES);
-            }
-        } else {
-            /* Out of tolerance — reset convergence counter */
-            s_converge_count = 0U;
-            ESP_LOGW(TAG, "Rendezvous: offset=%ld us OUTSIDE tolerance (%d us), converge reset",
-                     (long)offset_us, CEEPEW_RENDEZVOUS_TOLERANCE_US);
-        }
+        /* ── CONVERGENCE ───────────────────────────────────────────────
+         * The measured offset is the boot-time difference between the two
+         * devices (plus RTT), which is inherently large (hundreds of ms
+         * to seconds). Comparing it to zero with a 500 us tolerance would
+         * always fail. Instead, accept the first valid measurement
+         * immediately — it is the correct clock offset, not a convergence
+         * target. The offset will be used below to synchronise the hop
+         * epoch counters so both devices hop in phase. */
+        s_converge_achieved = true;
+        s_rendezvous_state = RENDEZVOUS_SYNCED;
+        ESP_LOGI(TAG, "Rendezvous: SYNCED (offset=%ld us)",
+                 (long)s_rendezvous_offset_us);
 
         return CEEPEW_OK;
     }

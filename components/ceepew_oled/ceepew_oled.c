@@ -358,7 +358,7 @@ static esp_err_t send_init_stream_sh1106(ceepew_oled_t *dev)
     CHECK_RC("init_stream_write_4", send_cmd_2(dev->i2c_dev, 0xD3U, 0x00U));  /* Set Display Offset */
     CHECK_RC("init_stream_write_5", send_cmd_1(dev->i2c_dev, 0x40U));  /* Set Display Start Line to 0 */
     CHECK_RC("init_stream_write_6", send_cmd_2(dev->i2c_dev, 0xADU, 0x8BU));  /* Set Charge Pump Command (Enable) */
-    CHECK_RC("init_stream_write_7", send_cmd_1(dev->i2c_dev, 0xA1U));  /* Set Segment Re-map */
+    CHECK_RC("init_stream_write_7", send_cmd_1(dev->i2c_dev, 0xA0U));  /* Set Segment Re-map (direct: COL0=SEG0) */
     CHECK_RC("init_stream_write_8", send_cmd_1(dev->i2c_dev, 0xC8U));  /* Set COM Output Scan Direction */
     CHECK_RC("init_stream_write_9", send_cmd_2(dev->i2c_dev, 0xDAU, 0x12U));  /* Set COM Pins Hardware Configuration */
     CHECK_RC("init_stream_write_10", send_cmd_2(dev->i2c_dev, 0x81U, 0xFFU));  /* Set Contrast Control */
@@ -403,6 +403,13 @@ esp_err_t ceepew_oled_init_panel(ceepew_oled_t *dev,
     dev->sh1106_mode = false;
     (void)memset(dev->buffer, 0, CEEPEW_OLED_BUF_SIZE);
 
+#ifdef CONFIG_CEEPEW_OLED_FORCE_SH1106
+    esp_err_t rc = send_init_stream_sh1106(dev);
+    if (rc == ESP_OK) {
+        dev->sh1106_mode = true;
+        dev->initialised = true;
+    }
+#else
     /* VDD has been stable for hundreds of ms by this point (ESP32 boot
      * time). Send the full init stream immediately — starts with 0xAE
      * (Display OFF) to hide power-on GDDRAM garbage. */
@@ -410,6 +417,7 @@ esp_err_t ceepew_oled_init_panel(ceepew_oled_t *dev,
     if (rc == ESP_OK) {
         dev->initialised = true;
     }
+#endif
     return rc;
 }
 
@@ -425,7 +433,7 @@ esp_err_t ceepew_oled_init_panel_sh1106(ceepew_oled_t *dev,
     dev->bus         = bus;
     dev->i2c_dev     = i2c_dev;
     dev->addr        = addr;
-    dev->sh1106_mode = false;
+    dev->sh1106_mode = true;
     (void)memset(dev->buffer, 0, CEEPEW_OLED_BUF_SIZE);
 
     esp_err_t rc = send_init_stream_sh1106(dev);
@@ -440,12 +448,20 @@ esp_err_t ceepew_oled_init_panel_sh1106(ceepew_oled_t *dev,
 static esp_err_t push_full_frame(ceepew_oled_t *dev,
                                  i2c_master_dev_handle_t dev_handle)
 {
+    /* SH1106 uses 0xA0 (direct segment mapping), so frame buffer column
+     * 0 maps directly to GDDRAM column 0 → SEG0 (leftmost pixel).
+     * No column offset needed — unlike the old 0xA1 remap which required
+     * shifting to columns 4-131 to hit the 128 visible segments. */
+    const uint8_t col_offset = 0U;
+
     for (uint8_t page = 0U; page < CEEPEW_OLED_PAGES; page++) {
         const uint8_t page_cmd = (uint8_t)(CEEPEW_OLED_CMD_SET_PAGE_START | page);
+        const uint8_t col_low  = (uint8_t)(col_offset & 0x0FU);
+        const uint8_t col_high = (uint8_t)(0x10U | ((col_offset >> 4U) & 0x0FU));
 
         const uint8_t cmd_stream[6U] = {
-            0x80U, 0x00U,
-            0x80U, 0x10U,
+            0x80U, col_low,
+            0x80U, col_high,
             0x80U, page_cmd,
         };
         esp_err_t rc = ceepew_oled_i2c_transmit(dev_handle, cmd_stream,
@@ -543,9 +559,11 @@ esp_err_t ceepew_oled_push_tile(ceepew_oled_t *dev,
     assert(tile_col < CEEPEW_OLED_TILE_COLS);
     assert(tile_row < CEEPEW_OLED_TILE_ROWS);
 
-    const uint8_t col_start = (uint8_t)(tile_col * 8U);
-    const uint8_t col_low   = (uint8_t)(col_start & 0x0FU);
-    const uint8_t col_high  = (uint8_t)(0x10U | ((col_start >> 4U) & 0x0FU));
+    /* SH1106 uses 0xA0 (direct mapping), no column adjustment needed. */
+    const uint8_t col_adjust = 0U;
+    const uint8_t col_start  = (uint8_t)(tile_col * 8U + col_adjust);
+    const uint8_t col_low    = (uint8_t)(col_start & 0x0FU);
+    const uint8_t col_high   = (uint8_t)(0x10U | ((col_start >> 4U) & 0x0FU));
     i2c_master_dev_handle_t dev_handle = dev->i2c_dev;
 
     for (uint8_t page = 0U; page < CEEPEW_OLED_PAGES; page++) {

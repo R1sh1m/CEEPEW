@@ -155,7 +155,6 @@ static uint8_t s_last_ble_hits = 0U;
 static int8_t s_last_ble_rssi = 0;
 static uint64_t s_last_ble_scan_heartbeat_ms = 0ULL;
 static uint64_t s_last_pfs_retry_ms = 0ULL;
-static bool     s_pfs_retry_abandoned = false;  /* true after PFS timeout — use base key */
 static uint64_t s_ble_scan_start_ms =
     0ULL; /* ms when discovery pattern started */
 static bool s_ble_peer_latched = false;
@@ -296,38 +295,76 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
    * causes session_drive_post_derive_sync() to fail. */
   if (phase == 3U && session_is_active() && session_sync_barrier_cleared() &&
       session_peer_box_pubkey_valid() && session_peer_sign_pk_valid()) {
-    /* Rendezvous handshake must complete before channel hopping starts */
+    /* Rendezvous handshake must complete before channel hopping starts.
+     *
+     * CRITICAL: if the sync barrier is already cleared, rendezvous timeout
+     * is NOT fatal — the encrypted HELLO/ACK has already confirmed key
+     * convergence, and the radios will eventually sync via the hop sequence.
+     * Only fail if we haven't yet confirmed key sync. */
+    bool proceed_to_hop = false;
     if (!session_rendezvous_synced()) {
       CeePewErr_t rv_err = session_drive_rendezvous();
       if (rv_err == CEEPEW_ERR_TIMEOUT) {
-        ESP_LOGE(TAG, "Rendezvous timeout — pairing failed");
-        session_ui_ctx_lock();
-        g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
-        g_ui_ctx.transition_ready = true;
-        session_ui_ctx_unlock();
-        (void)session_reset_to_discovery();
-        task_session_reset_pairing_static_state();
-        task_session_pairing_flow_reset();
-        (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-        return CEEPEW_OK;
+        if (!session_sync_barrier_cleared()) {
+          ESP_LOGE(TAG, "Rendezvous timeout (sync barrier NOT cleared) — pairing failed");
+          session_ui_ctx_lock();
+          g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+          g_ui_ctx.transition_ready = true;
+          session_ui_ctx_unlock();
+          (void)session_reset_to_discovery();
+          task_session_reset_pairing_static_state();
+          task_session_pairing_flow_reset();
+          (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+          return CEEPEW_OK;
+        }
+        /* Sync barrier already cleared — rendezvous timeout is non-fatal.
+         * The encrypted round-trip already proved key convergence. */
+        ESP_LOGW(TAG, "Rendezvous timeout but sync barrier cleared — continuing (hopping will self-sync)");
+        session_rendezvous_init();
+        proceed_to_hop = true;
       }
-      if (rv_err != CEEPEW_OK) {
+      if (rv_err != CEEPEW_OK && rv_err != CEEPEW_ERR_TIMEOUT) {
         return rv_err;  /* Transport error or still in progress */
       }
-      /* Rendezvous just completed (CEEPEW_OK and now synced) — fall through to start hopping */
+      if (session_rendezvous_synced()) {
+        proceed_to_hop = true;
+      }
+    } else {
+      proceed_to_hop = true;
     }
 
-    /* Start channel hopping timer once rendezvous is complete.
-     * This enables ESP-NOW channel hopping for Phase 3 communication. */
-    if (!s_hopping_started) {
-      CeePewErr_t hop_err = hal_radio_set_hop_context(&g_crypto_ctx, session_get_nonce_counter);
-      if (hop_err == CEEPEW_OK) {
-        /* Register ARQ hop sync callbacks before starting hopping */
-        (void)ecc_arq_init_hop_sync();
-        hop_err = hal_radio_start_channel_hopping();
+    if (proceed_to_hop) {
+      /* Start channel hopping timer once rendezvous is complete.
+       * This enables ESP-NOW channel hopping for Phase 3 communication. */
+      if (!s_hopping_started) {
+        CeePewErr_t hop_err = hal_radio_set_hop_context(&g_crypto_ctx, session_get_nonce_counter);
         if (hop_err == CEEPEW_OK) {
-          ESP_LOGI(TAG, "Channel hopping started (interval=%u ms) after rendezvous sync", CEEPEW_HOP_INTERVAL_MS);
-          s_hopping_started = true;
+          /* ── SYNCHRONISE EPOCH COUNTERS ──────────────────────────
+           * After rendezvous, the initiator knows the clock offset
+           * (boot-time difference) via session_get_rendezvous_offset_us.
+           * Use this offset to compute the peer's current epoch and
+           * set our local epoch to match. Both devices then hop on
+           * the same epoch at the same wall-clock time, eliminating
+           * the 1.4 s misalignment window that caused silent message
+           * loss (ARQ confirms local TX, not peer reception). */
+          int32_t rv_offset_us = session_get_rendezvous_offset_us();
+          if (rv_offset_us != 0) {
+            uint64_t now_us = (uint64_t)esp_timer_get_time();
+            uint64_t epoch_us = CEEPEW_HOP_INTERVAL_MS * 1000ULL;
+            uint64_t responder_now_us = now_us + (uint64_t)(int64_t)rv_offset_us;
+            uint64_t peer_epoch = responder_now_us / epoch_us;
+            hal_radio_set_hop_epoch(peer_epoch);
+            ESP_LOGI(TAG, "Epoch sync: offset=%ld us, peer_epoch=%llu",
+                     (long)rv_offset_us, (unsigned long long)peer_epoch);
+          }
+
+          /* Register ARQ hop sync callbacks before starting hopping */
+          (void)ecc_arq_init_hop_sync();
+          hop_err = hal_radio_start_channel_hopping();
+          if (hop_err == CEEPEW_OK) {
+            ESP_LOGI(TAG, "Channel hopping started (interval=%u ms) after rendezvous sync", CEEPEW_HOP_INTERVAL_MS);
+            s_hopping_started = true;
+          }
         }
       }
     }
@@ -354,6 +391,12 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
    * BLE link has dropped to IDLE (no GATTC, no GATTS, not connecting),
    * force a UI revert to PAIRING_FAILED.
    *
+   * CRITICAL GUARDS:
+   *   - Only fire if phase < 3 (not after key derivation / handoff).
+   *   - Only fire if the pairing flow state machine is in a phase where
+   *     BLE should be actively connected or scanning (DISCOVERY through
+   *     GATT_IDENTITY). After KEY_DERIVE the BLE teardown is intentional.
+   *
    * Re-read ble_state here — the snapshot taken at function entry
    * (line 271) is stale after the 80+ lines of pairing flow logic
    * that may have advanced BLE state (e.g. from IDLE to SCANNING). */
@@ -361,19 +404,24 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
   bool in_pairing_screen =
       (ui_state == UI_STATE_CODE_ENTRY || ui_state == UI_STATE_COUNTDOWN ||
        ui_state == UI_STATE_PAIRING || ui_state == UI_STATE_CONFIRM);
-  if (in_pairing_screen && ble_state == BLE_IDLE &&
+  bool pairing_flow_needs_ble =
+      (s_pairing_flow_state >= PAIRING_FLOW_DISCOVERY &&
+       s_pairing_flow_state <= PAIRING_FLOW_GATT_IDENTITY);
+  if (phase == 2U && pairing_flow_needs_ble &&
+      in_pairing_screen && ble_state == BLE_IDLE &&
       !g_ble_ctx.gattc_connected && !g_ble_ctx.gatts_connected &&
       !g_ble_ctx.connecting && peer == NULL) {
     ESP_LOGW(TAG, "BLE link dropped during pairing flow — reverting UI to "
                   "PAIRING_FAILED");
     ESP_LOGW(TAG,
              "  state=%s adv=%u scan=%u gattc=%u gatts=%u connect=%u "
-             "committed=%u verified=%u",
+             "committed=%u verified=%u flow=%d",
              task_session_ble_state_name(ble_state), g_ble_ctx.is_advertising,
              g_ble_ctx.is_scanning, g_ble_ctx.gattc_connected,
              g_ble_ctx.gatts_connected, g_ble_ctx.connecting,
              g_ble_ctx.commitment_verified ? 1U : 0U,
-             g_ble_ctx.handoff_ready ? 1U : 0U);
+             g_ble_ctx.handoff_ready ? 1U : 0U,
+             (int)s_pairing_flow_state);
     session_ui_ctx_lock();
     g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
     g_ui_ctx.transition_ready = true;
@@ -418,22 +466,19 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     s_ble_peer_latched = true;
   }
 
-  /* ── STEP 2: Determine initiator / responder role ─────────────────────
-   * Lower MAC = initiator (opens the brief GATT connection for sign_pk).
-   * Higher MAC = responder (waits for GATTS connect).                      */
-  bool is_initiator = false;
-  if (phase >= 1U && peer != NULL) {
+  bool is_initiator = session_get_role();
+  /* Persist role early during pairing phases (before Phase 3 active session).
+   * Once Phase 3 begins, the role is locked and BLE is deinitialized (peer becomes NULL).
+   * We must not overwrite the role to Responder (false) once in Phase 3. */
+  if (phase < 3U && peer != NULL) {
     uint8_t self_mac[CEEPEW_DEVICE_ID_BYTES] = {0U};
     if (session_get_device_id(self_mac) == CEEPEW_OK) {
       is_initiator = (ceepew_ct_less(self_mac, peer->peer_mac,
                                      CEEPEW_DEVICE_ID_BYTES) != 0U);
     }
     ceepew_secure_zero(self_mac, sizeof(self_mac));
+    (void)session_set_role(is_initiator);
   }
-
-  /* Persist role early so the COUNTDOWN OLED and any downstream
-   * logic see the correct INITIATOR / RESPONDER value. */
-  (void)session_set_role(is_initiator);
 
   /*
    * ── STEP 3: NO GATT CONNECTION FOR COMMITMENT ────────────────────────
@@ -1225,7 +1270,6 @@ static void task_session_reset_pairing_static_state(void) {
   s_rev_gattc_backoff_stage = 0U;
   s_sign_pk_gate_start_ms = 0U;
   s_m2_gate_wait_start_ms = 0U;
-  s_pfs_retry_abandoned = false;
   s_last_pfs_retry_ms = 0ULL;
 }
 
@@ -1261,7 +1305,7 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
   static const uint32_t pairing_flow_timeout_ms[] = {
       0,     /* IDLE */
       30000, /* DISCOVERY - 30s */
-      15000, /* COMMITMENT - 15s */
+      CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS, /* COMMITMENT - aligned with config */
       45000, /* GATT_IDENTITY - 45s (matches supervisor CEEPEW_PHASE_TIMEOUT_GATT_MS) */
        35000, /* KEY_DERIVE - 35s (reverse GATTC + derivation + sync; must exceed UI KEYDER safety) */
       10000, /* POST_DERIVE_SYNC - 10s */
@@ -2067,22 +2111,22 @@ void task_session_run(void *pvParameters) {
          * PFS_INIT is sent once during key derivation, but may be lost
          * if the peer's ESP-NOW is still initializing (BLE teardown +
          * WiFi restart window). The initiator retransmits every
-         * CEEPEW_PFS_RETRY_INTERVAL_MS until PFS completes or the
-         * PFS timeout expires, at which point we fall back to the
-         * base session key (no forward secrecy for this session). */
+         * CEEPEW_PFS_RETRY_INTERVAL_MS until PFS completes.
+         *
+         * The initiator NEVER abandons PFS. Both sides use the base
+         * (non-PFS) session key until PFS_RESP arrives, at which point
+         * the deferred activation path (session_pfs_check_activate)
+         * switches to the PFS-derived key symmetrically on both sides.
+         * This prevents the key-mismatch failure mode where one side
+         * activates PFS and the other doesn't. */
         if (session_is_active() && session_get_phase() >= 3U &&
-            !session_pfs_peer_ready() && !s_pfs_retry_abandoned &&
-            session_get_role()) {
+            !session_pfs_peer_ready() && session_get_role()) {
           uint64_t now_pfs = (uint64_t)(esp_timer_get_time() / 1000LL);
           if (s_last_pfs_retry_ms == 0ULL) {
             s_last_pfs_retry_ms = now_pfs;
           }
           uint64_t pfs_elapsed = now_pfs - s_last_pfs_retry_ms;
-          if (pfs_elapsed >= CEEPEW_PFS_TIMEOUT_MS) {
-            ESP_LOGW(TAG, "PFS retry timed out after %llu ms — falling back to base key",
-                     (unsigned long long)pfs_elapsed);
-            s_pfs_retry_abandoned = true;
-          } else if (pfs_elapsed >= CEEPEW_PFS_RETRY_INTERVAL_MS) {
+          if (pfs_elapsed >= CEEPEW_PFS_RETRY_INTERVAL_MS) {
             s_last_pfs_retry_ms = now_pfs - (pfs_elapsed % CEEPEW_PFS_RETRY_INTERVAL_MS);
             CeePewErr_t pfs_err = session_pfs_initiate();
             if (pfs_err == CEEPEW_OK) {
@@ -2103,6 +2147,18 @@ void task_session_run(void *pvParameters) {
               }
             }
           }
+        }
+
+        /* ── DEFERRED PFS ACTIVATION ────────────────────────────────────
+         * If the PFS peer key arrived after the sync barrier cleared
+         * (e.g. PFS_INIT/RESP was delayed by ESP-NOW retransmission),
+         * activate PFS now. Both sides call this independently in their
+         * own main loops, guaranteeing symmetric key convergence without
+         * the risk of one-sided activation that would cause a key
+         * mismatch if PFS_RESP were lost. */
+        if (session_is_active() && session_get_phase() >= 3U &&
+            !session_pfs_active() && session_pfs_peer_ready()) {
+            session_pfs_check_activate();
         }
 
         /* ── DOUBLE-ENDED POST-DERIVE SYNC BARRIER ──────────────────────

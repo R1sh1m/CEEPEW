@@ -371,6 +371,13 @@ CeePewErr_t session_phase2_derive_key(void){
         }
     }
 
+    /* Block key derivation if peer sign_pk is invalid and identity degraded mode is not confirmed.
+     * This prevents proceeding with unauthenticated pairings. */
+    if (!s_session.peer_sign_pk_valid && !s_session.identity_degraded) {
+        ESP_LOGE("session_fsm", "derive_key ABORT: peer sign_pk invalid and identity not degraded");
+        return CEEPEW_ERR_AUTH_FAIL;
+    }
+
     /* Save region state for rollback on error */
     uint32_t saved_bump = g_region.bump;
     CeePewErr_t err = CEEPEW_OK;
@@ -889,69 +896,71 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
      * HELLO/ACK rendezvous. hal_radio_set_channel is idempotent. */
     (void)hal_radio_set_channel(CEEPEW_ESPNOW_CHANNEL);
 
-    /* Both peers retransmit. The barrier clears on receipt of any
-     * sync message (HELLO or ACK) at either end — see
-     * session_handle_key_sync_byte(). */
+    /* Only the initiator transmits HELLO. The responder does NOT send
+     * HELLO — it listens on the static channel until a valid HELLO
+     * arrives, then responds with ACK (sent from the RX path in
+     * task_session.c). This prevents a protocol race where both sides
+     * transmit HELLO simultaneously and each side rejects the other's
+     * HELLO because session_handle_key_sync_byte() expects ACK on the
+     * initiator and HELLO only on the responder. */
+    if (s_session.is_initiator) {
 
-    /* Exponential backoff for HELLO retransmissions: 50, 100, 200, 400ms.
-     * First attempt fires immediately (sync_last_send_ms == 0). */
-    static const uint32_t s_sync_backoff_ms[] = {50U, 100U, 200U, 400U, 400U, 400U};
-    #define CEEPEW_SYNC_BACKOFF_STAGES \
-        (sizeof(s_sync_backoff_ms) / sizeof(s_sync_backoff_ms[0]))
-    if (s_session.sync_last_send_ms != 0ULL) {
-        uint32_t stage = (s_session.sync_retry_stage < (uint8_t)CEEPEW_SYNC_BACKOFF_STAGES)
-                         ? s_session.sync_retry_stage : (uint8_t)(CEEPEW_SYNC_BACKOFF_STAGES - 1U);
-        uint32_t backoff = s_sync_backoff_ms[stage];
-        if ((now_ms - s_session.sync_last_send_ms) < backoff) {
+        /* Exponential backoff for HELLO retransmissions: 50, 100, 200, 400ms.
+         * First attempt fires immediately (sync_last_send_ms == 0). */
+        static const uint32_t s_sync_backoff_ms[] = {50U, 100U, 200U, 400U, 400U, 400U};
+        #define CEEPEW_SYNC_BACKOFF_STAGES \
+            (sizeof(s_sync_backoff_ms) / sizeof(s_sync_backoff_ms[0]))
+        if (s_session.sync_last_send_ms != 0ULL) {
+            uint32_t stage = (s_session.sync_retry_stage < (uint8_t)CEEPEW_SYNC_BACKOFF_STAGES)
+                             ? s_session.sync_retry_stage : (uint8_t)(CEEPEW_SYNC_BACKOFF_STAGES - 1U);
+            uint32_t backoff = s_sync_backoff_ms[stage];
+            if ((now_ms - s_session.sync_last_send_ms) < backoff) {
+                return CEEPEW_OK;
+            }
+        }
+        s_session.sync_last_send_ms = now_ms;
+
+        /* Build the 1-byte HELLO payload. We use session_send_message so the
+         * full pipeline (compress → Ascon → crypto_box → sign → FEC → CRC →
+         * ESP-NOW) runs. A successful receive on the other side is the proof
+         * that the key converges. */
+        uint8_t hello_plain[1] = { CEEPEW_KEY_SYNC_HELLO_BYTE };
+
+        /* The peer MAC and peer public key are required by session_send_message.
+         * Use the GATT-verified peer WiFi MAC for ESP-NOW frame routing. */
+        uint8_t peer_mac[6] = {0U};
+        uint8_t peer_pk[32] = {0U};
+
+        if (!s_session.device_id_peer_wifi_valid) {
+            ESP_LOGE("session_fsm", "post_derive_sync: peer WiFi MAC not verified — aborting");
+            return CEEPEW_ERR_PARAM;
+        }
+        memcpy(peer_mac, s_session.device_id_peer_wifi, 6U);
+
+        if (!hal_radio_is_peer_registered(peer_mac)) {
+            ESP_LOGW("session_fsm", "post_derive_sync: ESP-NOW peer not registered yet — deferring send");
             return CEEPEW_OK;
         }
-    }
-    s_session.sync_last_send_ms = now_ms;
 
-    /* Build the 1-byte HELLO payload. We use session_send_message so the
-     * full pipeline (compress → Ascon → crypto_box → sign → FEC → CRC →
-     * ESP-NOW) runs. A successful receive on the other side is the proof
-     * that the key converges. */
-    uint8_t hello_plain[1] = { CEEPEW_KEY_SYNC_HELLO_BYTE };
+        if (!g_crypto_ctx.peer_box_pubkey_valid) {
+            return CEEPEW_OK;
+        }
+        memcpy(peer_pk, g_crypto_ctx.peer_box_pubkey, 32U);
 
-    /* The peer MAC and peer public key are required by session_send_message.
-     * Use the GATT-verified peer WiFi MAC for ESP-NOW frame routing. */
-    uint8_t peer_mac[6] = {0U};
-    uint8_t peer_pk[32] = {0U};
+        CeePewErr_t send_err = session_send_message(hello_plain, 1U, peer_mac, peer_pk);
+        if (send_err == CEEPEW_OK && s_session.sync_retry_stage < 255U) {
+            s_session.sync_retry_stage++;
+        }
+        return send_err;
 
-    /* STRICT HARDWARE GATE: Use the WiFi MAC that was verified via GATT.
-     * If it was never delivered, the WiFi MAC gate in session_phase2_derive_key()
-     * should have already prevented us from reaching this point. Defend here
-     * as defense-in-depth. */
-    if (!s_session.device_id_peer_wifi_valid) {
-        ESP_LOGE("session_fsm", "post_derive_sync: peer WiFi MAC not verified — aborting");
-        return CEEPEW_ERR_PARAM;
-    }
-    memcpy(peer_mac, s_session.device_id_peer_wifi, 6U);
-
-    /* Verify ESP-NOW peer is registered before attempting to send.
-     * If not registered, wait — the peer registration happens in task_session.c
-     * after key derivation. If we're here but peer isn't registered yet,
-     * something is wrong and we should not send garbage. */
-    if (!hal_radio_is_peer_registered(peer_mac)) {
-        ESP_LOGW("session_fsm", "post_derive_sync: ESP-NOW peer not registered yet — deferring send");
-        return CEEPEW_OK;  /* defer this tick, will retry on next loop */
-    }
-
-    /* Use the peer's X25519 public key for crypto_box ECDH */
-    if (!g_crypto_ctx.peer_box_pubkey_valid) {
-        /* Peer's X25519 key hasn't arrived yet via BLE sign_pk exchange.
-         * Wait for it to arrive — but if it never does, the timeout
-         * above will fire and we transition to PAIRING_FAILED. */
+    } else {
+        /* Responder: do nothing, wait for HELLO to arrive via the RX path.
+         * The radio is locked to the static channel above, so the responder
+         * will receive the initiator's HELLO as an ESP-NOW frame. Once
+         * decrypted, the RX path calls session_handle_key_sync_byte() which
+         * returns CEEPEW_ERR_NEED_TX, triggering the ACK send. */
         return CEEPEW_OK;
     }
-    memcpy(peer_pk, g_crypto_ctx.peer_box_pubkey, 32U);
-
-    CeePewErr_t send_err = session_send_message(hello_plain, 1U, peer_mac, peer_pk);
-    if (send_err == CEEPEW_OK && s_session.sync_retry_stage < 255U) {
-        s_session.sync_retry_stage++;
-    }
-    return send_err;
 }
 
 /* Internal: clear sync barrier and perform clean slate chat evolution.
@@ -1061,10 +1070,7 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
          * caller retries. Without this retry, a single lost ACK permanently
          * stalls the rendezvous until KEYDER timeout. */
         s_session.sync_peer_encrypted_received = true;
-        if (!s_session.sync_barrier_cleared) {
-            return CEEPEW_ERR_NEED_TX;
-        }
-        return CEEPEW_OK;
+        return CEEPEW_ERR_NEED_TX;
     }
 }
 
@@ -1610,25 +1616,42 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32])
         return err;
     }
 
-    /* PFS key stored in pfs_ascon_key. The actual key switch (replacing
-     * ascon_key) is deferred to session_pfs_activate(), which is called
-     * from session_clear_sync_barrier_internal() after the encrypted
-     * HELLO/ACK round-trip completes. This ensures BOTH sides switch
-     * atomically — the sync barrier is the convergence point. Without this
-     * deferral, the responder switches to the PFS key upon receiving
-     * PFS_INIT, but if PFS_RESP is lost, the initiator never switches,
-     * creating a permanent one-way crypto deadlock. */
-
-    ESP_LOGI("SESSION", "PFS peer key received — deferred activation");
+    /* PFS activation is deferred to the session task main loop so that
+     * BOTH sides activate independently and symmetrically. Previously the
+     * code activated immediately here if the sync barrier was already
+     * cleared, which caused a one-sided key mismatch: if PFS_RESP was
+     * lost and the initiator fell back to the base key, the responder
+     * would have already switched to the PFS-derived key, breaking all
+     * subsequent encrypted message exchange.
+     *
+     * The main loop (via session_pfs_check_activate) activates PFS on
+     * each side when both pfs_peer_pubkey_valid is true AND pfs_active
+     * is still false. This guarantees that both sides converge to the
+     * same active key regardless of PFS message ordering or loss. */
     return CEEPEW_OK;
 }
 
 static void session_pfs_activate(void)
 {
-    if (g_crypto_ctx.pfs_peer_pubkey_valid && !g_crypto_ctx.pfs_active) {
+    if (g_crypto_ctx.pfs_peer_pubkey_valid) {
         memcpy(g_crypto_ctx.ascon_key, g_crypto_ctx.pfs_ascon_key, 16U);
         g_crypto_ctx.pfs_active = true;
         ESP_LOGI("SESSION", "PFS handshake complete — session key rotated");
+    }
+}
+
+/* Public wrapper: safe to call from the session task main loop.
+ * Activates PFS only when both conditions are true:
+ *   - pfs_peer_pubkey_valid (PFS key material has been exchanged)
+ *   - !pfs_active (PFS has NOT already been activated)
+ *
+ * This is the deferred activation path that complements the barrier-clear
+ * path in session_clear_sync_barrier_internal(). Calling it when PFS is
+ * already active is a safe no-op. */
+void session_pfs_check_activate(void)
+{
+    if (g_crypto_ctx.pfs_peer_pubkey_valid && !g_crypto_ctx.pfs_active) {
+        session_pfs_activate();
     }
 }
 

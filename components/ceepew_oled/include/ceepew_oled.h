@@ -23,9 +23,12 @@
  *    scratch state are all in the caller's static storage.
  *  - Synchronous I2C: every Wire.transmit() blocks until the physical
  *    transfer completes.
- *  - SSD1306 vs SH1106 detection happens automatically on the first
- *    ceepew_oled_display() failure (SH1106 needs a +2 column offset
- *    in page-addressing mode).
+ *  - SSD1306 vs SH1106 selection is determined by the Kconfig option
+ *    CEEPEW_OLED_FORCE_SH1106. Both panels ACK identical I2C transactions
+ *    so auto-detection is unreliable — the panel type must be selected
+ *    at compile time via menuconfig ("CEE-PEW OLED Configuration").
+ *    SH1106 init uses 0xA0 (no segment remap) and direct column
+ *    mapping — no column offset needed.
  *
  * License: GPL-3.0-only (see /LICENSE).
  */

@@ -8,14 +8,14 @@
 
 .PARAMETER Mode
   Which workflow to run:
-    Diagnose  — Single-device on-device diagnostic.
+    Diagnose  - Single-device on-device diagnostic.
                 Enables CONFIG_CEEPEW_DEVELOPMENT_MODE, builds, flashes,
                 monitors for the DIAGNOSTIC REPORT, parses PASS/FAIL results,
                 then restores sdkconfig.
-    Pairing   — Two-device pairing test.
+    Pairing   - Two-device pairing test.
                 Builds, flashes both COM5/COM6, monitors both ports via
                 ceepew_monitor.py, extracts key events to a CSV summary.
-    Build     — Build only; prints manual pairing-test instructions.
+    Build     - Build only; prints manual pairing-test instructions.
 
 .PARAMETER Port
   Serial port for Diagnose mode (default: COM5).
@@ -70,17 +70,17 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
-$IdfProfile = if (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
-    "C:\esp\v6.0.2\esp-idf\export.ps1"
-} elseif (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
+$IdfProfile = if (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
     "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1"
+} elseif (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
+    "C:\esp\v6.0.2\esp-idf\export.ps1"
 } else {
     "C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1"
 }
-$PythonExe  = if (Test-Path -LiteralPath "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe") {
-    "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe"
-} elseif (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
+$PythonExe  = if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
     "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+} elseif (Test-Path -LiteralPath "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe") {
+    "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe"
 } else {
     "C:\Espressif\tools\python\v6.0.1\venv\Scripts\python.exe"
 }
@@ -103,7 +103,8 @@ function Write-Banner {
 
 function Step-IdfBuild {
     Write-Banner "Building"
-    $buildLog = Join-Path $ProjectRoot "logs" "build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    Remove-Item Env:\XTENSA_GNU_CONFIG -ErrorAction SilentlyContinue
+    $buildLog = Join-Path (Join-Path $ProjectRoot "logs") "build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
     if (-not (Test-Path (Split-Path $buildLog -Parent))) {
         New-Item -ItemType Directory -Path (Split-Path $buildLog -Parent) | Out-Null
     }
@@ -111,10 +112,10 @@ function Step-IdfBuild {
     $output | Out-File -FilePath $buildLog -Encoding utf8
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "BUILD FAILED (exit $LASTEXITCODE) — see $buildLog"
+        Write-Error "BUILD FAILED (exit $LASTEXITCODE) - see $buildLog"
         exit 1
     }
-    Write-Host "Build OK — log: $buildLog" -ForegroundColor Green
+    Write-Host "Build OK - log: $buildLog" -ForegroundColor Green
 }
 
 function Step-Flash {
@@ -162,7 +163,7 @@ function Stop-SdkconfigToggle {
         return
     }
     $sdkconfig = Join-Path $ProjectRoot "sdkconfig"
-    Write-Host "[diagnose] Restoring sdkconfig — disabling CEEPEW_DEVELOPMENT_MODE"
+    Write-Host "[diagnose] Restoring sdkconfig - disabling CEEPEW_DEVELOPMENT_MODE"
     $sc = Get-Content -LiteralPath $sdkconfig -Raw
     if ($sc -match '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y$') {
         $sc = $sc -replace '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y$', '# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set'
@@ -205,7 +206,7 @@ function Format-Elapsed {
     if ($ts.Minutes -gt 0) {
         return "{0}m{1:ss}s" -f $ts.Minutes, $ts
     }
-    return "${Seconds}s"
+    return "$Seconds`s"
 }
 
 
@@ -247,7 +248,7 @@ function Invoke-DiagnoseMode {
         Step-Flash -TargetPort $Port
 
         # Monitor with diagnostic detection
-        Write-Banner "Monitoring $Port for DIAGNOSTIC REPORT (${Duration}s timeout)"
+        Write-Banner "Monitoring $Port for DIAGNOSTIC REPORT ($Duration s timeout)"
         Invoke-CeepewMonitor -Ports @($Port) -DurationSec $Duration -LogPath $diagLog -WatchDiag
 
         # Parse results
@@ -326,7 +327,7 @@ function Invoke-PairingMode {
     }
 
     # Step 3: Monitor both ports
-    Write-Banner "Monitoring COM5 + COM6 for ${Duration}s (log: $pairingLog)"
+    Write-Banner "Monitoring COM5 + COM6 for $Duration s (log: $pairingLog)"
     Invoke-CeepewMonitor -Ports @("COM5", "COM6") -DurationSec $Duration -LogPath $pairingLog -LogPerPort
 
     # Step 4: Extract summary events
@@ -411,7 +412,7 @@ function Invoke-BuildMode {
         Write-Host "   EXPECT: BOTH units enter CHAT within ~500ms of last commit." -ForegroundColor Yellow
         Write-Host ""
         Write-Host "3. Watch monitor for queue_timeouts (should be rare) and the new" -ForegroundColor Yellow
-        Write-Host "   'Initiator: GATTC write ACK received — awaiting peer verification result'" -ForegroundColor Yellow
+        Write-Host "   'Initiator: GATTC write ACK received - awaiting peer verification result'" -ForegroundColor Yellow
         Write-Host "   log line (replaces the old handoff_ready set on write ACK line)." -ForegroundColor Yellow
         Write-Host ""
 

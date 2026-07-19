@@ -141,30 +141,22 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
     uint8_t seq = in[0];
 
     if (!s_rx_init) {
-        /* First frame since reset: accept unconditionally.
-         * Advance the 16-bit counter so that after N frames expected=N,
-         * fixing the off-by-one where the init path omitted the increment
-         * that every other accepted frame performs. */
+        /* First frame since reset: accept unconditionally. */
         s_rx_init = true;
         s_expected_rx_seq = (uint16_t)(seq + 1U);
     } else {
         /* Reconstruct the full 16-bit seq from the 8-bit wire byte:
-         * use the upper 8 bits of the expected counter and fall back
-         * through a +0x100 step if the estimate undershoots.  This
-         * correctly disambiguates wraps at the 256-boundary from replays
-         * of frames in the preceding window, unlike the previous formula
-         * which compared only modulo-256 and conflated wrap with replay. */
-        uint16_t seq_estimate = (s_expected_rx_seq & 0xFF00U) | seq;
-        if (seq_estimate < s_expected_rx_seq) {
-            seq_estimate += 0x100U;
-        }
-        uint16_t last_accepted = s_expected_rx_seq - 1U;
-        uint16_t delta = seq_estimate - last_accepted;
-        if (delta != 1U) {
+         * Using signed 8-bit difference correctly resolves wrap-around
+         * and centers a 256-frame sliding window around expected_rx_seq. */
+        int8_t diff = (int8_t)(seq - (uint8_t)(s_expected_rx_seq & 0xFFU));
+
+        if (diff < 0) {
             *corrected = false;
             return CEEPEW_ERR_REPLAY;
         }
-        s_expected_rx_seq = seq_estimate + 1U;
+
+        uint16_t seq_estimate = (uint16_t)((int32_t)s_expected_rx_seq + diff);
+        s_expected_rx_seq = (uint16_t)(seq_estimate + 1U);
     }
 
     uint16_t payload_len = (uint16_t)(in_len - CEEPEW_ARQ_SEQ_BYTES);

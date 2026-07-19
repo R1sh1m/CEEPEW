@@ -44,10 +44,10 @@ CeePewErr_t hal_ui_init(void);
 /* Clear entire display (fill with black) */
 CeePewErr_t hal_ui_clear(void);
 
-/* Flush framebuffer to display (refresh the OLED). Retries once with
- * the SH1106 +2 column offset if the SSD1306 flush fails. If nothing
- * has been drawn since the last successful flush, this is a no-op
- * (no I2C traffic). */
+/* Flush framebuffer to display (refresh the OLED). Uses SH1106 +2 column
+ * offset if ceepew_oled_init_panel() detected SH1106 mode (set via Kconfig
+ * CEEPEW_OLED_FORCE_SH1106). If nothing has been drawn since the last
+ * successful flush, this is a no-op (no I2C traffic). */
 CeePewErr_t hal_ui_flush(void);
 
 /* Set a single pixel at (x, y) */

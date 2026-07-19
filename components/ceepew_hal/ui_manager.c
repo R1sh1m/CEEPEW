@@ -1099,14 +1099,14 @@ static CeePewErr_t render_boot_anim(void)
     }
 
     /* ── Phase 3 (f 42–57): Chunky loading bar fills ── */
-    if (f >= 42U) {
+    if (f >= 42U && f < 58U) {
        /* Bar border (moved up to increase gap below with frame) */
        HalUIRect_t border = { .x = 14U, .y = 42U, .w = 100U, .h = 9U };
        hal_ui_rect(&border, HAL_UI_WHITE);
 
        /* Chunky fill — 4-px wide segments with 1-px gaps */
        uint32_t elapsed = f - 42U;
-       uint8_t  seg_count = (elapsed < 16U) ? (uint8_t)((elapsed * 12U) / 16U) : 12U;
+       uint8_t  seg_count = (elapsed < 15U) ? (uint8_t)((elapsed * 12U) / 15U) : 12U;
        for (uint8_t s = 0U; s < seg_count; s++) {
            uint8_t seg_x = (uint8_t)(16U + s * 8U);
            /* Safety clamp: prevent segment from extending beyond 120px boundary */
@@ -1122,67 +1122,12 @@ static CeePewErr_t render_boot_anim(void)
        hal_ui_text(50U, 54U, pct_str, HAL_UI_WHITE);
     }
 
-    /* ── Phase 4 (f 58–69): Border frame draws in from corners ── */
+    /* ── Phase 4 (f >= 58): Transition ── */
     if (f >= 58U) {
-       uint32_t bf = f - 58U;
-       uint8_t arm = (bf < 20U) ? (uint8_t)(bf * 3U) : 60U;
-       if (arm > 60U) { arm = 60U; }
-
-       /* Top-left → right and down */
-       draw_hline(0U, 0U, arm);
-       draw_vline(0U, 0U, (uint8_t)(arm / 2U));
-       /* Top-right → left and down */
-       if (arm <= 128U) {
-           draw_hline((uint8_t)(128U - arm), 0U, arm);
-       }
-       draw_vline(127U, 0U, (uint8_t)(arm / 2U));
-       /* Bottom-left → right and up */
-       draw_hline(0U, 63U, arm);
-       if (arm / 2U <= 63U) {
-           draw_vline(0U, (uint8_t)(64U - arm / 2U), (uint8_t)(arm / 2U));
-       }
-       /* Bottom-right → left and up */
-       if (arm <= 128U) {
-           draw_hline((uint8_t)(128U - arm), 63U, arm);
-       }
-       if (arm / 2U <= 63U) {
-           draw_vline(127U, (uint8_t)(64U - arm / 2U), (uint8_t)(arm / 2U));
-       }
-
-       /* Subtitle fades in (moved down to avoid overlap with logo) */
-       /* Render at consistent position (16, 30) throughout phases 4 and 5 */
-       if (bf >= 10U) {
-           hal_ui_text(16U, 28U, "SECURE MESSENGER", HAL_UI_WHITE);
-       }
-    }
-
-    /* ── Phase 5 (f 70–79): READY pulses, tick-mark flash ── */
-    if (f >= 70U) {
-       uint8_t blink = (uint8_t)((f / 5U) % 10U);
-       /* Text continues from phase 4 (already rendered at 16,30) */
-
-       /* Full border now solid */
-       draw_hline(0U, 0U, 128U);
-       draw_hline(0U, 63U, 128U);
-       draw_vline(0U, 0U, 64U);
-       draw_vline(127U, 0U, 64U);
-
-
-       /* Corner tick marks flash opposite phase */
-       if (blink >= 5U) {
-           draw_hline(4U,  3U, 8U);   draw_hline(116U,  3U, 8U);
-           draw_hline(4U, 60U, 8U);   draw_hline(116U, 60U, 8U);
-           draw_vline(3U,  4U, 8U);   draw_vline(124U,  4U, 8U);
-           draw_vline(3U, 52U, 8U);   draw_vline(124U, 52U, 8U);
-       }
-    }
-
-    /* ── Phase 6 (f >= 80): Transition ── */
-    if (f >= 80U) {
-       g_ui_ctx.anim.frame_count = 0U;
-       (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
-       g_ui_ctx.transition_ready = true;
-       return CEEPEW_OK;
+        g_ui_ctx.anim.frame_count = 0U;
+        (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
+        g_ui_ctx.transition_ready = true;
+        return CEEPEW_OK;
     }
 
     g_ui_ctx.anim.frame_count++;
@@ -1922,7 +1867,11 @@ static CeePewErr_t render_confirm(void)
     } else {
         const char *spin = "|/-\\";
         char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
-        ui_draw_centered_text(50U, "Verifying...");
+        if (!g_ble_ctx.peer_commitment_pending && !g_ble_ctx.commitment_verified) {
+            ui_draw_centered_text(50U, "Waiting for peer...");
+        } else {
+            ui_draw_centered_text(50U, "Verifying...");
+        }
         hal_ui_text(10U, 50U, sp, HAL_UI_WHITE);
     }
 
@@ -2683,6 +2632,16 @@ CeePewErr_t ui_manager_update(void)
         g_ui_ctx.anim.frame_count = 0U;
         g_ui_ctx.transition_ready = false;
         state_changed = true;
+
+        /* Clear the framebuffer on every state transition so no pixel
+         * remnants from the previous screen (e.g. boot-anim borders,
+         * pairing rectangles, radar circles) survive into the new state.
+         * Each render function also calls hal_ui_clear(), but doing it
+         * here adds defense-in-depth: if a render function ever returns
+         * early before its own hal_ui_clear() (e.g. render_keyder_anim's
+         * pending-transition guard), the display will not keep stale
+         * pixels from the last flushed frame of the prior state. */
+        hal_ui_clear();
 
         /* State-entry initialisation */
         if (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY) {

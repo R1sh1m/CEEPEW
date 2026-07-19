@@ -138,8 +138,9 @@ static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t f
 
     rc = ceepew_oled_init_panel(s_oled, bus, dev, addr);
     if (rc == ESP_OK) {
-        s_sh1106_mode = false;
-        ESP_LOGI(TAG, "OLED bring-up SUCCESS (SSD1306) on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
+        s_sh1106_mode = ceepew_oled_get_sh1106_mode(s_oled);
+        ESP_LOGI(TAG, "OLED bring-up SUCCESS (%s) on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
+                 s_sh1106_mode ? "SH1106" : "SSD1306",
                  (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq);
         return CEEPEW_OK;
     }
@@ -176,7 +177,7 @@ static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uin
 
     rc = ceepew_oled_init_panel_sh1106(s_oled, bus, dev, addr);
     if (rc == ESP_OK) {
-        s_sh1106_mode = true;
+        s_sh1106_mode = ceepew_oled_get_sh1106_mode(s_oled);
         ESP_LOGI(TAG, "OLED bring-up SUCCESS (SH1106) on SDA=%d SCL=%d Addr=0x%02X Freq=%luHz",
                  (int)sda, (int)scl, (unsigned)addr, (unsigned long)freq);
         return CEEPEW_OK;
@@ -271,18 +272,14 @@ static CeePewErr_t ssd1306_bringup(void)
 static CeePewErr_t ssd1306_display_push(void)
 {
     esp_err_t rc;
-    if (s_sh1106_mode) {
-        rc = ceepew_oled_display_sh1106(s_oled, 2U);
-    } else {
-        rc = ceepew_oled_display(s_oled);
-        if (rc != ESP_OK) {
-            rc = ceepew_oled_display_sh1106(s_oled, 2U);
-            if (rc == ESP_OK) {
-                s_sh1106_mode = true;
-                ESP_LOGW(TAG, "Switched to SH1106 +2 column offset");
-            } else {
-                ESP_LOGE(TAG, "display push failed on both SSD1306 and SH1106 attempts");
-            }
+    rc = ceepew_oled_display(s_oled);
+    if (rc != ESP_OK) {
+        rc = ceepew_oled_display_sh1106(s_oled, 0U);
+        if (rc == ESP_OK) {
+            s_sh1106_mode = true;
+            ESP_LOGW(TAG, "Fallback SH1106 init OK");
+        } else {
+            ESP_LOGE(TAG, "display push failed on both SSD1306 and SH1106 attempts");
         }
     }
     if (rc == ESP_OK) {
@@ -477,7 +474,7 @@ CeePewErr_t hal_ui_flush(void)
         if (nonzero_bytes > 0U) { s_nonzero_flush_seen = true; }
     }
 
-    if (!s_sh1106_mode && dirty_tiles > 0U && dirty_tiles <= 8U) {
+    if (dirty_tiles > 0U && dirty_tiles <= 8U) {
         const CeePewErr_t err = ssd1306_display_push_tiled();
         if (err == CEEPEW_OK) {
             return CEEPEW_OK;

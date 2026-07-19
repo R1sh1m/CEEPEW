@@ -120,7 +120,7 @@
 #define CEEPEW_PAIRING_COUNTDOWN_MS      45000U /* UI countdown bar total (ms) */
 #define CEEPEW_KEYDER_DURATION_MS        20000U  /* Key derivation animation (ms) */
 #define CEEPEW_KEYS_VERIFIED_HOLD_MS     3000U  /* "Keys Verified" screen hold (ms) */
-#define CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS 15000U /* CONFIRM verification timeout (ms) */
+#define CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS 45000U /* CONFIRM verification timeout (ms) */
 #define CEEPEW_CHAT_LONG_PRESS_MS        1500U  /* Long press to return to menu (ms) */
 #define CEEPEW_MESSAGE_TTL_S             3600U  /* Phase 4: Message auto-wipe, 1hr default */
 #define CEEPEW_MESSAGE_TTL_DIAG_S        300U   /* Phase 4: 5 min in DIAG mode */

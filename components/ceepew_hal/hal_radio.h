@@ -76,6 +76,10 @@ typedef uint64_t (*hal_radio_get_nonce_counter_cb_t)(void);
 /* Set crypto context and nonce counter getter for channel hopping */
 CeePewErr_t hal_radio_set_hop_context(const void *crypto_ctx, hal_radio_get_nonce_counter_cb_t nonce_getter);
 
+/* Set the internal hop epoch counter to synchronise with peer after rendezvous.
+ * The epoch is normally auto-incremented every hop interval. */
+void hal_radio_set_hop_epoch(uint64_t epoch);
+
 /* hal_radio_get_rx_queue: Return the RX frame queue handle.
  *
  * The queue is created during hal_radio_init() and persists for the lifetime
