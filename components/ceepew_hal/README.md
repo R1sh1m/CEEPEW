@@ -7,11 +7,11 @@ and owns the UI runtime (OLED, input, RGB) and display-utility layer.
 
 | Group          | Files                                        | Role                                     |
 |----------------|----------------------------------------------|------------------------------------------|
-| GPIO/Init      | `hal_gpio.c`, `hal_init.c`                  | Pin init, ON semiconductor driver mux    |
+| GPIO/Pins      | `hal_gpio.c`, `hal_pins.c`                  | Pin init and runtime pin-range validation |
 | ADC/Input      | `hal_adc.c`, `hal_input.c`                  | Potentiometer ADC read, button debounce  |
 | RNG            | `hal_rng.c`                                 | Hardware RNG init/fill                   |
 | RGB            | `hal_rgb.c`                                 | RGB-LED pattern driver (no raw GPIO)     |
-| Display        | `hal_ui.c`, `hal_oled.c`, `hal_oled_fonts.c`| SSD1306 OLED via `ssd1306` component     |
+| Display        | `hal_ui.c`                                  | SSD1306 OLED via `ceepew_oled` component |
 | Temp Sensor    | `hal_temp.c`                                | Internal temperature sensor              |
 | UI Manager     | `ui_manager.c`, `ui_manager.h`              | 20+ state FSM (ui_manager.h is the API)  |
 
