@@ -249,7 +249,7 @@ void ui_manager_selftest_run(void) {
     
     /* Test 12: Test ui_chat_show_compose() with various pot values */
     for (uint16_t pot = 0U; pot < 255U; pot += 32U) {
-        if (ui_chat_show_compose((uint8_t)pot, 0U) != CEEPEW_OK) {
+        if (ui_chat_show_compose((uint8_t)pot) != CEEPEW_OK) {
             printf("ui_manager selftest: ui_chat_show_compose(pot=%u) failed\n", pot);
             return;
         }

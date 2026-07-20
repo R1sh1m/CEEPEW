@@ -138,7 +138,7 @@ CeePewErr_t ui_chat_show_pool(uint8_t char_budget);
 /* Sprint 11: Message compose UI with character selector.
  * Displays character selection wheel and compose controls.
  */
-CeePewErr_t ui_chat_show_compose(uint8_t pot_value, uint8_t selected_idx);
+CeePewErr_t ui_chat_show_compose(uint8_t pot_value);
 
 /* Sprint 12: Cryptogram display with grouped hex rows.
  * Displays 16-byte session commitment as hex with 2-byte groups for readability.

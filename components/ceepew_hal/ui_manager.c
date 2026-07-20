@@ -940,36 +940,6 @@ static void draw_rect_outline(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
 /*   [============================          ] 47%                             */
 /*    ^bar_x+1                    ^fill_w    ^bar_x + w + 4                  */
 /* ────────────────────────────────────────────────────────────────────────── */
-static __attribute__((unused)) void draw_progress_bar(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t pct)
-{
-    if (pct > 100U) { pct = 100U; }
-    if (w < 4U || h < 3U) { return; }   /* minimum usable size */
-
-    /* Outline rectangle */
-    draw_rect_outline(x, y, w, h);
-
-    /* Inner fill: LEFT → RIGHT.
-     * inner_w = (inner_area_width * pct) / 100
-     * inner_area_width = w - 2  (1px border on each side)
-     * FIX: fill rect starts at x+1, NOT at x + inner_area - fill_w            */
-    uint8_t inner_w = (uint8_t)((uint16_t)(w - 2U) * (uint16_t)pct / 100U);
-    if (inner_w > 0U) {
-        HalUIRect_t fill = {
-            .x = (uint8_t)(x + 1U),          /* always left-anchored */
-            .y = (uint8_t)(y + 1U),
-            .w = inner_w,
-            .h = (uint8_t)(h - 2U)
-        };
-        hal_ui_rect_fill(&fill, HAL_UI_WHITE);
-    }
-
-    /* Percent label on the RIGHT of the bar, not the left.
-     * FIX: x position = x + w + 4, not x = 0.                               */
-    char pct_str[6U];
-    (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-    hal_ui_text((uint8_t)(x + w + 4U), y, pct_str, HAL_UI_WHITE);
-}
-
 /* ────────────────────────────────────────────────────────────────────────── */
 /* HELPER: color-inverting progress bar with centred text                    */
 /*                                                                            */
@@ -1022,26 +992,6 @@ static void draw_progress_bar_inverted_text(uint8_t x, uint8_t y, uint8_t w,
         ui_draw_char_color(cx, text_y, text[i], col);
         cx = (uint8_t)(cx + 6U);
     }
-}
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/* HELPER: safe scrolling text (wraps a static string into a 22-char window) */
-/* ────────────────────────────────────────────────────────────────────────── */
-#define SCROLL_BUF_LEN  22U
-static __attribute__((unused)) void draw_scroll_text(uint8_t x, uint8_t y,
-                              const char *src, uint8_t src_len,
-                              uint32_t now_ms, uint32_t step_ms)
-{
-    if (src == NULL || src_len == 0U) { return; }
-    char buf[SCROLL_BUF_LEN + 1U];
-    uint8_t start = (uint8_t)((now_ms / step_ms) % (uint32_t)src_len);
-
-    /* loop bound: SCROLL_BUF_LEN (compile-time constant) */
-    for (uint8_t i = 0U; i < SCROLL_BUF_LEN; i++) {
-        buf[i] = src[(start + i) % src_len];
-    }
-    buf[SCROLL_BUF_LEN] = '\0';
-    hal_ui_text(x, y, buf, HAL_UI_WHITE);
 }
 
 static CeePewErr_t render_boot_anim(void)
@@ -2336,10 +2286,8 @@ CeePewErr_t ui_chat_show_pool(uint8_t char_budget)
  * No dynamic allocation; static selector and character buffers.
  * Two CEEPEW_ASSERTs for bounds checking.
  */
-CeePewErr_t ui_chat_show_compose(uint8_t pot_value, uint8_t selected_idx)
+CeePewErr_t ui_chat_show_compose(uint8_t pot_value)
 {
-    CEEPEW_ASSERT(selected_idx <= CEEPEW_MAX_MSG_CHARS, CEEPEW_ERR_BOUNDS);
-
     /* Mirror the live compose selector, including DEL and cursor controls. */
     uint8_t char_idx = (uint8_t)(((uint16_t)pot_value * COMPOSE_TOTAL_CHOICES) / 256U);
     if (char_idx >= COMPOSE_TOTAL_CHOICES) {
