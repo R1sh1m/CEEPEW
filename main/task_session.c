@@ -1824,18 +1824,24 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     goto rx_cleanup;
   }
 
-  /* Use the peer's Ed25519 sign_pk for signature verification */
-  err = session_get_peer_public_key(local_sign_pk);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: peer sign_pk retrieval failed (err=%d)",
-              (int)err);
-    goto rx_cleanup;
-  }
-  err = crypto_eddsa_verify(local_sign_pk, local_box_ct, box_ct_orig_len, local_sig);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: Ed25519 signature verify failed (err=%d)",
-             (int)err);
-    goto rx_cleanup;
+  /* Ed25519 signature verification — skipped in identity-degraded mode.
+   * In degraded mode the user explicitly confirmed they wish to proceed
+   * without per-frame identity binding. Incoming frames are authenticated
+   * only by Ascon-128 AEAD tag verification and the X25519 ECDH-derived
+   * box layer, matching the documented SECURITY.md contract. */
+  if (!session_is_identity_degraded()) {
+    err = session_get_peer_public_key(local_sign_pk);
+    if (err != CEEPEW_OK) {
+      ESP_LOGW("SESSION", "RX discard: peer sign_pk retrieval failed (err=%d)",
+                (int)err);
+      goto rx_cleanup;
+    }
+    err = crypto_eddsa_verify(local_sign_pk, local_box_ct, box_ct_orig_len, local_sig);
+    if (err != CEEPEW_OK) {
+      ESP_LOGW("SESSION", "RX discard: Ed25519 signature verify failed (err=%d)",
+               (int)err);
+      goto rx_cleanup;
+    }
   }
 
   /* Store peer MAC for UI display */
@@ -2031,8 +2037,8 @@ void task_session_run(void *pvParameters) {
       continue;
     }
 
-    /* RX queue timeout: 1000ms per requirement */
-    const TickType_t rx_timeout = pdMS_TO_TICKS(1000U);
+    /* RX queue timeout: 100ms for responsive wipe/state checks */
+    const TickType_t rx_timeout = pdMS_TO_TICKS(100U);
 
     /* Receive raw radio frame from RX queue */
     RadioFrame_t frame = {0};
