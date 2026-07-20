@@ -90,7 +90,7 @@ typedef struct {
     /* Phase 4: Chat menu, compose, and send-confirm context */
     uint8_t       chat_menu_selected;   /* 0=Read, 1=Write, 2=Check */
     uint8_t       chat_send_confirm_selected; /* 0=Send, 1=Go back */
-    char          compose_buffer[256];  /* Message composition buffer */
+    char          compose_buffer[CEEPEW_MAX_MSG_CHARS + 4U];  /* Message composition buffer */
     uint8_t       compose_length;       /* Current message length */
     uint8_t       compose_cursor;       /* Cursor position in message */
     uint8_t       keyboard_row;         /* Current keyboard row (0-9 for 6x10 grid) */
