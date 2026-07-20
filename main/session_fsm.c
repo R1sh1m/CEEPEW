@@ -375,6 +375,7 @@ CeePewErr_t session_phase2_derive_key(void){
      * This prevents proceeding with unauthenticated pairings. */
     if (!s_session.peer_sign_pk_valid && !s_session.identity_degraded) {
         ESP_LOGE("session_fsm", "derive_key ABORT: peer sign_pk invalid and identity not degraded");
+        ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
         return CEEPEW_ERR_AUTH_FAIL;
     }
 
@@ -387,7 +388,7 @@ CeePewErr_t session_phase2_derive_key(void){
     uint8_t salt_input[64U] = {0};
     uint8_t hkdf_salt[32] = {0};
     uint8_t commitment[CEEPEW_COMMITMENT_BYTES] = {0};
-    uint8_t hkdf_info[128U] = {0};
+    uint8_t hkdf_info[96U] = {0};
     uint8_t hkdf_output[64] = {0};
 
     /* Step 1: Digital sum preprocessing of session code */

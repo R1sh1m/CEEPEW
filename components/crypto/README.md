@@ -1,6 +1,6 @@
 # crypto — Cryptographic Primitives
 
-This component provides all cryptographic primitives for CEE-PEW. No external crypto libraries (mbedTLS, wolfSSL) are used — all algorithms are implemented directly or ported from reference implementations.
+This component provides all cryptographic primitives for CEE-PEW. Most algorithms are implemented directly or ported from reference implementations. SHA-256 and HMAC-SHA256 (and therefore HKDF) delegate the underlying hash to mbedTLS via the PSA API — this is a deliberate choice to use a mature, well-audited hash implementation rather than reinventing it.
 
 ## Files
 
@@ -27,7 +27,11 @@ This component provides all cryptographic primitives for CEE-PEW. No external cr
 4. `crypto_ctx_destroy()` — on session end / device wipe
 
 ## External Dependencies
-None. Pure C11 + ESP-IDF `esp_fill_random` for entropy. All other operations are constant-time where secret-dependent.
+- **mbedTLS** (via PSA API) — provides the SHA-256 hash used by `crypto_sha256.c`, `crypto_hmac.c`, and transitively by `crypto_hkdf.c`. This is a mature, well-audited implementation included with ESP-IDF.
+- **ESP-IDF** — `esp_fill_random` for entropy, `esp_efuse_*` for hardware key storage, `esp_crc32_le` for integrity checks.
+- All symmetric ciphers (Ascon-128 AEAD, XSalsa20), public-key primitives (X25519 ECDH, Ed25519 EdDSA), and the XSalsa20 stream cipher are standalone implementations ported from reference or specification code.
+
+All secret-dependent comparisons use `ceepew_ct_equal()` (constant-time).
 
 ## Constants (from `main/ceepew_config.h`)
 - `CEEPEW_NONCE_HARD_LIMIT` = 2^56 (session terminates here)

@@ -66,10 +66,6 @@ static CeePewErr_t render_chat_detail(void);
 
 static void ui_draw_centered_text(uint8_t y, const char *text);
 
-#define CEEPEW_PAIRING_FAILED_HOLD_MS   4000U
-#define CEEPEW_PAIRING_PEER_LOSS_MS     15000U
-#define CEEPEW_SCAN_RETRY_DEBOUNCE_MS   2000U
-
 CeePewErr_t ui_manager_init(void){
     CEEPEW_ASSERT(!s_ui_manager_initialised, CEEPEW_ERR_BUSY);
     memset(&g_ui_ctx, 0U, sizeof(UIContext_t));

@@ -146,6 +146,8 @@
 #define CEEPEW_CLICK_COOLDOWN_MS         200U
 #define CEEPEW_EDGE_STABLE_MS            300U
 #define CEEPEW_AUTOSCROLL_INTERVAL_MS    5000U
+#define CEEPEW_PAIRING_PEER_LOSS_MS      15000U  /* Peer-loss timeout in pairing (ms) */
+#define CEEPEW_SCAN_RETRY_DEBOUNCE_MS    2000U   /* Scan retry debounce (ms) */
 #define CEEPEW_OLED_WIDTH_PX             128U
 #define CEEPEW_OLED_HEIGHT_PX            64U
 /* Phase 4: Session lifecycle */

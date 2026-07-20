@@ -5,10 +5,10 @@ Report security vulnerabilities via GitHub issue with the "security" label, or e
 
 ## Threat Model
 CEE-PEW is designed to resist:
-- **Passive eavesdropping** — Ascon-128 AEAD provides authenticated encryption for all session traffic
+- **Passive eavesdropping** — Layered authenticated encryption: Ascon-128 AEAD (inner) + XSalsa20-Poly1305 over X25519 ECDH (outer) for all session traffic
 - **Active MITM during pairing** — EdDSA identity binding + 4-character PIN confirmation (user-verified). The PIN provides approximately 20 bits of brute-force resistance against an active MITM during the pairing window
 - **Replay attacks** — 64-bit nonce counter with WireGuard-style replay window + session expiry at `CEEPEW_NONCE_HARD_LIMIT` (2^56)
-- **Cloning attacks** — HMAC-eFuse binding ties derived keys to the device's unique eFuse MAC
+- **Cloning attacks** — HMAC-eFuse binding ties derived keys to the device's unique eFuse MAC. **Requires manufacturing-time provisioning:** a unique 256-bit key must be burned into EFUSE_BLK1. On stock dev kits (unprovisioned), the device secret falls back to SHA-256(MAC || salt), which is deterministic from the public MAC and does not resist cloning.
 
 CEE-PEW is NOT designed to resist:
 - **Physical hardware attacks** — No secure enclave, no tamper detection, keys in SRAM
@@ -28,12 +28,15 @@ CEE-PEW is NOT designed to resist:
     - **All chat UI screens display a persistent "UNVERIFIED IDENTITY" banner** (analogous to Signal/WhatsApp "safety number changed" warnings) indicating that peer identity is not cryptographically verified.
     - The `session_is_identity_degraded()` flag persists for the session duration and is visible to UI, transport, and crypto layers.
     - This mode exists solely as an accessibility/reliability fallback for environments where BLE GATT connections are unreliable (e.g., high RF interference, incompatible BLE controller firmware). It is never the default path and requires active user consent on every occurrence.
+8. **mbedTLS dependency for SHA-256** — SHA-256 and HMAC-SHA256 (and therefore HKDF, commitments, and nonce derivation) delegate the underlying hash to mbedTLS via the ESP-IDF PSA API. This is a mature, well-audited implementation bundled with ESP-IDF, but it means the library's security posture includes mbedTLS as a dependency. The following primitives are standalone (no mbedTLS): Ascon-128 AEAD, X25519 ECDH, Ed25519 EdDSA, XSalsa20 stream cipher.
+9. **Nested AEAD structure** — Session messages pass through two authenticated encryption layers: Ascon-128 AEAD (inner, keyed from the HKDF session key) then XSalsa20-Poly1305 over X25519 ECDH (outer, keyed from a fresh CSPRNG-derived ephemeral keypair). The two layers use independently-derived encryption keys (different HKDF outputs / different ECDH computations), but share the same nonce base (session_id + counter). This layered approach provides defense-in-depth but is not a standard construction; it may be simplified to a single AEAD layer in a future revision.
 
 ## Build Security Notes
 - `sdkconfig` is gitignored. Use `sdkconfig.debug` for debug builds, `sdkconfig.production` for releases.
 - Never commit `keys/` directory — it is gitignored by design.
 - `CONFIG_CEEPEW_DEVELOPMENT_MODE` must be `n` in production builds (enforced by `sdkconfig.production`). This master toggle controls test compilation, `CEEPEW_DEBUG_SERIAL` (operational logging), and `CEEPEW_HEADLESS_MODE` (UI auto-advance).
-- No sensitive material (keys, MACs, session codes, HKDF intermediates) is ever logged, even when `CEEPEW_DEBUG_SERIAL` is enabled.
+- No sensitive material (keys, session codes, HKDF intermediates, plaintext content) is ever logged, even when `CEEPEW_DEBUG_SERIAL` is enabled. Device MAC addresses are logged at INFO level for diagnostic purposes — these are not secret (they are transmitted in the clear over BLE and WiFi), but are included here for transparency.
 - Region allocator pool (48KB) is static — no heap allocation means no malloc-related vulnerabilities.
 - All secret material (session_key, sign_sk, peer_sign_pk) is secure-zeroed on teardown via `ceepew_secure_zero()` (volatile pointer + memory barrier pattern).
 - Constant-time comparison (`crypto_ct_equal`) used for all tag/MAC/key comparisons — never `memcmp`.
+- mbedTLS provides SHA-256 / HMAC-SHA256 via the PSA API — keep `mbedtls` up to date with ESP-IDF releases for security patches. The PSA crypto init warm-up (`crypto_ctx.c`) is a known requirement on ESP32.

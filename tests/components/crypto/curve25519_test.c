@@ -139,18 +139,12 @@ static void test_crypto_box_loopback(void) {
     }
 }
 
-extern CeePewErr_t crypto_box_hmac_sha256_old(const uint8_t *key,
-                                              uint16_t key_len,
-                                              const uint8_t *msg,
-                                              uint16_t msg_len,
-                                              uint8_t out[32U]);
-
 extern CeePewErr_t crypto_hmac_sha256(const uint8_t *key, uint16_t key_len,
                                       const uint8_t *msg, uint32_t msg_len,
                                       uint8_t out[32]);
 
 static void test_hmac_sha256_compatibility(void) {
-    printf("CEEPEW: Running HMAC-SHA256 old vs new compatibility test\n");
+    printf("CEEPEW: Running HMAC-SHA256 RFC 4231 test\n");
 
     /* RFC 4231 Test Case 1 */
     const uint8_t key[20] = {
@@ -165,41 +159,13 @@ static void test_hmac_sha256_compatibility(void) {
         0x63, 0x57, 0xbe, 0x59, 0xbe, 0x09, 0x00, 0x9a, 0x0f, 0x44, 0x3b, 0x74, 0xdb, 0xbb, 0x6f, 0x0b
     };
 
-    uint8_t out_old[32] = {0};
-    uint8_t out_new[32] = {0};
-
-    CeePewErr_t err_old = crypto_box_hmac_sha256_old(key, sizeof(key), data, sizeof(data), out_old);
-    if (err_old != CEEPEW_OK) {
-        printf("  old HMAC path returned error %d\n", err_old);
-        printf("HMAC compatibility: FAIL\n");
+    uint8_t out[32] = {0};
+    CeePewErr_t err = crypto_hmac_sha256(key, sizeof(key), data, sizeof(data), out);
+    if (err != CEEPEW_OK || memcmp(out, expected, 32) != 0) {
+        printf("HMAC-SHA256 RFC 4231: FAIL\n");
         return;
     }
-
-    CeePewErr_t err_new = crypto_hmac_sha256(key, sizeof(key), data, sizeof(data), out_new);
-    if (err_new != CEEPEW_OK) {
-        printf("  new HMAC path returned error %d\n", err_new);
-        printf("HMAC compatibility: FAIL\n");
-        return;
-    }
-
-    if (memcmp(out_old, expected, 32) != 0) {
-        printf("  old HMAC output does not match RFC 4231 Test Case 1\n");
-        printf("HMAC compatibility: FAIL\n");
-        return;
-    }
-
-    if (memcmp(out_new, expected, 32) != 0) {
-        printf("  new HMAC output does not match RFC 4231 Test Case 1\n");
-        printf("HMAC compatibility: FAIL\n");
-        return;
-    }
-
-    if (memcmp(out_old, out_new, 32) == 0) {
-        printf("HMAC compatibility: PASS\n");
-    } else {
-        printf("  old vs new HMAC output mismatch\n");
-        printf("HMAC compatibility: FAIL\n");
-    }
+    printf("HMAC-SHA256 RFC 4231: PASS\n");
 }
 
 void curve25519_selftest_run(void) {

@@ -85,8 +85,8 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
     uint8_t local_sig[64U];
     uint8_t local_payload[CEEPEW_MAX_MSG_BYTES + 128U];
-    uint8_t local_fec_buf[CEEPEW_FEC_BUF_MAX];
-    uint8_t local_frame[CEEPEW_PACKET_MAX_BYTES];
+    static uint8_t local_fec_buf[CEEPEW_FEC_BUF_MAX];
+    static uint8_t local_frame[CEEPEW_PACKET_MAX_BYTES];
     uint8_t local_box_pubkey[32U]; /* snapshot of peer X25519 key under mutex */
 
     uint16_t comp_len = (uint16_t)sizeof(local_compressed);
