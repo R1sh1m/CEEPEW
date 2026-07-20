@@ -1,9 +1,0 @@
-# CEE-PEW cppcheck suppression list
-#
-# Add known-noise entries here after verifying they are benign.
-# Format: <suppression-type>:<pattern>
-#
-# Example:
-#   unmatchedSuppression:*
-#   unusedFunction:*ceepew_*
-#   noExplicitConstructor:*
