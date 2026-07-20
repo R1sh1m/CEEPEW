@@ -12,7 +12,7 @@ jobs:
           echo "Scanning repository for Stub markers..."
           set -e
           # Search text files for common stub markers, fail if any found
-          if git grep -I --line-number "Stu[b]:"; then
+          if git grep -I --line-number -i "\bstub\b"; then
             echo "Stub markers found. Failing job.";
             exit 1;
           else
