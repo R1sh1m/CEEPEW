@@ -27,9 +27,9 @@ Both devices send a "HANDOFF_READY" beacon over BLE and wait for the peer's beac
 
 ## Transport Stack
 **BLE (pairing only) → ESP-NOW (session)**
-- FEC: Hamming (15,11) over every ESP-NOW frame (3 parity bytes per 11 data bytes)
-- ARQ: Selective-repeat with exponential backoff (ecc_arq.c, max 3 retries, 500ms base timeout)
-- Hop abstraction: `transport_hop.c` unifies BLE and ESP-NOW behind one API (`hop_send`, `hop_recv`, `hop_switch_transport`)
+- FEC: Hamming (15,11) over every ESP-NOW frame (4 parity bits per 11 data bits, ~36% overhead)
+- ARQ: Selective-repeat with exponential backoff (ecc_arq.c, max 3 retries, 600ms base timeout)
+- Channel hopping: `transport_hop.c` — PRG-driven Fisher-Yates channel permutation for frequency diversity
 
 ## Memory Model
 - **Region allocator** (`ceepew_region.c`): 48KB static pool, no heap allocation ever
@@ -37,8 +37,8 @@ Both devices send a "HANDOFF_READY" beacon over BLE and wait for the peer's beac
 - All session state in `session_memory.h` — single struct, no dynamic allocation
 
 ## Task Architecture
-- **Core 0**: `task_ui` (OLED rendering + input debounce, 4KB stack)
-- **Core 1**: `task_session` (crypto + FSM + session logic, 8KB stack)
+- **Core 0**: `task_ui` (OLED rendering + input debounce, 10KB stack)
+- **Core 1**: `task_session` (crypto + FSM + session logic, 16KB stack)
 - **IPC**: FreeRTOS queues only (`g_session_rx_queue`, `g_ui_event_queue`) — no shared globals except `session_memory.h`
 
 ## Component Map

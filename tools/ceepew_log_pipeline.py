@@ -113,10 +113,29 @@ SIGNATURES = [
         category="hal-i2c",
         severity="Medium",
         description=(
-            "Line mentions i2c at warning/error level. Broad/best-effort pattern -- "
-            "refine once DEBUG_LOG_OLED_I2C.md's Test 006 identifies the exact "
-            "driver error string, then replace this with a precise signature."
+            "Line mentions i2c at warning or error level."
         ),
+    ),
+    dict(
+        id="queue_overflow",
+        pattern=re.compile(r"queue full|queue send failed|queue overflow", re.IGNORECASE),
+        category="freertos-ipc",
+        severity="High",
+        description="FreeRTOS IPC queue overflow or send failure detected.",
+    ),
+    dict(
+        id="region_alloc_exhausted",
+        pattern=re.compile(r"region_alloc failed|region memory pool exhausted", re.IGNORECASE),
+        category="memory",
+        severity="High",
+        description="Static region memory bump allocator exhausted available pool capacity.",
+    ),
+    dict(
+        id="arq_max_retries",
+        pattern=re.compile(r"ARQ_MAX_RETRIES|packet dropped after retry limit", re.IGNORECASE),
+        category="transport-arq",
+        severity="Medium",
+        description="Stop-and-Wait ARQ protocol exhausted maximum retries without receiving ACK.",
     ),
     dict(
         id="espnow_send_fail",
@@ -124,6 +143,41 @@ SIGNATURES = [
         category="transport",
         severity="Medium",
         description="ESP-NOW send call reported failure.",
+    ),
+    dict(
+        id="pairing_timeout",
+        pattern=re.compile(r"\[PAIRING_TIMEOUT\]"),
+        category="protocol-pairing",
+        severity="High",
+        description="Pairing finite state machine hit a timeout during discovery, commitment, GATT identity, or derivation.",
+    ),
+    dict(
+        id="pairing_degraded",
+        pattern=re.compile(r"\[PAIRING_DEGRADED\]"),
+        category="protocol-pairing",
+        severity="Medium",
+        description="GATT identity sign_pk retries exhausted; pairing entered degraded mode waiting for user confirmation.",
+    ),
+    dict(
+        id="pairing_step",
+        pattern=re.compile(r"\[PAIRING_STEP\]"),
+        category="protocol-pairing",
+        severity="Info",
+        description="Pairing state machine successfully advanced to next lifecycle state.",
+    ),
+    dict(
+        id="secure_chat_tx_fail",
+        pattern=re.compile(r"\[SECURE_CHAT_TX\] (?:FAILED|ARQ transmission failed|Pipeline execution failed|Nonce limit exhausted)"),
+        category="secure-chat",
+        severity="High",
+        description="Secure chat outgoing message transmission or encryption failed.",
+    ),
+    dict(
+        id="secure_chat_rx_fail",
+        pattern=re.compile(r"\[SECURE_CHAT_RX\] (?:Discard|AEAD auth tag verification FAILED|signature verification FAILED|Inner CRC mismatch)"),
+        category="secure-chat",
+        severity="High",
+        description="Secure chat incoming frame decryption, CRC, or signature authentication failed.",
     ),
     dict(
         id="err_replay",

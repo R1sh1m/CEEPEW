@@ -55,7 +55,9 @@ param(
     [ValidateSet("Diagnose", "Pairing", "Build")]
     [string]$Mode = "Diagnose",
 
-    [string]$Port = "COM5",
+    [string]$Port = "COM3",
+    [string]$Port1 = "COM3",
+    [string]$Port2 = "COM4",
     [int]$Duration = 120,
     [int]$TimeoutSec = -1,
 
@@ -108,7 +110,14 @@ function Step-IdfBuild {
     if (-not (Test-Path (Split-Path $buildLog -Parent))) {
         New-Item -ItemType Directory -Path (Split-Path $buildLog -Parent) | Out-Null
     }
-    $output = idf.py build 2>&1
+    $origEA = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = idf.py build 2>&1
+        $LASTEXITCODE = $global:LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $origEA
+    }
     $output | Out-File -FilePath $buildLog -Encoding utf8
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
@@ -309,31 +318,40 @@ function Invoke-PairingMode {
 
     Set-Location -Path $ProjectRoot
 
-    # Step 1: Build (unless skipped)
-    if (-not $MonitorOnly -and -not $SkipFlash -and -not $NoBuild) {
-        Step-IdfBuild
-    } elseif ($NoBuild) {
-        Write-Host "[pairing] Skipping build (existing build will be flashed)" -ForegroundColor Yellow
-    } elseif ($MonitorOnly) {
-        Write-Host "[pairing] Skipping build and flash (MonitorOnly mode)" -ForegroundColor Yellow
-    } else {
-        Write-Host "[pairing] Skipping build (SkipFlash mode)" -ForegroundColor Yellow
-    }
+    # Enable development mode so CEEPEW_HEADLESS_MODE auto-advances the UI
+    $wasAlreadyEnabled = Start-SdkconfigToggle
 
-    # Step 2: Flash both devices (unless skipped)
-    if (-not $MonitorOnly -and -not $SkipFlash) {
-        Step-Flash -TargetPort "COM5"
-        Step-Flash -TargetPort "COM6"
-    }
+    try {
+        # Step 1: Build (unless skipped)
+        if (-not $MonitorOnly -and -not $SkipFlash -and -not $NoBuild) {
+            Step-IdfBuild
+        } elseif ($NoBuild) {
+            Write-Host "[pairing] Skipping build (existing build will be flashed)" -ForegroundColor Yellow
+        } elseif ($MonitorOnly) {
+            Write-Host "[pairing] Skipping build and flash (MonitorOnly mode)" -ForegroundColor Yellow
+        } else {
+            Write-Host "[pairing] Skipping build (SkipFlash mode)" -ForegroundColor Yellow
+        }
 
-    # Step 3: Monitor both ports
-    Write-Banner "Monitoring COM5 + COM6 for $Duration s (log: $pairingLog)"
-    Invoke-CeepewMonitor -Ports @("COM5", "COM6") -DurationSec $Duration -LogPath $pairingLog -LogPerPort
+        # Step 2: Flash both devices (unless skipped)
+        if (-not $MonitorOnly -and -not $SkipFlash) {
+            Step-Flash -TargetPort $Port1
+            Step-Flash -TargetPort $Port2
+        }
+
+        # Step 3: Monitor both ports
+        Write-Banner "Monitoring $Port1 + $Port2 for $Duration s (log: $pairingLog)"
+        Invoke-CeepewMonitor -Ports @($Port1, $Port2) -DurationSec $Duration -LogPath $pairingLog -LogPerPort
+    } finally {
+        Stop-SdkconfigToggle -WasAlreadyEnabled $wasAlreadyEnabled
+    }
 
     # Step 4: Extract summary events
     Write-Banner "Extracting key events"
-    $com5Log = Join-Path $logDir "com5_${timestamp}.log"
-    $com6Log = Join-Path $logDir "com6_${timestamp}.log"
+    $port1Name = ($Port1 -replace '.*\\', '').ToLower()
+    $port2Name = ($Port2 -replace '.*\\', '').ToLower()
+    $port1Log = Join-Path $logDir "${port1Name}_${timestamp}.log"
+    $port2Log = Join-Path $logDir "${port2Name}_${timestamp}.log"
 
     function Extract-Events {
         param([string]$Path, [string]$Label)
@@ -355,14 +373,14 @@ function Invoke-PairingMode {
     }
 
     $events = @()
-    $events += Extract-Events $com5Log "DEVICE_A"
-    $events += Extract-Events $com6Log "DEVICE_B"
+    $events += Extract-Events $port1Log "DEVICE_A"
+    $events += Extract-Events $port2Log "DEVICE_B"
     $events | Sort-Object | Out-File -FilePath $summaryCsv -Encoding utf8
 
     Write-Host "Summary written to: $summaryCsv" -ForegroundColor Green
     Write-Host "  Combined log: $pairingLog" -ForegroundColor Green
-    if (Test-Path $com5Log) { Write-Host "  Per-port log: $com5Log" -ForegroundColor Green }
-    if (Test-Path $com6Log) { Write-Host "  Per-port log: $com6Log" -ForegroundColor Green }
+    if (Test-Path $port1Log) { Write-Host "  Per-port log: $port1Log" -ForegroundColor Green }
+    if (Test-Path $port2Log) { Write-Host "  Per-port log: $port2Log" -ForegroundColor Green }
 
     # Print summary
     Write-Banner "KEY EVENTS"
@@ -380,6 +398,12 @@ function Invoke-PairingMode {
     }
 
     Write-Banner "PAIRING TEST COMPLETE"
+
+    # Step 5: Post-test log ingestion & findings report generation
+    if (Test-Path $pairingLog) {
+        Write-Host "[pairing] Running post-test log ingestion..." -ForegroundColor Cyan
+        python tools/ceepew_log_pipeline.py ingest $pairingLog --report
+    }
 }
 
 function Invoke-BuildMode {

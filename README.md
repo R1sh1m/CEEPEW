@@ -10,14 +10,14 @@
 ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BLE, and encrypted chat over ESP-NOW.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.0.1-orange)](https://idf.espressif.com/)
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.0.2-orange)](https://idf.espressif.com/)
 [![Architecture](https://img.shields.io/badge/xtensa-ESP32-blueviolet)](https://www.espressif.com/)
 
 ---
 
 ## Features
 
-- **End-to-end encrypted messaging** — 8-layer crypto stack (Curve25519 ECDH, Ed25519 EdDSA, HKDF-SHA256, HMAC-SHA256, Ascon-128 AEAD, HMAC-eFuse binding, nonce counter + expiry)
+- **End-to-end encrypted messaging** — 8-layer crypto stack (Curve25519 ECDH, Ed25519 EdDSA, HKDF-SHA256, HMAC-SHA256, Ascon-128 AEAD, digital_sum_mix, HMAC-eFuse binding, nonce counter + expiry)
 - **User-verified PIN pairing** — 4-character one-time PIN provides ~20 bits of brute-force resistance against active MITM during the ~30 s pairing window
 - **Hardware-gated identity handoff** — BLE discovery/pairing, then handoff to ESP-NOW for session transport
 - **Forward error correction** — Hamming(15,11) on every frame; selective-repeat ARQ with exponential backoff

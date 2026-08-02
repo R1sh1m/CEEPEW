@@ -1,10 +1,13 @@
 build/
 build_host/
 **/build_host/
+build_host_tmp/
+**/build_host_tmp/
 sdkconfig
 .claude/
 *.pem
 *.key
+keys/
 *.p12
 .vscode/
 __pycache__/
@@ -46,13 +49,13 @@ docs/
 # Tools — keep scripts, ignore artifacts
 tools/eim_config.toml
 tools/monitor_both_*.txt
+tools/*.txt
 opencode.jsonc
 
 # Workspace coding agent customizations
 .agents/
 digest.txt
 
-DEBUG_LOG_OLED_I2C.md
 DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
 *log*.*

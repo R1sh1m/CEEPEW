@@ -7,11 +7,41 @@ None are referenced by the firmware build (except `wrap_rsp_in_group.cmake`).
 
 | File | Purpose |
 |------|---------|
+| `ceepew_pipeline.py` | **Master Pipeline Driver** — Single command interface for host tests, on-device diagnostics, pairing tests, production audit, and log analysis |
 | `ceepew_monitor.py` | Unified serial monitor — single or dual port, color-coded output, log saving, diagnostic report detection |
 | `ceepew_diagnose.ps1` | Unified test driver — on-device diagnostics, pairing tests, or build-only mode |
 | `ceepew_log_pipeline.py` | Post-hoc log ingestion + signature analysis — tags known failure signatures, tracks across runs, generates findings report |
+| `ceepew_production_check.py` | Audits deployment configuration (eFuse HMAC, Secure Boot v2, Flash Encryption, dev mode) |
 | `flash_both.ps1` | Flash firmware to two ESP32 devices sequentially, then monitor the first |
 | `wrap_rsp_in_group.cmake` | CMake helper (included from root `CMakeLists.txt:59`) — wraps linker response files in `--start-group`/`--end-group` |
+
+---
+
+## `ceepew_pipeline.py`
+
+Master test & debug pipeline orchestrator.
+
+### Usage
+
+```pwsh
+# Run native host unit test suite
+python tools/ceepew_pipeline.py --mode host
+
+# Run on-device diagnostics & auto-ingest logs
+python tools/ceepew_pipeline.py --mode diag
+
+# Run dual-device pairing test
+python tools/ceepew_pipeline.py --mode pairing
+
+# Perform production readiness check
+python tools/ceepew_pipeline.py --mode prod
+
+# Run complete verification suite
+python tools/ceepew_pipeline.py --mode all
+
+# List connected serial ports
+python tools/ceepew_pipeline.py --list-ports
+```
 
 ---
 
