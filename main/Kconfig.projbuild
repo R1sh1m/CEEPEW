@@ -1,58 +1,151 @@
-menu "CEE-PEW Build Options"
+menu "CEE-PEW Configuration"
 
-    config CEEPEW_DEVELOPMENT_MODE
-        bool "Development Mode (enables tests, debug serial, headless mode)"
-        default n
-        help
-            Master toggle that enables the internal test suite under tests/
-            (auto-run on boot, prints === DIAGNOSTIC REPORT ===), enables
-            CEEPEW_DEBUG_SERIAL for operational-status logging (never key
-            material), and enables CEEPEW_HEADLESS_MODE for UI auto-advance
-            without OLED (uses hardcoded session code "ZZZZ"). Production
-            builds MUST leave this disabled (default).
+    menu "System & Security Options"
 
-    config CEEPEW_OLED_FORCE_FAST_FALLBACK
-        bool "Force 800 kHz Fm+ OLED fallback at boot"
-        default n
-        help
-            Compile-time opt-in to use the 800 kHz Fast-mode-plus
-            fallback path in components/ceepew_oled at panel init
-            time, instead of probing for it reactively. Useful in
-            production for known-good wiring; off by default.
+        config CEEPEW_DEVELOPMENT_MODE
+            bool "Development Mode (enables tests, debug serial, headless mode)"
+            default n
+            help
+                Master toggle that enables the internal test suite under tests/
+                (auto-run on boot, prints === DIAGNOSTIC REPORT ===), enables
+                CEEPEW_DEBUG_SERIAL for operational-status logging (never key
+                material), and enables CEEPEW_HEADLESS_MODE for UI auto-advance
+                without OLED (uses hardcoded session code "ZZZZ"). Production
+                builds MUST leave this disabled (default).
 
-    config CEEPEW_EFUSE_HMAC_KEY
-        bool "Enable eFuse HMAC device identity key"
-        default n
-        help
-            Store a 32-byte device identity key in the ESP32 eFuse user
-            data block (EFUSE_BLK3) and use it to derive a device-bound
-            HKDF salt during session key derivation.  The eFuse key is
-            written once during factory provisioning; subsequent boots
-            read it back.  This adds a hardware-bound factor to the
-            session key — an attacker with flash dump + memory dump
-            still cannot derive the correct session key without the
-            eFuse identity.  Enable only if your devices have a free
-            eFuse user block.  Falls back to software-only salt if the
-            eFuse block is not provisioned.
+        config CEEPEW_EFUSE_HMAC_KEY
+            bool "Enable eFuse HMAC device identity key"
+            default n
+            help
+                Store a 32-byte device identity key in the ESP32 eFuse user
+                data block (EFUSE_BLK3) and use it to derive a device-bound
+                HKDF salt during session key derivation. Falls back to
+                software-only salt if eFuse block is unprovisioned.
 
-    config CEEPEW_OLED_GRAPHICS_TEST
-        bool "OLED Graphics Test Mode (bypass normal firmware, cycle test patterns)"
-        default n
-        help
-            Standalone diagnostic mode that ports U8glib's GraphicsTest.pde
-            patterns to the in-house ceepew_oled / hal_ui stack.  The OLED
-            cycles through 72 frames (9 groups x 8 sub-states) of box, frame,
-            disc, circle, line, triangle, ASCII, and pixel-grid patterns.
-            Normal application tasks (session, BLE, etc.) are NOT started.
-            Disable for production builds.
+        config CEEPEW_WIFI_FULL_RESTART
+            bool "Full WiFi stop+start on BLE->WiFi transition"
+            default y
+            help
+                When enabled (default), performs full esp_wifi_stop()/esp_wifi_start()
+                to force coexistence hardware reset after BLE deinit.
+                When disabled, uses coex_schm_process_restart() as lighter alternative.
 
-    config CEEPEW_WIFI_FULL_RESTART
-        bool "Full WiFi stop+start on BLE->WiFi transition"
-        default y
-        help
-            When enabled (default), performs full esp_wifi_stop()/esp_wifi_start()
-            to force coexistence hardware reset after BLE deinit (Phase 2->3).
-            When disabled, uses coex_schm_process_restart() as lighter alternative.
-            Production should keep this enabled; disable only for A/B testing.
+    endmenu
+
+    menu "Display & Graphics Configuration"
+
+        config CEEPEW_OLED_FORCE_SH1106
+            bool "Force SH1106 mode (column offset +2)"
+            default n
+            help
+                Force the OLED driver to use SH1106 initialization and column
+                addressing (+2 column offset). Enable if your board hardware uses an
+                SH1106 controller instead of SSD1306.
+
+        config CEEPEW_OLED_FORCE_FAST_FALLBACK
+            bool "Force 800 kHz Fm+ OLED fallback at boot"
+            default n
+            help
+                Compile-time opt-in to use the 800 kHz Fast-mode-plus
+                fallback path in components/ceepew_oled at panel init
+                time, instead of probing for it reactively.
+
+        config CEEPEW_OLED_GRAPHICS_TEST
+            bool "OLED Graphics Test Mode (bypass normal firmware, cycle test patterns)"
+            default n
+            help
+                Standalone diagnostic mode that ports U8glib's GraphicsTest.pde
+                patterns to the in-house ceepew_oled / hal_ui stack.
+                Normal application tasks are NOT started.
+
+    endmenu
+
+    menu "Hardware Pin Configuration"
+
+        menu "OLED Display (I2C) Pins"
+
+            config CEEPEW_PIN_I2C_SDA
+                int "Primary I2C SDA GPIO Pin"
+                default 26
+                range 0 39
+                help
+                    GPIO pin number assigned to primary I2C SDA (default: 26).
+
+            config CEEPEW_PIN_I2C_SCL
+                int "Primary I2C SCL GPIO Pin"
+                default 27
+                range 0 39
+                help
+                    GPIO pin number assigned to primary I2C SCL (default: 27).
+
+            config CEEPEW_PIN_I2C_SDA_FALLBACK
+                int "Fallback I2C SDA GPIO Pin"
+                default 21
+                range 0 39
+                help
+                    GPIO pin number assigned to fallback I2C SDA (default: 21).
+
+            config CEEPEW_PIN_I2C_SCL_FALLBACK
+                int "Fallback I2C SCL GPIO Pin"
+                default 22
+                range 0 39
+                help
+                    GPIO pin number assigned to fallback I2C SCL (default: 22).
+
+        endmenu
+
+        menu "RGB LED Pins"
+
+            config CEEPEW_PIN_RGB_RED
+                int "RGB Red LED GPIO Pin"
+                default 15
+                range 0 39
+                help
+                    GPIO pin number assigned to RGB LED Red channel (default: 15).
+
+            config CEEPEW_PIN_RGB_GREEN
+                int "RGB Green LED GPIO Pin"
+                default 18
+                range 0 39
+                help
+                    GPIO pin number assigned to RGB LED Green channel (default: 18).
+
+            config CEEPEW_PIN_RGB_BLUE
+                int "RGB Blue LED GPIO Pin"
+                default 23
+                range 0 39
+                help
+                    GPIO pin number assigned to RGB LED Blue channel (default: 23).
+
+        endmenu
+
+        menu "Inputs & Switches Pins"
+
+            config CEEPEW_PIN_POT
+                int "Rotary Potentiometer GPIO Pin (ADC1 only)"
+                default 33
+                range 0 39
+                help
+                    GPIO pin number assigned to rotary potentiometer analog input (default: 33).
+                    Must be an ADC1 pin (GPIO 32..39).
+
+            config CEEPEW_PIN_BUTTON
+                int "Click Button GPIO Pin"
+                default 19
+                range 0 39
+                help
+                    GPIO pin number assigned to primary click button (default: 19).
+
+            config CEEPEW_PIN_DIAG_SWITCH
+                int "Diagnostic Switch GPIO Pin"
+                default 5
+                range 0 39
+                help
+                    GPIO pin number assigned to diagnostic push-lock switch (default: 5).
+
+        endmenu
+
+    endmenu
 
 endmenu
+

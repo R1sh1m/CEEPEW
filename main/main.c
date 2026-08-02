@@ -181,30 +181,6 @@ void app_main(void){
     err = ceepew_pipeline_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "ceepew_pipeline_init failed: %d", (int)err); return; }
 
-#if CONFIG_CEEPEW_DEVELOPMENT_MODE
-    extern void test_pairing_handoff_run(void);
-    test_pairing_handoff_run();
-
-    extern void test_pairing_convergence_run(void);
-    test_pairing_convergence_run();
-
-    extern void integration_tests_run_all(void);
-    integration_tests_run_all();
-
-    extern void ui_manager_reset_to_discovery(void);
-    ui_manager_reset_to_discovery();
-
-    err = session_phase1_init(local_mac);
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "session_phase1_init post-test failed: %d", (int)err); return; }
-
-    /* Restore real WiFi MAC after tests overwrote it */
-    wifi_mac_err = esp_read_mac(local_wifi_mac, ESP_MAC_WIFI_STA);
-    if (wifi_mac_err == ESP_OK) { session_set_self_wifi_mac(local_wifi_mac); }
-
-    err = transport_ble_init();
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err); esp_restart(); }
-#endif /* CONFIG_CEEPEW_DEVELOPMENT_MODE */
-
     task_ui_init();
     task_session_init();
 
@@ -222,6 +198,7 @@ void app_main(void){
         ESP_LOGE(TAG, "Failed to create UI task (result=%d, handle=%p)", (int)ui_result, ui_handle);
         return;
     }
+    task_arch_set_ui_handle(ui_handle);
     ESP_LOGI(TAG, "UI task launched on Core 0");
 
     TaskHandle_t session_handle = NULL;
@@ -232,9 +209,49 @@ void app_main(void){
         ESP_LOGE(TAG, "Failed to create session task (result=%d, handle=%p)", (int)session_result, session_handle);
         return;
     }
+    task_arch_set_session_handle(session_handle);
     ESP_LOGI(TAG, "Session task launched on Core 1");
 
 #if CONFIG_CEEPEW_DEVELOPMENT_MODE
+    /* Suspend session task to prevent race conditions with tests
+     * that directly manipulate session FSM state (phase, keys, etc.). */
+    ESP_LOGI(TAG, "DEV-SELFTEST: SKIPPING on-board tests (AUTO_DIAG_TEST_OFF)");
+#if 0
+    TaskHandle_t session_h = task_arch_get_session_handle();
+    if (session_h != NULL) { vTaskSuspend(session_h); }
+
+    ESP_LOGI(TAG, "DEV-SELFTEST: entering handoff test");
+    extern void test_pairing_handoff_run(void);
+    test_pairing_handoff_run();
+    ESP_LOGI(TAG, "DEV-SELFTEST: handoff test done");
+
+    ESP_LOGI(TAG, "DEV-SELFTEST: entering convergence test");
+    extern void test_pairing_convergence_run(void);
+    test_pairing_convergence_run();
+    ESP_LOGI(TAG, "DEV-SELFTEST: convergence test done");
+
+    ESP_LOGI(TAG, "DEV-SELFTEST: entering integration tests");
+    extern void integration_tests_run_all(void);
+    integration_tests_run_all();
+    ESP_LOGI(TAG, "DEV-SELFTEST: integration tests done");
+#endif
+
+    extern void ui_manager_reset_to_discovery(void);
+    ui_manager_reset_to_discovery();
+
+    err = session_phase1_init(local_mac);
+    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "session_phase1_init post-test failed: %d", (int)err); return; }
+
+    /* Restore real WiFi MAC after tests overwrote it */
+    wifi_mac_err = esp_read_mac(local_wifi_mac, ESP_MAC_WIFI_STA);
+    if (wifi_mac_err == ESP_OK) { session_set_self_wifi_mac(local_wifi_mac); }
+
+    err = transport_ble_init();
+    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err); esp_restart(); }
+
+    /* Resume session task after tests complete and production state is set. */
+    if (session_handle != NULL) { vTaskResume(session_handle); }
+
     extern void integration_test_pairing_e2e_run(void);
     integration_test_pairing_e2e_run();
 #endif

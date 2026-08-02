@@ -234,6 +234,16 @@ void test_pairing_handoff_run(void)
     /* Restore BLE context — zero side effects on production state. */
     memcpy(&g_ble_ctx, &saved_ctx, sizeof(BleContext_t));
 
+    /* The mismatching-beacon test above (handoff_test_mismatch_does_not_promote)
+     * calls transport_ble_verify_pending_commitment() with deliberately
+     * mis-matched data.  That function unconditionally sets
+     * pairing_result_reason = UI_PAIRING_RESULT_COMMITMENT_FAIL and
+     * transitions the UI to PAIRING_FAILED via ui_manager_transition_to().
+     *
+     * Reset the UI back to DISCOVERY so the boot-time diagnostic does not
+     * leave the OLED showing "PAIRING FAILED — PAIRING MISMATCH" on startup. */
+    ui_manager_reset_to_discovery();
+
     /* Clear test commitment so later test suites aren't affected. */
     session_test_unset_commitment();
 

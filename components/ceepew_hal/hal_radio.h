@@ -39,8 +39,8 @@
  *
  * Queue semantics:
  *   - Depth: CEEPEW_QUEUE_DEPTH frames (default 32)
- *   - Thread-safe: ISR posts via xQueueOverwriteFromISR(); task receives via xQueueReceive()
- *   - On queue full: oldest frame is overwritten (FIFO eviction), overrun counter incremented
+ *   - Thread-safe: ISR posts via xQueueSendFromISR(); task receives via xQueueReceive()
+ *   - On queue full: newest frame is silently dropped, overrun counter incremented
  *   - Frames are NOT acknowledged; loss is transparent to ESP-NOW layer
  */
 typedef struct {

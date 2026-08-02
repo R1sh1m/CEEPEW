@@ -17,6 +17,8 @@
 
 #include "task_session.h"
 #include "ceepew_config.h"
+#include "ceepew_pipeline.h"
+#include "ceepew_region.h"
 #include "ceepew_security_utils.h"
 #include "compress_huffman.h"
 #include "crypto_box_wrap.h"
@@ -28,7 +30,6 @@
 #include "esp_coexist.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "hal_radio.h"
@@ -285,6 +286,19 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
   UIState_t ui_state;
   session_ui_get_state_snapshot(&ui_state);
   if (ui_state == UI_STATE_PAIRING_FAILED) {
+    task_session_pairing_flow_reset();
+    return CEEPEW_OK;
+  }
+
+  /* Detect UI-initiated cancel: pairing flow is active but UI has been
+   * reset to DISCOVERY (user long-pressed to cancel). */
+  if (s_pairing_flow_state >= PAIRING_FLOW_COMMITMENT &&
+      ui_state == UI_STATE_DISCOVERY) {
+    ESP_LOGI(TAG, "pairing flow: user cancelled (UI -> DISCOVERY)");
+    if (session_get_phase() >= 2U) {
+      (void)session_reset_to_discovery();
+    }
+    task_session_reset_pairing_static_state();
     task_session_pairing_flow_reset();
     return CEEPEW_OK;
   }
@@ -611,26 +625,19 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     if ((now_ms - s_sign_pk_gate_start_ms) >= CEEPEW_SIGN_PK_GATE_TIMEOUT_MS) {
       ESP_LOGW(TAG,
                "STEP 5: sign_pk gate timeout (%u ms) — "
-               "GATT exchange failed, advancing to FAILED",
+               "GATT exchange failed, letting reconnect_attempts accumulate",
                (unsigned)CEEPEW_SIGN_PK_GATE_TIMEOUT_MS);
       ESP_LOGW(TAG,
                "sign_pk gate timeout: init=%d "
                "sign_pk_rcvd=%d rev_pend=%d init_sent=%d "
-               "attempts=%u elapsed=%u ms",
+               "attempts=%u elapsed=%u ms — not resetting, retry via GATT_IDENTITY flow",
                is_initiator, g_ble_ctx.sign_pk_received,
                g_ble_ctx.reverse_gattc_pending,
                g_ble_ctx.initiator_sign_pk_sent,
                (unsigned)g_ble_ctx.reconnect_attempts,
                (unsigned)(now_ms - s_sign_pk_gate_start_ms));
       s_sign_pk_gate_start_ms = 0U;
-      session_ui_ctx_lock();
-      g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
-      g_ui_ctx.transition_ready = true;
-      session_ui_ctx_unlock();
-      (void)session_reset_to_discovery();
-      task_session_reset_pairing_static_state();
-      task_session_pairing_flow_reset();
-      (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+      g_ble_ctx.reconnect_attempts++;
       return CEEPEW_OK;
     } else {
       ESP_LOGI(TAG,
@@ -1082,10 +1089,14 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
                 uint16_t pfs_len = 0U;
                 if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len, sizeof(pfs_frame),
                                                       local_pfs_pubkey, true) == CEEPEW_OK) {
-                    (void)ecc_arq_send(peer_mac, pfs_frame, pfs_len);
-                    ESP_LOGI(TAG, "Sent PFS_INIT to peer: %02X:%02X:%02X:%02X:%02X:%02X",
-                             peer_mac[0], peer_mac[1], peer_mac[2],
-                             peer_mac[3], peer_mac[4], peer_mac[5]);
+                    CeePewErr_t arq_ret = ecc_arq_send(peer_mac, pfs_frame, pfs_len);
+                    if (arq_ret == CEEPEW_OK) {
+                        ESP_LOGI(TAG, "Sent PFS_INIT to peer: %02X:%02X:%02X:%02X:%02X:%02X",
+                                 peer_mac[0], peer_mac[1], peer_mac[2],
+                                 peer_mac[3], peer_mac[4], peer_mac[5]);
+                    } else {
+                        ESP_LOGW(TAG, "PFS_INIT send failed: %d — falling back to base key", (int)arq_ret);
+                    }
                 }
             }
         } else {
@@ -1273,6 +1284,29 @@ static void task_session_reset_pairing_static_state(void) {
   s_last_pfs_retry_ms = 0ULL;
 }
 
+static const char *task_session_pairing_flow_state_name(PairingFlowState_t state) {
+  switch (state) {
+  case PAIRING_FLOW_IDLE:
+    return "IDLE";
+  case PAIRING_FLOW_DISCOVERY:
+    return "DISCOVERY";
+  case PAIRING_FLOW_COMMITMENT:
+    return "COMMITMENT";
+  case PAIRING_FLOW_GATT_IDENTITY:
+    return "GATT_IDENTITY";
+  case PAIRING_FLOW_KEY_DERIVE:
+    return "KEY_DERIVE";
+  case PAIRING_FLOW_POST_DERIVE_SYNC:
+    return "POST_DERIVE_SYNC";
+  case PAIRING_FLOW_FAILED:
+    return "FAILED";
+  case PAIRING_FLOW_DEGRADED:
+    return "DEGRADED";
+  default:
+    return "UNKNOWN";
+  }
+}
+
 /* Pairing flow ownership — session task drives the pairing state machine */
 static void task_session_pairing_flow_reset(void) {
   s_pairing_flow_state = PAIRING_FLOW_IDLE;
@@ -1288,9 +1322,15 @@ static void task_session_pairing_flow_reset(void) {
 
 static void task_session_pairing_flow_advance(PairingFlowState_t new_state) {
   if (s_pairing_flow_state != new_state) {
-    ESP_LOGI(TAG, "pairing flow: %d -> %d", s_pairing_flow_state, new_state);
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    uint32_t phase_time = s_pairing_phase_entered_ms > 0U ? (now_ms - s_pairing_phase_entered_ms) : 0U;
+    ESP_LOGI(TAG, "[PAIRING_STEP] Flow state transition: %s -> %s (phase time=%u ms, role=%s)",
+             task_session_pairing_flow_state_name(s_pairing_flow_state),
+             task_session_pairing_flow_state_name(new_state),
+             (unsigned)phase_time,
+             session_get_role() ? "initiator" : "responder");
     s_pairing_flow_state = new_state;
-    s_pairing_phase_entered_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    s_pairing_phase_entered_ms = now_ms;
   }
 }
 
@@ -1307,10 +1347,10 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       30000, /* DISCOVERY - 30s */
       CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS, /* COMMITMENT - aligned with config */
       45000, /* GATT_IDENTITY - 45s (matches supervisor CEEPEW_PHASE_TIMEOUT_GATT_MS) */
-       35000, /* KEY_DERIVE - 35s (reverse GATTC + derivation + sync; must exceed UI KEYDER safety) */
-      10000, /* POST_DERIVE_SYNC - 10s */
-      5000,  /* FAILED - 5s cleanup */
-      30000, /* DEGRADED - 30s to wait for user confirmation */
+       50000, /* KEY_DERIVE - 50s (reverse GATTC + BLE teardown + WiFi init + ESP-NOW + sync) */
+      30000, /* POST_DERIVE_SYNC - 30s (matches CEEPEW_KEY_SYNC_TIMEOUT_MS) */
+       5000,  /* FAILED - 5s cleanup */
+       30000, /* DEGRADED - 30s to wait for user confirmation */
   };
 
   switch (s_pairing_flow_state) {
@@ -1333,7 +1373,12 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_IDLE);
     } else if ((now_ms - s_pairing_phase_entered_ms) >
                pairing_flow_timeout_ms[PAIRING_FLOW_DISCOVERY]) {
-      ESP_LOGW(TAG, "pairing flow: DISCOVERY timeout");
+      ESP_LOGE(TAG, "[PAIRING_TIMEOUT] DISCOVERY timeout after %u ms (budget=%u ms)",
+               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_DISCOVERY]);
+      ESP_LOGE(TAG, "  Details: role=%s, peer_latched=%d, ui_state=%s",
+               session_get_role() ? "initiator" : "responder",
+               s_ble_peer_latched, task_session_ui_name(ui_state));
       task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
     }
     break;
@@ -1345,7 +1390,13 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
     } else if ((now_ms - s_pairing_phase_entered_ms) >
                pairing_flow_timeout_ms[PAIRING_FLOW_COMMITMENT]) {
-      ESP_LOGW(TAG, "pairing flow: COMMITMENT timeout");
+      ESP_LOGE(TAG, "[PAIRING_TIMEOUT] COMMITMENT timeout after %u ms (budget=%u ms)",
+               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_COMMITMENT]);
+      ESP_LOGE(TAG, "  Details: role=%s, commit_ver=%d, handoff_ready=%d, local_commit_len=%u, ui_state=%s",
+               session_get_role() ? "initiator" : "responder",
+               g_ble_ctx.commitment_verified, transport_ble_handoff_ready(),
+               (unsigned)g_ble_ctx.local_commitment_len, task_session_ui_name(ui_state));
       task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
     }
     break;
@@ -1353,12 +1404,13 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
   case PAIRING_FLOW_GATT_IDENTITY:
     if (g_ble_ctx.sign_pk_received) {
       ESP_LOGI(TAG,
-               "pairing flow: GATT_IDENTITY -> KEY_DERIVE (sign_pk received)");
+               "[PAIRING_STEP] GATT_IDENTITY -> KEY_DERIVE (sign_pk received successfully)");
       task_session_pairing_flow_advance(PAIRING_FLOW_KEY_DERIVE);
     } else if (g_ble_ctx.reconnect_attempts >= CEEPEW_MAX_RECONNECT_ATTEMPTS) {
       ESP_LOGW(TAG,
-               "pairing flow: GATT_IDENTITY -> DEGRADED (retries exhausted, "
+               "[PAIRING_DEGRADED] GATT_IDENTITY -> DEGRADED (retries exhausted %u/%u, "
                "sign_pk MISSING, rev_pend=%d init_sent=%d)",
+               (unsigned)g_ble_ctx.reconnect_attempts, (unsigned)CEEPEW_MAX_RECONNECT_ATTEMPTS,
                g_ble_ctx.reverse_gattc_pending,
                g_ble_ctx.initiator_sign_pk_sent);
       /* Transition to DEGRADED state instead of silently proceeding.
@@ -1374,7 +1426,14 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
     } else if ((now_ms - s_pairing_phase_entered_ms) >
                pairing_flow_timeout_ms[PAIRING_FLOW_GATT_IDENTITY]) {
-      ESP_LOGW(TAG, "pairing flow: GATT_IDENTITY timeout");
+      ESP_LOGE(TAG, "[PAIRING_TIMEOUT] GATT_IDENTITY timeout after %u ms (budget=%u ms)",
+               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_GATT_IDENTITY]);
+      ESP_LOGE(TAG, "  Details: role=%s, gattc_conn=%d, gatts_conn=%d, sign_pk_rcvd=%d, init_sent=%d, attempts=%u/%u",
+               session_get_role() ? "initiator" : "responder",
+               g_ble_ctx.gattc_connected, g_ble_ctx.gatts_connected,
+               g_ble_ctx.sign_pk_received, g_ble_ctx.initiator_sign_pk_sent,
+               (unsigned)g_ble_ctx.reconnect_attempts, (unsigned)CEEPEW_MAX_RECONNECT_ATTEMPTS);
       task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
     }
     break;
@@ -1384,26 +1443,23 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_POST_DERIVE_SYNC);
     } else if ((now_ms - s_pairing_phase_entered_ms) >
                pairing_flow_timeout_ms[PAIRING_FLOW_KEY_DERIVE]) {
-      ESP_LOGW(TAG, "pairing flow: KEY_DERIVE timeout");
+      ESP_LOGE(TAG, "[PAIRING_TIMEOUT] KEY_DERIVE timeout after %u ms (budget=%u ms)",
+               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_KEY_DERIVE]);
+      ESP_LOGE(TAG, "  Details: session_active=%d, sync_barrier=%d, wifi_mac_valid=%d",
+               session_is_active(), session_sync_barrier_cleared(), session_peer_wifi_mac_valid());
       task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
     }
-    /* NOTE: Do NOT check phase < 3U here.  STEP 6 (key derivation) runs
-     * AFTER this function returns, in task_session_drive_ble_pairing().
-     * Checking phase < 3U on the next tick would prematurely kill the
-     * pairing flow before STEP 6 gets a chance to derive the key. */
     break;
 
   case PAIRING_FLOW_DEGRADED:
-    /* Wait for user to press the button to confirm degraded mode.
-     * The UI is showing UI_STATE_PAIRING_DEGRADED with a prompt like
-     * "BTN=continue without identity / HOLD=cancel". */
     if (session_is_identity_degraded()) {
-      /* User already confirmed — advance to key derivation */
-      ESP_LOGW(TAG, "pairing flow: DEGRADED -> KEY_DERIVE (user confirmed)");
+      ESP_LOGW(TAG, "[PAIRING_STEP] DEGRADED -> KEY_DERIVE (user explicitly confirmed degraded mode)");
       task_session_pairing_flow_advance(PAIRING_FLOW_KEY_DERIVE);
     } else if ((now_ms - s_pairing_phase_entered_ms) >
                pairing_flow_timeout_ms[PAIRING_FLOW_DEGRADED]) {
-      ESP_LOGW(TAG, "pairing flow: DEGRADED timeout — failing pairing");
+      ESP_LOGE(TAG, "[PAIRING_TIMEOUT] DEGRADED user confirmation timeout after %u ms — failing pairing",
+               (unsigned)(now_ms - s_pairing_phase_entered_ms));
       session_ui_ctx_lock();
       g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
       g_ui_ctx.transition_ready = true;
@@ -1415,10 +1471,12 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
 
   case PAIRING_FLOW_POST_DERIVE_SYNC:
     if (session_sync_barrier_cleared()) {
+      ESP_LOGI(TAG, "[PAIRING_STEP] POST_DERIVE_SYNC verified — pairing successfully completed!");
       task_session_pairing_flow_reset();
     } else if ((now_ms - s_pairing_phase_entered_ms) >
                pairing_flow_timeout_ms[PAIRING_FLOW_POST_DERIVE_SYNC]) {
-      ESP_LOGW(TAG, "pairing flow: POST_DERIVE_SYNC timeout");
+      ESP_LOGE(TAG, "[PAIRING_TIMEOUT] POST_DERIVE_SYNC timeout after %u ms — peer failed to ACK post-derive sync",
+               (unsigned)(now_ms - s_pairing_phase_entered_ms));
       task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
     }
     break;
@@ -1570,8 +1628,273 @@ CeePewErr_t task_session_sync_visual_state(void) {
   s_last_ble_state = ble_state;
   s_last_ble_discovered = discovered;
   s_last_ble_hits = ble_hits;
-  s_last_ble_rssi = ble_rssi;
+s_last_ble_rssi = ble_rssi;
   return CEEPEW_OK;
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* RX Data Pipeline Stages (post-ESL: CRC → FEC → decrypt → decompress)     */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/* Stage 1: crc_fec — verify inner CRC-32, Hamming(15,11) decode, and
+ * extract the framed payload containing [2-byte box_ct_len][box_ct][sig].
+ * Output: decoded FEC payload (region-allocated). */
+static CeePewErr_t stage_rx_crc_fec(Region_t *region, const uint8_t *in,
+                                     uint16_t in_len, uint8_t **out,
+                                     uint16_t *out_len, void *stage_ctx)
+{
+    (void)stage_ctx;
+    CEEPEW_ASSERT(region != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
+
+    if (in_len < 4U) { return CEEPEW_ERR_PARAM; }
+
+    /* Verify inner CRC at end of data */
+    uint32_t rx_inner_crc = 0U;
+    memcpy(&rx_inner_crc, in + in_len - 4U, 4U);
+    uint32_t calc_inner_crc = esp_crc32_le(0U, in, in_len - 4U);
+    if (rx_inner_crc != calc_inner_crc) {
+        ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Inner CRC mismatch! rx=0x%08X, calc=0x%08X",
+                 (unsigned)rx_inner_crc, (unsigned)calc_inner_crc);
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    uint16_t crc_stripped_len = (uint16_t)(in_len - 4U);
+
+    /* Hamming decode */
+    uint8_t fec_local[CEEPEW_FEC_BUF_MAX];
+    uint16_t fec_out_len = (uint16_t)sizeof(fec_local);
+    bool corrected = false;
+    CeePewErr_t err = ecc_hamming_decode(in, crc_stripped_len,
+                                          fec_local, &fec_out_len, &corrected);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Hamming decode failed: err=%d (in_len=%u)",
+                 (int)err, (unsigned)crc_stripped_len);
+        return err;
+    }
+
+    if (corrected) {
+        ESP_LOGI("SESSION", "[SECURE_CHAT_RX] Hamming(15,11) FEC corrected single-bit error in received frame!");
+    }
+    ESP_LOGI("SESSION", "[SECURE_CHAT_RX] CRC & FEC verified: in=%u B -> fec_out=%u B",
+             (unsigned)in_len, (unsigned)fec_out_len);
+
+    /* Validate minimum size (2-byte len prefix + 1 byte box + 64-byte sig) */
+    if (fec_out_len < 66U) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Decoded payload too small (%u bytes, min 66 B)",
+                 (unsigned)fec_out_len);
+        return CEEPEW_ERR_PARAM;
+    }
+
+    /* Allocate output and copy the full decoded frame */
+    uint8_t *fec_out = (uint8_t *)region_alloc(region, fec_out_len);
+    if (fec_out == NULL) { return CEEPEW_ERR_ALLOC; }
+    memcpy(fec_out, fec_local, fec_out_len);
+    ceepew_secure_zero(fec_local, sizeof(fec_local));
+
+    *out = fec_out;
+    *out_len = fec_out_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 2: decrypt — crypto_box decrypt → Ascon-128 AEAD decrypt → Ed25519 verify.
+ * Output: Ascon-decrypted plaintext (region-allocated).
+ * All key material is stack-local and securely zeroed. */
+static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
+                                     uint16_t in_len, uint8_t **out,
+                                     uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    (void)stage_ctx;
+    CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Extract box_ct_len, box_ct, and sig from framed payload */
+    uint16_t box_ct_len = (uint16_t)in[0] | ((uint16_t)in[1] << 8U);
+    uint16_t expected_min = (uint16_t)(2U + box_ct_len + 64U);
+    if (expected_min > in_len) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: box_ct_len from prefix (%u) exceeds in_len (%u)",
+                 (unsigned)box_ct_len, (unsigned)in_len);
+        return CEEPEW_ERR_PARAM;
+    }
+
+    uint16_t sig_off = 2U + box_ct_len;
+    /* Preserve the original box_ct for Ed25519 verification (box overwrites out) */
+    uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
+    memcpy(local_box_ct, in + 2U, box_ct_len);
+    uint8_t local_sig[64U];
+    memcpy(local_sig, in + sig_off, 64U);
+    uint16_t box_ct_orig_len = box_ct_len;
+
+    /* Build nonce from ESL nonce counter + session_id */
+    uint64_t rx_nonce_counter = 0ULL;
+    CeePewErr_t err = transport_esl_get_last_nonce_counter(&rx_nonce_counter);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: nonce counter retrieval failed (err=%d)", (int)err);
+        return err;
+    }
+
+    uint8_t local_nonce[24U];
+    err = session_get_nonce(local_nonce);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: session nonce retrieval failed (err=%d)", (int)err);
+        return err;
+    }
+    for (uint8_t i = 0U; i < 8U; i++) {
+        local_nonce[8U + i] = (uint8_t)((rx_nonce_counter >> (i * 8U)) & 0xFFU);
+    }
+
+    /* crypto_box decrypt */
+    uint8_t local_box_pk[32U];
+    if (!session_peer_box_pubkey_valid()) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: peer box pubkey not valid");
+        return CEEPEW_ERR_PARAM;
+    }
+    err = session_get_local_box_pubkey(local_box_pk);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: local box pubkey retrieval failed (err=%d)", (int)err);
+        return err;
+    }
+
+    uint8_t local_ascon_ct[CRYPTO_BOX_INNER_MAX_BYTES];
+    uint16_t box_decrypted_len = (uint16_t)sizeof(local_ascon_ct);
+    err = crypto_box_decrypt(&g_crypto_ctx, local_nonce,
+                             g_crypto_ctx.peer_box_pubkey,
+                             local_box_ct, box_ct_len,
+                             local_ascon_ct, &box_decrypted_len);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: crypto_box decrypt FAILED (err=%d, len=%u)",
+                 (int)err, (unsigned)box_ct_len);
+        ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+        ceepew_secure_zero(local_sig, sizeof(local_sig));
+        return err;
+    }
+
+    /* Ascon-128 AEAD decrypt */
+    uint8_t ascon_nonce[16U];
+    memcpy(ascon_nonce, local_nonce, sizeof(ascon_nonce));
+    uint8_t local_ascon_key[16U];
+    err = session_get_session_key(local_ascon_key);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: session key retrieval failed (err=%d)", (int)err);
+        ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+        ceepew_secure_zero(local_sig, sizeof(local_sig));
+        return err;
+    }
+
+    uint8_t local_plain[CEEPEW_MAX_MSG_BYTES];
+    uint16_t plain_len = (uint16_t)sizeof(local_plain);
+    err = crypto_ascon_aead_decrypt(local_ascon_key, ascon_nonce, NULL, 0U,
+                                    local_ascon_ct, box_decrypted_len,
+                                    local_plain, &plain_len);
+    ceepew_secure_zero(local_ascon_key, sizeof(local_ascon_key));
+    if (err != CEEPEW_OK) {
+        ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: Ascon-128 AEAD auth tag verification FAILED (err=%d)",
+                 (int)err);
+        ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+        ceepew_secure_zero(local_sig, sizeof(local_sig));
+        return err;
+    }
+
+    ESP_LOGI("SESSION", "[SECURE_CHAT_RX] Ascon-128 AEAD decrypt & auth VERIFIED OK (plain_len=%u B, nonce=%llu)",
+             (unsigned)plain_len, (unsigned long long)rx_nonce_counter);
+
+    /* Ed25519 signature verification (skipped in identity-degraded mode) */
+    if (!session_is_identity_degraded()) {
+        uint8_t local_sign_pk[32U];
+        err = session_get_peer_public_key(local_sign_pk);
+        if (err != CEEPEW_OK) {
+            ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: peer sign_pk retrieval failed (err=%d)", (int)err);
+            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+            ceepew_secure_zero(local_sig, sizeof(local_sig));
+            return err;
+        }
+
+        err = crypto_eddsa_verify(local_sign_pk, local_box_ct,
+                                  box_ct_orig_len, local_sig);
+        ceepew_secure_zero(local_sign_pk, sizeof(local_sign_pk));
+        if (err != CEEPEW_OK) {
+            ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: Ed25519 signature verification FAILED (err=%d)", (int)err);
+            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+            ceepew_secure_zero(local_sig, sizeof(local_sig));
+            return err;
+        }
+        ESP_LOGI("SESSION", "[SECURE_CHAT_RX] Ed25519 signature VERIFIED OK");
+    } else {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Ed25519 signature verification SKIPPED (identity-degraded mode active)");
+    }
+
+    ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+    ceepew_secure_zero(local_sig, sizeof(local_sig));
+
+    /* Allocate output from region */
+    uint8_t *plain_out = (uint8_t *)region_alloc(region, plain_len);
+    if (plain_out == NULL) { return CEEPEW_ERR_ALLOC; }
+    memcpy(plain_out, local_plain, plain_len);
+    ceepew_secure_zero(local_plain, sizeof(local_plain));
+    ceepew_secure_zero(local_ascon_ct, sizeof(local_ascon_ct));
+    ceepew_secure_zero(local_nonce, sizeof(local_nonce));
+    ceepew_secure_zero(local_box_pk, sizeof(local_box_pk));
+
+    *out = plain_out;
+    *out_len = plain_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 3: decompress — Huffman decompress the Ascon-decrypted plaintext.
+ * Output: final decompressed plaintext (region-allocated). */
+static CeePewErr_t stage_rx_decompress(Region_t *region, const uint8_t *in,
+                                        uint16_t in_len, uint8_t **out,
+                                        uint16_t *out_len, void *stage_ctx)
+{
+    (void)stage_ctx;
+    CEEPEW_ASSERT(region != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
+
+    uint8_t decomp_local[CEEPEW_PACKET_MAX_BYTES];
+    uint16_t decoded_len = (uint16_t)sizeof(decomp_local);
+    CeePewErr_t err = compress_huffman_decompress(in, in_len, decomp_local,
+                                                   &decoded_len,
+                                                   (uint16_t)sizeof(decomp_local));
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: Huffman decompress failed (err=%d in=%u)",
+                 (int)err, (unsigned)in_len);
+        return err;
+    }
+
+    ESP_LOGI("SESSION", "[SECURE_CHAT_RX] Huffman decompress complete: compressed=%u B -> decompressed=%u B",
+             (unsigned)in_len, (unsigned)decoded_len);
+
+    uint8_t *decoded = (uint8_t *)region_alloc(region, decoded_len);
+    if (decoded == NULL) { return CEEPEW_ERR_ALLOC; }
+    memcpy(decoded, decomp_local, decoded_len);
+    ceepew_secure_zero(decomp_local, sizeof(decomp_local));
+
+    *out = decoded;
+    *out_len = decoded_len;
+    return CEEPEW_OK;
+}
+
+/* RX data pipeline handle and build-once flag */
+static Pipeline_t s_rx_data_pipeline;
+static bool s_rx_data_pipeline_built = false;
+
+static CeePewErr_t rxd_build_pipeline(void)
+{
+    CeePewErr_t err;
+
+    err = pipeline_reset(&s_rx_data_pipeline);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_rx_data_pipeline, stage_rx_crc_fec, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_rx_data_pipeline, stage_rx_decrypt, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_rx_data_pipeline, stage_rx_decompress, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    s_rx_data_pipeline_built = true;
+    return CEEPEW_OK;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1601,12 +1924,10 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
                     frame->payload_len <= CEEPEW_PACKET_MAX_BYTES,
                 CEEPEW_ERR_BOUNDS);
 
-  #ifdef CEEPEW_DEBUG_SERIAL
-  ESP_LOGI("SESSION-RX", "process_rx_frame: src=%02X:%02X:%02X:%02X:%02X:%02X len=%u active=%d",
+  ESP_LOGI("SESSION-RX", "[SECURE_CHAT_RX] Processing incoming frame: src=%02X:%02X:%02X:%02X:%02X:%02X len=%u B active=%d",
            frame->src_mac[0], frame->src_mac[1], frame->src_mac[2],
            frame->src_mac[3], frame->src_mac[4], frame->src_mac[5],
            (unsigned)frame->payload_len, session_is_active());
-  #endif
 
   /* Handle rendezvous frames BEFORE session_is_active() check.
    * Rendezvous runs on static channel after key derivation but before
@@ -1616,6 +1937,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     uint8_t msg_type = frame->payload[0];
     if (msg_type == CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ ||
         msg_type == CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_ACK) {
+      ESP_LOGI("SESSION-RX", "[RENDEZVOUS_RX] Handshake frame received (type=0x%02X)", msg_type);
       CeePewErr_t rv_err = hal_radio_rendezvous_handle_rx(frame->payload, frame->payload_len, frame->src_mac);
       if (rv_err == CEEPEW_OK) {
         /* Rendezvous frame handled successfully */
@@ -1630,15 +1952,6 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
   }
 
   uint8_t local_work_frame[CEEPEW_PACKET_MAX_BYTES];
-  uint8_t local_fec_out[CEEPEW_FEC_BUF_MAX];
-  uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
-  uint8_t local_ascon_ct[CRYPTO_BOX_INNER_MAX_BYTES];
-  uint8_t local_plain[CEEPEW_MAX_MSG_BYTES];
-  uint8_t local_nonce[24U];
-  uint8_t local_sign_pk[32U];
-  uint8_t local_box_pk[32U];
-  uint8_t local_ascon_key[16U];
-  uint8_t local_sig[64U];
 
   CeePewErr_t err = CEEPEW_OK;
   uint16_t work_len = frame->payload_len;
@@ -1656,6 +1969,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
                          local_work_frame, &arq_dec_len,
                          (uint16_t)sizeof(local_work_frame), &corrected);
     if (err != CEEPEW_OK) {
+      ESP_LOGW("SESSION-RX", "[SECURE_CHAT_RX] ARQ decode failed / duplicate sequence (err=%d)", (int)err);
       goto rx_cleanup;
     }
     work_len = arq_dec_len;
@@ -1668,7 +1982,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
   err = transport_esl_process_incoming(local_work_frame, &work_len,
                                        frame->src_mac, rx_queue_depth);
   if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: transport pipeline failed (err=%d len=%u)",
+    ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: ESL transport header/MAC/replay check failed (err=%d len=%u)",
              (int)err, (unsigned)frame->payload_len);
     goto rx_cleanup;
   }
@@ -1677,9 +1991,10 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
   if (work_len >= 1U) {
     uint8_t msg_type = local_work_frame[0] & CEEPEW_ESL_MSG_TYPE_MASK;
     if (msg_type == CEEPEW_ESL_MSG_TYPE_PFS_INIT || msg_type == CEEPEW_ESL_MSG_TYPE_PFS_RESP) {
+      ESP_LOGI("SESSION", "[PFS_RX] PFS handshake frame received (type=0x%02X)", msg_type);
       uint8_t peer_pfs_pubkey[32U];
       CeePewErr_t pfs_err = transport_esl_process_pfs_handshake(local_work_frame, work_len,
-                                                               frame->src_mac, peer_pfs_pubkey);
+                                                                frame->src_mac, peer_pfs_pubkey);
       if (pfs_err == CEEPEW_OK) {
         CeePewErr_t derive_err = session_pfs_process_peer_key(peer_pfs_pubkey);
         if (derive_err == CEEPEW_OK) {
@@ -1692,7 +2007,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
               if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len, sizeof(pfs_frame),
                                                     local_pfs_pubkey, false) == CEEPEW_OK) {
                 (void)ecc_arq_send(frame->src_mac, pfs_frame, pfs_len);
-                ESP_LOGI("SESSION", "Sent PFS_RESP to peer: %02X:%02X:%02X:%02X:%02X:%02X",
+                ESP_LOGI("SESSION", "[PFS_TX] Sent PFS_RESP to peer: %02X:%02X:%02X:%02X:%02X:%02X",
                          frame->src_mac[0], frame->src_mac[1], frame->src_mac[2],
                          frame->src_mac[3], frame->src_mac[4], frame->src_mac[5]);
               }
@@ -1705,143 +2020,27 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     }
   }
 
-  /* Verify Inner CRC appended after the FEC-encoded data */
-  if (work_len < 4U) {
-    ESP_LOGW("SESSION", "RX discard: FEC output too small for inner CRC (%u bytes)",
-             (unsigned)work_len);
-    goto rx_cleanup;
+  /* ── RX data pipeline: CRC → FEC decode → decrypt → decompress ────────
+   * Run the 3-stage data pipeline on the ESL-stripped payload.
+   * The pipeline produces the decompressed plaintext in a region-allocated
+   * buffer. Build the pipeline once on first use. */
+  if (!s_rx_data_pipeline_built) {
+    err = rxd_build_pipeline();
+    if (err != CEEPEW_OK) {
+      ESP_LOGE(TAG, "[SECURE_CHAT_RX] Failed to build RX data pipeline: %d", (int)err);
+      goto rx_cleanup;
+    }
   }
-  uint32_t rx_inner_crc = 0U;
-  memcpy(&rx_inner_crc, local_work_frame + work_len - 4U, 4U);
-  uint32_t calc_inner_crc = esp_crc32_le(0U, local_work_frame, work_len - 4U);
-  if (rx_inner_crc != calc_inner_crc) {
-    ESP_LOGE("SESSION", "Inner CRC mismatch: rx=%08lx, calc=%08lx",
-             rx_inner_crc, calc_inner_crc);
-    goto rx_cleanup; /* Silent discard */
-  }
-  work_len -= 4U; /* Strip Inner CRC */
 
-  bool corrected = false;
-  uint16_t fec_out_len = (uint16_t)sizeof(local_fec_out);
-  err = ecc_hamming_decode(local_work_frame, work_len, local_fec_out,
-                           &fec_out_len, &corrected);
+  uint8_t *decoded_out = NULL;
+  uint16_t decoded_len = 0U;
+  err = pipeline_run(&s_rx_data_pipeline, &g_region,
+                      local_work_frame, work_len,
+                      &decoded_out, &decoded_len);
   if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: Hamming decode failed (err=%d in=%u)",
+    ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: RX data pipeline execution failed (err=%d len=%u)",
              (int)err, (unsigned)work_len);
     goto rx_cleanup;
-  }
-
-  /* The decoded FEC payload layout is: [2-byte LE box_ct_len][box_ct][64-byte Ed25519 sig].
-   * The 2-byte prefix was prepended by session_send.c before FEC encode; strip it here. */
-  if (fec_out_len < 66U) {
-    ESP_LOGW("SESSION", "RX discard: decoded payload too small for prefix+box+sig (%u bytes)",
-             (unsigned)fec_out_len);
-    goto rx_cleanup;
-  }
-  uint16_t box_ct_len = (uint16_t)local_fec_out[0]
-                      | ((uint16_t)local_fec_out[1] << 8U);
-  uint16_t expected_min = (uint16_t)(2U + box_ct_len + 64U);
-  if (expected_min > fec_out_len) {
-    ESP_LOGW("SESSION", "RX discard: box_ct_len from prefix (%u) exceeds fec_out_len (%u)",
-             (unsigned)box_ct_len, (unsigned)fec_out_len);
-    goto rx_cleanup;
-  }
-  uint16_t sig_off = 2U + box_ct_len;
-  memcpy(local_box_ct, local_fec_out + 2U, box_ct_len);
-  memcpy(local_sig, local_fec_out + sig_off, 64U);
-
-  /* Preserve box_ct_len before crypto_box_decrypt overwrites it with the
-   * decrypted length. The Ed25519 signature covers the original ciphertext. */
-  uint16_t box_ct_orig_len = box_ct_len;
-
-  uint64_t rx_nonce_counter = 0ULL;
-  err = transport_esl_get_last_nonce_counter(&rx_nonce_counter);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: nonce counter retrieval failed (err=%d)",
-              (int)err);
-    goto rx_cleanup;
-  }
-  err = session_get_nonce(local_nonce);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: session nonce retrieval failed (err=%d)",
-              (int)err);
-    goto rx_cleanup;
-  }
-  for (uint8_t i = 0U; i < 8U; i++) {
-    local_nonce[8U + i] = (uint8_t)((rx_nonce_counter >> (i * 8U)) & 0xFFU);
-  }
-
-  /* Use the peer's X25519 public key for crypto_box ECDH decryption */
-  if (!session_peer_box_pubkey_valid()) {
-    ESP_LOGW("SESSION", "RX discard: peer box pubkey not valid");
-    goto rx_cleanup;
-  }
-  err = session_get_local_box_pubkey(local_box_pk);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: local box pubkey retrieval failed (err=%d)",
-              (int)err);
-    goto rx_cleanup;
-  }
-  /* The peer's X25519 pubkey is in g_crypto_ctx.peer_box_pubkey;
-   * pass it directly to crypto_box_decrypt via the context. */
-  #ifdef CEEPEW_DEBUG_SERIAL
-  ESP_LOGI("SESSION", "RX-BOX: src=%02X:%02X:%02X:%02X:%02X:%02X len=%u",
-           frame->src_mac[0], frame->src_mac[1], frame->src_mac[2],
-           frame->src_mac[3], frame->src_mac[4], frame->src_mac[5],
-           (unsigned)box_ct_len);
-  ESP_LOGI("SESSION", "RX-BOX: our_box_pk[0:4]=%02x%02x%02x%02x",
-           local_box_pk[0], local_box_pk[1], local_box_pk[2], local_box_pk[3]);
-  ESP_LOGI("SESSION", "RX-BOX: peer_box_pk[0:4]=%02x%02x%02x%02x",
-           g_crypto_ctx.peer_box_pubkey[0], g_crypto_ctx.peer_box_pubkey[1],
-           g_crypto_ctx.peer_box_pubkey[2], g_crypto_ctx.peer_box_pubkey[3]);
-  #endif
-  uint16_t box_decrypted_len = (uint16_t)sizeof(local_ascon_ct);
-  err = crypto_box_decrypt(&g_crypto_ctx, local_nonce,
-                           g_crypto_ctx.peer_box_pubkey, local_box_ct,
-                           box_ct_len, local_ascon_ct, &box_decrypted_len);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: crypto_box decrypt failed (err=%d len=%u)",
-              (int)err, (unsigned)box_ct_len);
-    goto rx_cleanup;
-  }
-
-  uint8_t ascon_nonce[16U];
-  memcpy(ascon_nonce, local_nonce, sizeof(ascon_nonce));
-  err = session_get_session_key(local_ascon_key);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: session key retrieval failed (err=%d)",
-              (int)err);
-    goto rx_cleanup;
-  }
-
-  uint16_t plain_len = (uint16_t)sizeof(local_plain);
-  err = crypto_ascon_aead_decrypt(local_ascon_key, ascon_nonce, NULL, 0U,
-                                  local_ascon_ct, box_decrypted_len, local_plain,
-                                  &plain_len);
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: Ascon AEAD decrypt failed (err=%d len=%u)",
-              (int)err, (unsigned)box_ct_len);
-    goto rx_cleanup;
-  }
-
-  /* Ed25519 signature verification — skipped in identity-degraded mode.
-   * In degraded mode the user explicitly confirmed they wish to proceed
-   * without per-frame identity binding. Incoming frames are authenticated
-   * only by Ascon-128 AEAD tag verification and the X25519 ECDH-derived
-   * box layer, matching the documented SECURITY.md contract. */
-  if (!session_is_identity_degraded()) {
-    err = session_get_peer_public_key(local_sign_pk);
-    if (err != CEEPEW_OK) {
-      ESP_LOGW("SESSION", "RX discard: peer sign_pk retrieval failed (err=%d)",
-                (int)err);
-      goto rx_cleanup;
-    }
-    err = crypto_eddsa_verify(local_sign_pk, local_box_ct, box_ct_orig_len, local_sig);
-    if (err != CEEPEW_OK) {
-      ESP_LOGW("SESSION", "RX discard: Ed25519 signature verify failed (err=%d)",
-               (int)err);
-      goto rx_cleanup;
-    }
   }
 
   /* Store peer MAC for UI display */
@@ -1853,16 +2052,6 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     session_ui_ctx_unlock();
   }
 
-  uint16_t decoded_len = (uint16_t)sizeof(local_work_frame);
-  err = compress_huffman_decompress(local_plain, plain_len, local_work_frame,
-                                    &decoded_len,
-                                    (uint16_t)sizeof(local_work_frame));
-  if (err != CEEPEW_OK) {
-    ESP_LOGW("SESSION", "RX discard: Huffman decompress failed (err=%d in=%u)",
-             (int)err, (unsigned)plain_len);
-    goto rx_cleanup;
-  }
-
   /* ── DOUBLE-ENDED POST-DERIVE SYNC ROUTING ──────────────────────────
    * A successful round-trip decryption of a 1-byte sync payload is the
    * proof that crypto_box works in both directions with the converged
@@ -1870,34 +2059,33 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
    * source MAC matches the GATT-verified peer WiFi MAC — this closes
    * the window where an attacker could relay encrypted sync frames
    * from a spoofed MAC address. */
-  if (decoded_len == 1U && (local_work_frame[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
-                            local_work_frame[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
+  if (decoded_len == 1U && (decoded_out[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
+                             decoded_out[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
     /* HARDWARE-GATED IDENTITY CHECK: verify frame src_mac matches the
      * WiFi MAC that was authenticated over the secure GATT channel. */
     CeePewErr_t mac_check = session_verify_wifi_mac_matches_frame(frame->src_mac);
     if (mac_check != CEEPEW_OK) {
-      ESP_LOGW("SESSION", "Sync frame WiFi MAC mismatch — discarding (possible relay)");
+      ESP_LOGW("SESSION", "[POST_DERIVE_SYNC] Sync frame WiFi MAC mismatch — discarding (possible relay)");
       goto rx_cleanup;
     }
 
-    CeePewErr_t sync_err = session_handle_key_sync_byte(local_work_frame[0]);
+    ESP_LOGI("SESSION", "[POST_DERIVE_SYNC] Received sync byte 0x%02X (%s)",
+             decoded_out[0], decoded_out[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ? "HELLO" : "ACK");
+
+    CeePewErr_t sync_err = session_handle_key_sync_byte(decoded_out[0]);
     if (sync_err == CEEPEW_ERR_NEED_TX) {
-      /* Responder received HELLO — send the ACK back using X25519 key.
-       * After the ACK is enqueued, call session_confirm_ack_sent() to
-       * complete the double-ended rendezvous. */
-      uint8_t ack_plain[1] = {CEEPEW_KEY_SYNC_ACK_BYTE};
-      uint8_t peer_mac[6];
-      if (g_crypto_ctx.peer_box_pubkey_valid) {
-        memcpy(peer_mac, frame->src_mac, 6U);
-        CeePewErr_t ack_err = session_send_message(ack_plain, 1U, peer_mac,
-                                   g_crypto_ctx.peer_box_pubkey);
-        if (ack_err == CEEPEW_OK) {
-          /* ACK sent successfully — confirm to the FSM so the
-           * double-ended rendezvous can complete and the sync
-           * barrier is cleared. */
+      uint8_t ack_plain[1] = { CEEPEW_KEY_SYNC_ACK_BYTE };
+      uint8_t peer_mac[6] = {0U};
+      uint8_t peer_pk[32] = {0U};
+      if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK &&
+          session_get_peer_public_key(peer_pk) == CEEPEW_OK) {
+        CeePewErr_t send_ack_err = session_send_message(ack_plain, 1U, peer_mac, peer_pk);
+        if (send_ack_err == CEEPEW_OK) {
           (void)session_confirm_ack_sent();
+          ESP_LOGI("SESSION", "[POST_DERIVE_SYNC] Sent ACK to initiator %02X:%02X:%02X:%02X:%02X:%02X",
+                   peer_mac[0], peer_mac[1], peer_mac[2], peer_mac[3], peer_mac[4], peer_mac[5]);
         } else {
-          ESP_LOGW("SESSION", "Sync ACK send failed: %d", (int)ack_err);
+          ESP_LOGW("SESSION", "[POST_DERIVE_SYNC] Failed to send ACK: %d", (int)send_ack_err);
         }
       }
     }
@@ -1905,7 +2093,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     goto rx_cleanup;
   }
 
-  err = msg_store_add(local_work_frame, decoded_len, 0U);
+  err = msg_store_add(decoded_out, decoded_len, 0U);
   if (err != CEEPEW_OK) {
     ESP_LOGW("SESSION", "RX discard: msg_store_add failed (err=%d decoded=%u)",
              (int)err, (unsigned)decoded_len);
@@ -1921,10 +2109,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
            CEEPEW_DEVICE_ID_BYTES);
     ui_event.payload.message_rx.msg_id = (uint16_t)(msg_store_count() - 1U);
 
-    BaseType_t result = xQueueSendToBack(g_ui_event_queue, &ui_event, 0U);
-    if (result != pdPASS) {
-      ESP_LOGW(TAG, "UI event queue full — dropping MESSAGE_RECEIVED event");
-    }
+    xQueueOverwrite(g_ui_event_queue, &ui_event);
   }
 
   (void)session_update_last_message_time();
@@ -1934,17 +2119,11 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
   err = CEEPEW_OK;
 
 rx_cleanup:
-  /* Secure zero all stack buffers that held key material or plaintext */
+  /* Secure zero the remaining stack buffer (local_work_frame).
+   * All intermediate crypto buffers from the pipeline stages are
+   * stack-local within those stages and are zeroed before each
+   * stage returns. Region-resident buffers are wiped at session end. */
   ceepew_secure_zero(local_work_frame, sizeof(local_work_frame));
-  ceepew_secure_zero(local_fec_out, sizeof(local_fec_out));
-  ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
-  ceepew_secure_zero(local_ascon_ct, sizeof(local_ascon_ct));
-  ceepew_secure_zero(local_plain, sizeof(local_plain));
-  ceepew_secure_zero(local_nonce, sizeof(local_nonce));
-  ceepew_secure_zero(local_sign_pk, sizeof(local_sign_pk));
-  ceepew_secure_zero(local_box_pk, sizeof(local_box_pk));
-  ceepew_secure_zero(local_ascon_key, sizeof(local_ascon_key));
-  ceepew_secure_zero(local_sig, sizeof(local_sig));
   return CEEPEW_OK;
 }
 
@@ -2097,6 +2276,7 @@ void task_session_run(void *pvParameters) {
           g_ui_ctx.transition_ready = true;
           session_ui_ctx_unlock();
           (void)ui_manager_transition_to(UI_STATE_NONCE_EXHAUSTED);
+          session_wipe();
           continue;
         }
 
@@ -2113,18 +2293,44 @@ void task_session_run(void *pvParameters) {
           }
         }
 
+        /* Check for peer radio silence: if the sync barrier is cleared
+         * (steady-state chat) and no frames have been exchanged for
+         * CEEPEW_ACTIVE_SILENT_TIMEOUT_S, return to discovery. */
+        if (session_sync_barrier_cleared() && ttl_err == CEEPEW_OK &&
+            idle_seconds >= CEEPEW_ACTIVE_SILENT_TIMEOUT_S) {
+          CEEPEW_LOG(TAG, "Peer silent for %lu s — returning to discovery",
+                     (unsigned long)idle_seconds);
+          session_ui_ctx_lock();
+          g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
+          g_ui_ctx.transition_ready = true;
+          session_ui_ctx_unlock();
+          (void)session_reset_to_discovery();
+          task_session_reset_pairing_static_state();
+          task_session_pairing_flow_reset();
+          (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+          continue;
+        }
+
         /* ── PFS HANDHSAKE RETRANSMISSION ──────────────────────────────
          * PFS_INIT is sent once during key derivation, but may be lost
          * if the peer's ESP-NOW is still initializing (BLE teardown +
          * WiFi restart window). The initiator retransmits every
          * CEEPEW_PFS_RETRY_INTERVAL_MS until PFS completes.
          *
-         * The initiator NEVER abandons PFS. Both sides use the base
-         * (non-PFS) session key until PFS_RESP arrives, at which point
-         * the deferred activation path (session_pfs_check_activate)
-         * switches to the PFS-derived key symmetrically on both sides.
-         * This prevents the key-mismatch failure mode where one side
-         * activates PFS and the other doesn't. */
+         * IMPORTANT: Do NOT call session_pfs_initiate() on retransmission.
+         * That function generates a NEW ephemeral keypair and resets the
+         * PFS state (pfs_peer_pubkey_valid = false). If PFS_RESP was lost
+         * AFTER the responder already derived a key from the OLD pubkey
+         * and activated PFS via the sync barrier, generating a new keypair
+         * here would make ascon_key diverge permanently:
+         *   - Responder activated PFS with KEY(OLD pubkey)
+         *   - Initiator sends KEY(NEW pubkey) → responds with PFS_RESP
+         *   - Initiator activates PFS with KEY(NEW pubkey)
+         *   - MISMATCH: responder has KEY(OLD), initiator has KEY(NEW)
+         *
+         * Instead, just resend the EXISTING pubkey from the original
+         * session_pfs_initiate() call. Both sides derive the same key
+         * regardless of how many times the identical pubkey is received. */
         if (session_is_active() && session_get_phase() >= 3U &&
             !session_pfs_peer_ready() && session_get_role()) {
           uint64_t now_pfs = (uint64_t)(esp_timer_get_time() / 1000LL);
@@ -2134,21 +2340,18 @@ void task_session_run(void *pvParameters) {
           uint64_t pfs_elapsed = now_pfs - s_last_pfs_retry_ms;
           if (pfs_elapsed >= CEEPEW_PFS_RETRY_INTERVAL_MS) {
             s_last_pfs_retry_ms = now_pfs - (pfs_elapsed % CEEPEW_PFS_RETRY_INTERVAL_MS);
-            CeePewErr_t pfs_err = session_pfs_initiate();
-            if (pfs_err == CEEPEW_OK) {
-              uint8_t local_pfs_pubkey[32U];
-              if (session_get_local_pfs_pubkey(local_pfs_pubkey) == CEEPEW_OK) {
-                uint8_t pfs_frame[CEEPEW_PACKET_MAX_BYTES];
-                uint16_t pfs_len = 0U;
-                if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len,
-                        sizeof(pfs_frame), local_pfs_pubkey, true) == CEEPEW_OK) {
-                  uint8_t peer_mac[6];
-                  if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK) {
-                    (void)ecc_arq_send(peer_mac, pfs_frame, pfs_len);
-                    ESP_LOGI(TAG, "PFS retry: sent PFS_INIT to %02X:%02X:%02X:%02X:%02X:%02X (t=%llu ms)",
-                             peer_mac[0], peer_mac[1], peer_mac[2],
-                             peer_mac[3], peer_mac[4], peer_mac[5], now_pfs);
-                  }
+            uint8_t local_pfs_pubkey[32U];
+            if (session_get_local_pfs_pubkey(local_pfs_pubkey) == CEEPEW_OK) {
+              uint8_t pfs_frame[CEEPEW_PACKET_MAX_BYTES];
+              uint16_t pfs_len = 0U;
+              if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len,
+                      sizeof(pfs_frame), local_pfs_pubkey, true) == CEEPEW_OK) {
+                uint8_t peer_mac[6];
+                if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK) {
+                  (void)ecc_arq_send(peer_mac, pfs_frame, pfs_len);
+                  ESP_LOGI(TAG, "PFS retry: sent PFS_INIT to %02X:%02X:%02X:%02X:%02X:%02X (t=%llu ms)",
+                           peer_mac[0], peer_mac[1], peer_mac[2],
+                           peer_mac[3], peer_mac[4], peer_mac[5], now_pfs);
                 }
               }
             }
@@ -2161,8 +2364,19 @@ void task_session_run(void *pvParameters) {
          * activate PFS now. Both sides call this independently in their
          * own main loops, guaranteeing symmetric key convergence without
          * the risk of one-sided activation that would cause a key
-         * mismatch if PFS_RESP were lost. */
+         * mismatch if PFS_RESP were lost.
+         *
+         * CRITICAL: Do NOT activate PFS before the sync barrier clears.
+         * The HELLO/ACK exchange uses the original session key — if one
+         * side switches to the PFS key prematurely, it can no longer
+         * decrypt the peer's HELLO (still encrypted with the original
+         * key). PFS activation is handled by
+         * session_clear_sync_barrier_internal() when the barrier clears.
+         * This deferred path is only for the case where PFS material
+         * arrives after the barrier already cleared (e.g. PFS_RESP
+         * delayed by ESP-NOW retransmission). */
         if (session_is_active() && session_get_phase() >= 3U &&
+            session_sync_barrier_cleared() &&
             !session_pfs_active() && session_pfs_peer_ready()) {
             session_pfs_check_activate();
         }

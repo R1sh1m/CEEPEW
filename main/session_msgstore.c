@@ -171,14 +171,6 @@ uint8_t msg_store_count(void)
     return g_msg_store.count;
 }
 
-uint32_t msg_store_usage_bytes(void)
-{
-    CEEPEW_ASSERT(g_msg_store.count <= CEEPEW_MAX_MESSAGES, CEEPEW_ERR_INTERNAL);
-    CEEPEW_ASSERT(sizeof(StoredMsg_t) > 0U, CEEPEW_ERR_INTERNAL);
-    /* Exact usage: count * size of a stored message */
-    return (uint32_t)g_msg_store.count * (uint32_t)sizeof(StoredMsg_t);
-}
-
 uint32_t session_get_last_wipe_ms(void)
 {
     /* Return last wipe timestamp in milliseconds for diagnostics/UI. Stored value is seconds. */

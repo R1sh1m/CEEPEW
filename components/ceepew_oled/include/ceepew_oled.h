@@ -116,13 +116,6 @@ esp_err_t ceepew_oled_init_panel_sh1106(ceepew_oled_t *dev,
 esp_err_t ceepew_oled_display(ceepew_oled_t *dev);
 esp_err_t ceepew_oled_display_sh1106(ceepew_oled_t *dev, uint8_t col_offset);
 esp_err_t ceepew_oled_push_tile(ceepew_oled_t *dev, uint8_t tile_col, uint8_t tile_row);
-esp_err_t ceepew_oled_set_contrast(ceepew_oled_t *dev, uint8_t contrast);
-esp_err_t ceepew_oled_set_invert(ceepew_oled_t *dev, bool invert);
-
-/* ── Fast-mode probe (stub — not supported with Arduino Wire transport) */
-
-bool ceepew_oled_probe_fast_mode(i2c_master_bus_handle_t bus, uint8_t addr);
-
 /* ── Bus recovery (SCL bit-bang) and diagnostics ─────────────────── */
 
 extern bool g_oled_in_init_stream;

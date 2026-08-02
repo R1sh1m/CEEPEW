@@ -9,7 +9,7 @@
  *
  * RX Queue:
  *   - Created in hal_radio_init() with capacity CEEPEW_QUEUE_DEPTH (8 frames)
- *   - Populated by radio_recv_cb() ISR via xQueueOverwriteFromISR()
+ *   - Populated by radio_recv_cb() ISR via xQueueSendFromISR()
  *   - If queue full, oldest frame is overwritten (FIFO eviction)
  *   - Accessed by session task via hal_radio_get_rx_queue()
  *
@@ -160,21 +160,6 @@ static bool mac_equal_ct(const uint8_t a[6], const uint8_t b[6]){
     return (diff == 0U);
 }
 
-/* Compute absolute difference of two uint64 values, clamped to INT32_MAX
- * to prevent signed overflow in the result. Used for rendezvous convergence. */
-static int32_t abs_diff_us(uint64_t a, uint64_t b){
-    uint64_t diff;
-    if (a >= b) {
-        diff = a - b;
-    } else {
-        diff = b - a;
-    }
-    if (diff > (uint64_t)INT32_MAX) {
-        return INT32_MAX;
-    }
-    return (int32_t)diff;
-}
-
 /* ── ESP-NOW callbacks ─────────────────────────────────────────────────── */
 
 /* ESP-NOW send callback (ESP-IDF v6 signature):
@@ -237,7 +222,7 @@ CeePewErr_t hal_radio_set_send_status_cb(hal_radio_send_status_cb_t cb){
  *   2. Check MAC lock — silently discard if peer mismatch
  *   3. Validate payload length
  *   4. Construct RadioFrame_t on stack (no heap)
- *   5. Post to RX queue via xQueueOverwriteFromISR()
+ *   5. Post to RX queue via xQueueSendFromISR()
  *   6. No error response — ISR must complete < 1ms
  *
  * Overrun management:
@@ -1005,7 +990,8 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
 
     if (msg_type == CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ) {
         /* ── Responder received REQ ─────────────────────────────────── */
-        if (len < 5 || s_rendezvous_state != RENDEZVOUS_IDLE) {
+        if (len < 5 || (s_rendezvous_state != RENDEZVOUS_IDLE &&
+                         s_rendezvous_state != RENDEZVOUS_GOT_REQ)) {
             return CEEPEW_ERR_PARAM;
         }
 

@@ -232,14 +232,15 @@ _Static_assert(sizeof(UIEventPayload) == 16, "UIEventPayload must be exactly 16 
  * - Pot changes: 1-2 events per ~50ms render tick (worst: 20/sec)
  * - Messages: 1 per received frame (bursty, typical 1-3/sec)
  * - State changes: 1-2 per session lifecycle
- * Depth=16 allows ~3 seconds of worst-case button spam before overflow
+ * Depth=8 covers 2 live event types (MESSAGE_RECEIVED, SESSION_ESTABLISHED)
+ * with headroom — UI drains at 5ms interval, radio max ~3 msg/sec
  *
  * Overflow strategy:
  * - If queue is full, session task MUST drop the oldest event (xQueueOverwrite)
  * - UI task never blocks on queue receive (timeout: 30ms)
  * - This ensures UI responsiveness even under event flood
  */
-#define CEEPEW_UI_EVENT_QUEUE_DEPTH 16U
+#define CEEPEW_UI_EVENT_QUEUE_DEPTH 8U
 
 /* ========================================================================== */
 /* Event Queue Handle (Created by task_session_init)                          */

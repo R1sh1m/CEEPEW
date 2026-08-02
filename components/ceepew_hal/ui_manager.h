@@ -9,8 +9,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "hal_ui.h"
-#include "ceepew_assert.h"
 #include "ceepew_config.h"
 
 #ifdef __cplusplus
@@ -48,6 +46,9 @@ typedef enum {
     UI_PAIRING_RESULT_COMMITMENT_FAIL = 4U,
     UI_PAIRING_RESULT_UNKNOWN = 5U,
     UI_PAIRING_RESULT_IDENTITY_MISSING = 6U,  /* Peer sign_pk never received; identity unverified */
+    UI_PAIRING_RESULT_ALL_ZERO_CODE = 7U,     /* Code 0000 rejected immediately */
+    UI_PAIRING_RESULT_NO_PEER = 8U,            /* No peer device discovered */
+    UI_PAIRING_RESULT_KEY_EXCHANGE_FAIL = 9U,  /* Key derivation failure */
 } PairingResultReason_t;
 
 /* Animation frame context */

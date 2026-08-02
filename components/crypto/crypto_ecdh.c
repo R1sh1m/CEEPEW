@@ -49,16 +49,15 @@ static const uint8_t s_low_order_points[7][32] = {
  * u-coordinate encodings, CEEPEW_OK otherwise.  Constant-time. */
 CeePewErr_t crypto_ecdh_reject_low_order(const uint8_t pub[32])
 {
+    uint8_t overall = 0U;
     for (uint32_t j = 0U; j < 7U; j++) {
         uint8_t acc = 0U;
         for (uint32_t i = 0U; i < 32U; i++) {
             acc |= (uint8_t)(pub[i] ^ s_low_order_points[j][i]);
         }
-        if (acc == 0U) {
-            return CEEPEW_ERR_CRYPTO;
-        }
+        overall |= (uint8_t)(acc == 0U ? 1U : 0U);
     }
-    return CEEPEW_OK;
+    return (overall != 0U) ? CEEPEW_ERR_CRYPTO : CEEPEW_OK;
 }
 
 CeePewErr_t crypto_ecdh_shared_secret(const uint8_t priv[32],

@@ -13,15 +13,6 @@
 #include "esp_log.h"
 #include <string.h>
 
-static CeePewErr_t hmac_sha256(const uint8_t *key,
-                               uint16_t key_len,
-                               const uint8_t *msg,
-                               uint16_t msg_len,
-                               uint8_t out[32U])
-{
-    return crypto_hmac_sha256(key, key_len, msg, (uint32_t)msg_len, out);
-}
-
 static void box_make_nonce_from_counter(const CryptoCtx_t *ctx, uint64_t nonce_counter, uint8_t nonce[CRYPTO_BOX_NONCEBYTES])
 {
     memcpy(nonce, ctx->session_id, 8U);
@@ -129,7 +120,7 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     uint8_t mac_key[32U];
     memcpy(mac_key, nacl_ct_buf, 32U);
     uint8_t mac[32U];
-    err = hmac_sha256(mac_key, 32U, nacl_ct_buf + CRYPTO_BOX_ZEROBYTES, msg_len, mac);
+    err = crypto_hmac_sha256(mac_key, 32U, nacl_ct_buf + CRYPTO_BOX_ZEROBYTES, (uint32_t)msg_len, mac);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
         ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
@@ -216,7 +207,7 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     uint8_t mac_key[32U];
     memcpy(mac_key, nacl_ct_buf, 32U);
     uint8_t calc_mac[32U];
-    err = hmac_sha256(mac_key, 32U, in + CRYPTO_BOX_BOXZEROBYTES, msg_len, calc_mac);
+    err = crypto_hmac_sha256(mac_key, 32U, in + CRYPTO_BOX_BOXZEROBYTES, (uint32_t)msg_len, calc_mac);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
         ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));

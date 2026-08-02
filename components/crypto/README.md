@@ -6,7 +6,7 @@ This component provides all cryptographic primitives for CEE-PEW. Most algorithm
 
 | File | Purpose |
 |------|---------|
-| `crypto_ctx.h/c` | Master context orchestrator. `crypto_ctx_init()` derives all session keys from ECDH + session code. `crypto_ctx_derive_keys()` runs the HKDF tree. `crypto_ctx_destroy()` secure-zeros all key material. |
+| `crypto_ctx.h/c` | Master crypto context. `crypto_ctx_init()` initializes PSA crypto + SHA-256 warm-up. `crypto_ctx_destroy()` secure-zeros all key material. Session key derivation is handled by `crypto_hkdf_derive()` called during pairing. |
 | `curve25519.h/c` | TweetNaCl Curve25519 scalar multiplication (`crypto_scalarmult`). Used for ECDH key agreement. |
 | `crypto_ecdh.h/c` | Ephemeral ECDH keypair generation and shared secret computation. |
 | `crypto_eddsa.h/c` | Ed25519 signing/verification (port of TweetNaCl). Used for peer identity auth. |
@@ -36,4 +36,4 @@ All secret-dependent comparisons use `ceepew_ct_equal()` (constant-time).
 ## Constants (from `main/ceepew_config.h`)
 - `CEEPEW_NONCE_HARD_LIMIT` = 2^56 (session terminates here)
 - `CEEPEW_SESSION_KEY_BYTES` = 16 (Ascon-128 key)
-- `CEEPEW_COMMITMENT_BYTES` = 16 (truncated HMAC for beacon)
+- `CEEPEW_COMMITMENT_ADV_BYTES` = 16 (truncated HMAC for beacon)

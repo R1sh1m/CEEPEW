@@ -133,6 +133,9 @@ CeePewErr_t crypto_ascon_aead_encrypt(const uint8_t key[16], const uint8_t nonce
     store64_be(&ct[out_pos + rem], s[3]);
     store64_be(&ct[out_pos + rem + 8U], s[4]);
     *ct_len = (uint16_t)(pt_len + CEEPEW_ASCON_TAG_BYTES);
+    ceepew_secure_zero((volatile void*)s, sizeof(s));
+    ceepew_secure_zero((volatile void*)&k0, sizeof(k0));
+    ceepew_secure_zero((volatile void*)&k1, sizeof(k1));
     return CEEPEW_OK;
 }
 
@@ -198,7 +201,15 @@ CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16], const uint8_t nonce
     uint8_t tag[16];
     store64_be(&tag[0], s[3]);
     store64_be(&tag[8], s[4]);
-    if (!ceepew_ct_equal(tag, &ct[msg_len], 16U)){ return CEEPEW_ERR_CRYPTO; }
+    if (!ceepew_ct_equal(tag, &ct[msg_len], 16U)){
+        ceepew_secure_zero((volatile void*)s, sizeof(s));
+        ceepew_secure_zero((volatile void*)&k0, sizeof(k0));
+        ceepew_secure_zero((volatile void*)&k1, sizeof(k1));
+        return CEEPEW_ERR_CRYPTO;
+    }
     *pt_len = msg_len;
+    ceepew_secure_zero((volatile void*)s, sizeof(s));
+    ceepew_secure_zero((volatile void*)&k0, sizeof(k0));
+    ceepew_secure_zero((volatile void*)&k1, sizeof(k1));
     return CEEPEW_OK;
 }

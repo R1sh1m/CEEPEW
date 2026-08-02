@@ -375,17 +375,6 @@ static esp_err_t send_init_stream_sh1106(ceepew_oled_t *dev)
     return rc;
 }
 
-/* ── Fast-mode probe (stub — not used with Arduino Wire transport) ── */
-
-bool ceepew_oled_probe_fast_mode(i2c_master_bus_handle_t bus, uint8_t addr)
-{
-    (void)bus;
-    (void)addr;
-    /* Fast-mode probe is not supported with the Arduino Wire transport.
-     * The Wire transport runs at a fixed 400 kHz. */
-    return false;
-}
-
 /* ── Init panel ──────────────────────────────────────────────────── */
 
 esp_err_t ceepew_oled_init_panel(ceepew_oled_t *dev,
@@ -597,38 +586,6 @@ esp_err_t ceepew_oled_push_tile(ceepew_oled_t *dev,
         }
     }
     return ESP_OK;
-}
-
-/* ── Contrast / invert ───────────────────────────────────────────── */
-
-esp_err_t ceepew_oled_set_contrast(ceepew_oled_t *dev, uint8_t contrast)
-{
-    assert(dev != NULL);
-    assert(dev->initialised);
-    assert(dev->i2c_dev != NULL);
-
-    const uint8_t cmd[4U] = {
-        0x80U,
-        CEEPEW_OLED_CMD_SET_CONTRAST,
-        0x80U,
-        contrast,
-    };
-    return ceepew_oled_i2c_transmit(dev->i2c_dev, cmd, sizeof(cmd),
-                               CEEPEW_OLED_I2C_TIMEOUT_TICKS);
-}
-
-esp_err_t ceepew_oled_set_invert(ceepew_oled_t *dev, bool invert)
-{
-    assert(dev != NULL);
-    assert(dev->initialised);
-    assert(dev->i2c_dev != NULL);
-
-    const uint8_t cmd[2U] = {
-        CEEPEW_OLED_CTRL_CMD_STREAM,
-        invert ? 0xA7U : 0xA6U,
-    };
-    return ceepew_oled_i2c_transmit(dev->i2c_dev, cmd, sizeof(cmd),
-                               CEEPEW_OLED_I2C_TIMEOUT_TICKS);
 }
 
 void ceepew_oled_bus_recover(gpio_num_t sda, gpio_num_t scl)

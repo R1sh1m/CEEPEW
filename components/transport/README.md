@@ -10,14 +10,12 @@
 
 **Key point**: BLE is **torn down completely** before ESP-NOW starts. No concurrent BLE + ESP-NOW operation.
 
-## How `transport_hop.c` Abstracts Both
+## Channel Hopping via `transport_hop.c`
 
-`transport_hop.c` provides a unified API:
-- `hop_send(data, len)` — routes to BLE (Phases 1-2) or ESP-NOW (Phase 3)
-- `hop_recv(buf, max_len)` — receives from active transport
-- `hop_switch_transport(TRANSPORT_ESPNOW)` — called during Phase 3 handoff
-
-The session FSM calls `hop_switch_transport()` only once, after both peers send HANDOFF_READY beacons and BLE is fully deinitialized.
+`transport_hop.c` implements channel hopping for ESP-NOW frequency diversity:
+- `transport_get_current_channel(ctx, nonce_counter, channel_out)` — deterministic channel from crypto context + nonce
+- `transport_hop_invalidate_key()` — zeroes cached hop key on session teardown
+- Hop sequence is a PRG-driven Fisher-Yates permutation over 9 channels (`CEEPEW_HOP_CHANNELS`), shifting every 5 seconds (`CEEPEW_HOP_INTERVAL_MS`)
 
 ## Files
 

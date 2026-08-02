@@ -2,7 +2,8 @@
 #define HAL_RGB_H
 
 #include <stdint.h>
-#include "ceepew_assert.h"
+#include "ceepew_config.h"
+#include "hal_ui_types.h"
 
 typedef enum {
     RGB_OFF = 0,
@@ -16,6 +17,7 @@ typedef enum {
     RGB_RED_BLINK,
     RGB_GREEN_BLINK,
     RGB_BLUE_BLINK,
+    RGB_RED_PULSE,          /* Smooth PWM breathing red for error states */
     RGB_WHITE_PULSE,        /* Smooth PWM breathing white */
     RGB_BLUE_PULSE,         /* Smooth PWM breathing blue  */
     RGB_GREEN_PULSE,        /* Smooth PWM breathing green */

@@ -60,7 +60,7 @@ static void session_pfs_activate(void);
 
 /* Session state machine context */
 typedef struct {
-    uint8_t  phase;                              /* 0=idle, 1=discovery, 2=pairing, 3=active */
+    volatile uint8_t  phase;                     /* 0=idle, 1=discovery, 2=pairing, 3=active */
     uint8_t  peer_mac[6];                        /* Locked after Phase 2 */
     uint64_t session_id;                         /* Deterministic per-session nonce base */
     uint8_t  device_id_self[6];                  /* Own MAC */
@@ -126,6 +126,12 @@ static bool     s_saved_self_wifi_valid = false;
  * Declared volatile so the UI task's read on Core 0 is never elided by
  * the compiler and always sees a consistent value. */
 static volatile uint64_t s_nonce_counter_display = 0ULL;
+
+/* Re-entrancy guard for session state machine transitions.
+ * Set true before any state-modifying operation (phase2_initiate,
+ * reset_to_discovery, etc.) and checked in session_phase1_init to
+ * prevent re-entrant corruption of s_session state. */
+static volatile bool s_session_fsm_locked = false;
 
 /* Phase 4: Initialize TTL tracking on session start (forward declaration) */
 static void session_init_ttl(void);
@@ -236,8 +242,19 @@ static void session_secure_zero_context(void)
 
 CeePewErr_t session_phase1_init(const uint8_t device_id[6]){
     CEEPEW_ASSERT(device_id != NULL, CEEPEW_ERR_NULL_PTR);
+
+    /* Re-entrancy guard: if the session FSM is in the middle of a state
+     * transition (e.g. session_phase2_initiate), refuse to re-initialize
+     * phase 1 because the memset would destroy in-progress state. */
+    if (s_session_fsm_locked) {
+        ESP_LOGE("session_fsm", "phase1_init BLOCKED: session FSM locked (phase=%u)",
+                 (unsigned)s_session.phase);
+        return CEEPEW_ERR_BUSY;
+    }
+
     esl_reset_callbacks();
 
+    ESP_LOGI("session_fsm", "session_phase1_init called (old_phase=%u)", (unsigned)s_session.phase);
     memset(&s_session, 0, sizeof(s_session));
 
     /* Restore self WiFi MAC from file-scope backup (survives
@@ -289,7 +306,7 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
     /* Defensive: peer MAC must be set before entering phase 2 */
     { static const uint8_t zeros[6] = {0};
-      CEEPEW_ASSERT(memcmp(s_session.device_id_peer, zeros, 6U) != 0, CEEPEW_ERR_PARAM); }
+      CEEPEW_ASSERT(ceepew_ct_equal(s_session.device_id_peer, zeros, 6U) == 0, CEEPEW_ERR_PARAM); }
 
     /* Entropy validation: reject all-zeros session code */
     uint8_t all_zeros = 1U;
@@ -299,7 +316,13 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
             break;
         }
     }
-    CEEPEW_ASSERT(!all_zeros, CEEPEW_ERR_CRYPTO);  /* All zeros indicates no entropy */
+    CEEPEW_ASSERT(!all_zeros, CEEPEW_ERR_CRYPTO);
+
+    /* Lock session FSM against re-entrant calls (e.g. unexpected
+     * session_phase1_init) while we mutate s_session state.
+     * NOTE: lock is set AFTER parameter validation asserts so that
+     * early returns do not leak the lock. */
+    s_session_fsm_locked = true;
 
     s_session.phase = 2U;
     memcpy(s_session.session_code, session_code, 32U);
@@ -312,7 +335,7 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     /* Derive a deterministic session_id using helper function */
     uint8_t session_id_bytes[8];
     CeePewErr_t err = session_compute_id(session_id_bytes);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    if (err != CEEPEW_OK) { s_session_fsm_locked = false; return err; }
 
     /* Store session_id as 64-bit value */
     s_session.session_id = ((uint64_t)session_id_bytes[0] << 56U) |
@@ -330,24 +353,45 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     /* Generate deterministic per-session Ed25519 keypair */
     uint8_t sign_seed[32];
     err = session_derive_sign_seed(s_session.device_id_self, sign_seed);
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    if (err != CEEPEW_OK) { ceepew_secure_zero(sign_seed, sizeof(sign_seed)); s_session_fsm_locked = false; return err; }
     err = crypto_eddsa_seeded_keypair(s_session.sign_pk, s_session.sign_sk, sign_seed);
     ceepew_secure_zero(sign_seed, sizeof(sign_seed));
-    CEEPEW_ASSERT(err == CEEPEW_OK, err);
+    if (err != CEEPEW_OK) { s_session_fsm_locked = false; return err; }
 
     /* Generate ephemeral X25519 keypair for crypto_box ECDH.
      * The public key is exchanged with the peer over BLE (M3).
      * The private key stays in RAM and is securely zeroed on session_end(). */
     CeePewErr_t ecdh_err = crypto_ecdh_generate_keypair(
         g_crypto_ctx.box_pubkey, g_crypto_ctx.box_privkey);
-    CEEPEW_ASSERT(ecdh_err == CEEPEW_OK, ecdh_err);
+    if (ecdh_err != CEEPEW_OK) { s_session_fsm_locked = false; return ecdh_err; }
     g_crypto_ctx.peer_box_pubkey_valid = false;
 
+    /* Phase guard: if s_session.phase was corrupted back to 1 (e.g. by an
+     * unexpected session_phase1_init or memory corruption), restore it to 2
+     * so the caller sees a consistent state.  This is a defence-in-depth
+     * check; the root cause should be investigated if this triggers. */
+    if (s_session.phase != 2U) {
+        ESP_LOGW("session_fsm", "phase2_initiate: phase corrupted from 2 to %u — recovering",
+                 (unsigned)s_session.phase);
+        s_session.phase = 2U;
+    }
+
+    s_session_fsm_locked = false;
+    ESP_LOGI("session_fsm", "phase2_initiate done: phase=%u", (unsigned)s_session.phase);
     return CEEPEW_OK;
 }
 
 CeePewErr_t session_phase2_derive_key(void){
     CEEPEW_ASSERT(s_session.phase == 2U, CEEPEW_ERR_PARAM);
+
+    /* Lock FSM to prevent concurrent session_phase1_init() from destroying
+     * key material mid-derivation (e.g. via transport_ble_restart_discovery_session()). */
+    if (s_session_fsm_locked) {
+        ESP_LOGE("session_fsm", "derive_key BLOCKED: session FSM locked (phase=%u)",
+                 (unsigned)s_session.phase);
+        return CEEPEW_ERR_BUSY;
+    }
+    s_session_fsm_locked = true;
 
     /* ── STRICT HARDWARE-GATED IDENTITY HANDOFF ──────────────────────────
      * The peer's WiFi STA MAC address must have been received and
@@ -360,6 +404,7 @@ CeePewErr_t session_phase2_derive_key(void){
     if (!s_session.device_id_peer_wifi_valid) {
         ESP_LOGE("session_fsm", "derive_key ABORT: peer WiFi MAC not verified via GATT");
         ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+        s_session_fsm_locked = false;
         return CEEPEW_ERR_PARAM;
     }
     {
@@ -367,15 +412,17 @@ CeePewErr_t session_phase2_derive_key(void){
         if (ceepew_ct_equal(s_session.device_id_peer_wifi, zeros, 6U)) {
             ESP_LOGE("session_fsm", "derive_key ABORT: peer WiFi MAC is all-zeros");
             ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+            s_session_fsm_locked = false;
             return CEEPEW_ERR_PARAM;
         }
     }
 
     /* Block key derivation if peer sign_pk is invalid and identity degraded mode is not confirmed.
-     * This prevents proceeding with unauthenticated pairings. */
+     * This prohibits proceeding with unauthenticated pairings. */
     if (!s_session.peer_sign_pk_valid && !s_session.identity_degraded) {
         ESP_LOGE("session_fsm", "derive_key ABORT: peer sign_pk invalid and identity not degraded");
         ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+        s_session_fsm_locked = false;
         return CEEPEW_ERR_AUTH_FAIL;
     }
 
@@ -526,9 +573,11 @@ CeePewErr_t session_phase2_derive_key(void){
     ceepew_secure_zero(commitment, sizeof(commitment));
     ceepew_secure_zero(hkdf_info, sizeof(hkdf_info));
 
+    s_session_fsm_locked = false;
     return CEEPEW_OK;
 
 error_cleanup:
+    s_session_fsm_locked = false;
     /* Restore region bump on error */
     g_region.bump = saved_bump;
 
@@ -634,8 +683,12 @@ CeePewErr_t session_get_peer_public_key(uint8_t peer_pk[32]){
 
 CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32])
 {
-    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(peer_pk != NULL, CEEPEW_ERR_NULL_PTR);
+    if (peer_pk == NULL) { return CEEPEW_ERR_NULL_PTR; }
+    if (s_session.phase < 2U) {
+        ESP_LOGW("session_fsm", "set_peer_public_key deferred: phase=%u (expected >=2) — caller will retry",
+                 (unsigned)s_session.phase);
+        return CEEPEW_ERR_PARAM;
+    }
 
     memcpy(s_session.peer_sign_pk, peer_pk, 32U);
     s_session.peer_sign_pk_valid = true;
@@ -695,14 +748,21 @@ CeePewErr_t session_set_self_wifi_mac(const uint8_t wifi_mac[6])
 
 CeePewErr_t session_set_peer_wifi_mac(const uint8_t wifi_mac[6])
 {
-    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(wifi_mac != NULL, CEEPEW_ERR_NULL_PTR);
+    if (wifi_mac == NULL) { return CEEPEW_ERR_NULL_PTR; }
+    if (s_session.phase < 2U) {
+        ESP_LOGW("session_fsm", "set_peer_wifi_mac deferred: phase=%u (expected >=2) — caller will retry",
+                 (unsigned)s_session.phase);
+        return CEEPEW_ERR_PARAM;
+    }
     /* Validate not all zeros */
     uint8_t all_zero = 1U;
     for (uint8_t i = 0U; i < 6U; i++) {
         if (wifi_mac[i] != 0U) { all_zero = 0U; break; }
     }
-    CEEPEW_ASSERT(!all_zero, CEEPEW_ERR_PARAM);
+    if (all_zero) {
+        ESP_LOGE("session_fsm", "set_peer_wifi_mac: all-zeros MAC rejected");
+        return CEEPEW_ERR_PARAM;
+    }
     memcpy(s_session.device_id_peer_wifi, wifi_mac, 6U);
     s_session.device_id_peer_wifi_valid = true;
     ESP_LOGI("session_fsm", "Peer WiFi MAC registered: %02X:%02X:%02X:%02X:%02X:%02X",
@@ -992,12 +1052,15 @@ static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx)
      * sequence counters start from zero for the first chat message. */
     session_flush_arq_and_rx_queue();
 
-    /* ── ACTIVATE PFS KEY ROTATION ───────────────────────────────────
-     * Both sides converge here at the same logical event (HELLO/ACK
-     * round-trip verified), so switching the active Ascon key from the
-     * original session-derived key to the PFS-derived key is safe.
-     * session_pfs_activate() is a no-op if no PFS key was exchanged. */
-    session_pfs_activate();
+    /* ── DEFERRED PFS KEY ROTATION ───────────────────────────────────
+     * PFS activation is handled by the session task main loop
+     * (session_pfs_check_activate in task_session.c step 3), which
+     * requires BOTH the sync barrier to be cleared AND the peer's PFS
+     * key to have arrived.  This ensures both sides converge
+     * symmetrically — if one side activated PFS immediately here while
+     * the other side's HELLO/ACK was still in flight with the original
+     * key, that side would permanently lose the ability to decrypt the
+     * peer's frames. */
 
     /* Post UI_EVENT_SESSION_ESTABLISHED to notify UI task (Core 0) that
      * the encrypted HELLO/ACK round-trip completed and session is ready.
@@ -1051,6 +1114,10 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
         if (magic_byte != CEEPEW_KEY_SYNC_ACK_BYTE) {
             return CEEPEW_ERR_PARAM;
         }
+        /* If barrier already cleared, duplicate ACK is a no-op. */
+        if (s_session.sync_barrier_cleared) {
+            return CEEPEW_OK;
+        }
         /* Initiator received ACK — proof that responder has correct keys.
          * Mark peer-encrypted proof received and clear the barrier. */
         s_session.sync_peer_encrypted_received = true;
@@ -1059,6 +1126,14 @@ CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte)
         if (magic_byte != CEEPEW_KEY_SYNC_HELLO_BYTE) {
             return CEEPEW_ERR_PARAM;
         }
+
+        /* If the barrier is already cleared, this is a duplicate HELLO
+         * arriving after the rendezvous completed — treat as idempotent
+         * no-op rather than re-requesting an ACK send. */
+        if (s_session.sync_barrier_cleared) {
+            return CEEPEW_OK;
+        }
+
         /* Responder received HELLO — proof that initiator has correct keys.
          * Mark peer-encrypted proof received but do NOT clear the barrier yet.
          * Return CEEPEW_ERR_NEED_TX so the caller sends the ACK.
@@ -1214,6 +1289,7 @@ CeePewErr_t session_mac_lock_check(const uint8_t peer_mac[6]){
 /* ────────────────────────────────────────────────────────────────────── */
 
 CeePewErr_t session_end(void){
+    ESP_LOGI("session_fsm", "session_end called (phase=%u)", (unsigned)s_session.phase);
     CeePewErr_t err = ceepew_pipeline_deinit();
     if (err != CEEPEW_OK) { /* continue with zeroing */ }
     err = crypto_ctx_destroy();
@@ -1556,6 +1632,12 @@ CeePewErr_t session_wipe(void)
     /* Re-enable the pipeline for the next session attempt */
     err = ceepew_pipeline_init();
     if (err != CEEPEW_OK) { CEEPEW_LOG("SESSION", "pipeline_init failed: %d", err); }
+
+    /* Clear test-shadow state flags so the next pairing attempt computes
+     * a fresh commitment from the actual session code, not a stale test value. */
+    s_test_commitment_set = false;
+    s_test_id_set = false;
+    s_test_nc_set = false;
 
     /* Reset UI to discovery mode */
     ui_manager_reset_to_discovery();

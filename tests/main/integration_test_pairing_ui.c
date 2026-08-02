@@ -26,6 +26,14 @@ static const uint8_t SESSION_CODE[32] = {
     0x39, 0x30, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46
 };
 
+/* Mock Ed25519 public key for tests that simulate a GATT identity exchange. */
+static const uint8_t MOCK_PEER_SIGN_PK[32] = {
+    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+    0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
+};
+
 static bool pairing_ui_check(bool ok, const char *label)
 {
     if (ok) {
@@ -58,6 +66,9 @@ static bool pairing_ui_run_session(const uint8_t self_mac[6],
     }
 
     if (!pairing_ui_check(session_phase2_initiate(SESSION_CODE) == CEEPEW_OK, "session_phase2_initiate")) {
+        return false;
+    }
+    if (!pairing_ui_check(session_set_peer_public_key(MOCK_PEER_SIGN_PK) == CEEPEW_OK, "session_set_peer_public_key")) {
         return false;
     }
     if (!pairing_ui_check(session_set_self_wifi_mac(self_mac) == CEEPEW_OK, "session_set_self_wifi_mac")) {

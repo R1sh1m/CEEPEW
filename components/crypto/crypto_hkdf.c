@@ -1,87 +1,12 @@
 /* components/crypto/crypto_hkdf.c */
 
 #include "crypto_hkdf.h"
+#include "crypto_hmac.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "ceepew_security_utils.h"
 #include <stdint.h>
 #include <string.h>
-
-#include <mbedtls/md.h>
-/* Implement HKDF-Extract/Expand using a small HMAC-SHA256 implemented
- * on top of the one-shot mbedtls_sha256_ret() helper (avoids md context
- * types that may not be available in all IDF/mbedtls headers). */
-
-static CeePewErr_t hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t msg_len, uint8_t out[32U]) {
-    CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(key != NULL || key_len == 0U, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
-
-    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (info == NULL) { return CEEPEW_ERR_CRYPTO; }
-
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-
-    int rc = mbedtls_md_setup(&ctx, info, 0);
-    if (rc != 0) {
-        mbedtls_md_free(&ctx);
-        return CEEPEW_ERR_CRYPTO;
-    }
-
-    const size_t block_size = 64U;
-    uint8_t key_block[64U];
-    uint8_t inner_pad[64U];
-    uint8_t outer_pad[64U];
-    uint8_t inner_hash[32U];
-
-    memset(key_block, 0U, sizeof(key_block));
-    if (key_len > block_size) {
-        rc = mbedtls_md_starts(&ctx);
-        if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-        rc = mbedtls_md_update(&ctx, key, key_len);
-        if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-        rc = mbedtls_md_finish(&ctx, key_block);
-        if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    }
-    else if (key_len > 0U) { memcpy(key_block, key, key_len); }
-
-    for (uint8_t i = 0U; i < block_size; i++) {
-        inner_pad[i] = (uint8_t)(key_block[i] ^ 0x36U);
-        outer_pad[i] = (uint8_t)(key_block[i] ^ 0x5CU);
-    }
-
-    rc = mbedtls_md_starts(&ctx);
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    rc = mbedtls_md_update(&ctx, inner_pad, block_size);
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    rc = mbedtls_md_update(&ctx, msg, msg_len);
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    rc = mbedtls_md_finish(&ctx, inner_hash);
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-
-    rc = mbedtls_md_starts(&ctx);
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    rc = mbedtls_md_update(&ctx, outer_pad, block_size);
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    rc = mbedtls_md_update(&ctx, inner_hash, sizeof(inner_hash));
-    if (rc != 0) { mbedtls_md_free(&ctx); return CEEPEW_ERR_CRYPTO; }
-    rc = mbedtls_md_finish(&ctx, out);
-    mbedtls_md_free(&ctx);
-    if (rc != 0) { return CEEPEW_ERR_CRYPTO; }
-
-    volatile uint8_t *vk = (volatile uint8_t *)key_block;
-    volatile uint8_t *vi = (volatile uint8_t *)inner_pad;
-    volatile uint8_t *vo = (volatile uint8_t *)outer_pad;
-    volatile uint8_t *vh = (volatile uint8_t *)inner_hash;
-    for (uint32_t i = 0U; i < sizeof(key_block); i++) { vk[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(inner_pad); i++) { vi[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(outer_pad); i++) { vo[i] = 0U; }
-    for (uint32_t i = 0U; i < sizeof(inner_hash); i++) { vh[i] = 0U; }
-    __asm__ __volatile__("" ::: "memory");
-
-    return CEEPEW_OK;
-}
 
 /* SECURITY: The HKDF salt must be SHA256(digital_sum_mix(code) || code) as
  * per Final Spec §3.3. The session code is the only secret the HKDF caller
@@ -131,7 +56,7 @@ CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_
     CEEPEW_ASSERT(info != NULL || info_len == 0U, CEEPEW_ERR_NULL_PTR);
 
     uint8_t prk[32U];
-    CeePewErr_t err = hmac_sha256(salt, (size_t)salt_len, ikm, (size_t)ikm_len, prk);
+    CeePewErr_t err = crypto_hmac_sha256(salt, (uint16_t)salt_len, ikm, (uint32_t)ikm_len, prk);
     if (err != CEEPEW_OK) {
         return err;
     }
@@ -154,11 +79,12 @@ CeePewErr_t crypto_hkdf_derive(const uint8_t *ikm, uint8_t ikm_len, const uint8_
         }
         input_buf[pos++] = (uint8_t)(block + 1U);
 
-        err = hmac_sha256(prk, sizeof(prk), input_buf, pos, t);
+        err = crypto_hmac_sha256(prk, (uint16_t)sizeof(prk), input_buf, (uint32_t)pos, t);
         if (err != CEEPEW_OK) {
             volatile uint8_t *vp = (volatile uint8_t *)prk;
             for (uint32_t i = 0U; i < sizeof(prk); i++) { vp[i] = 0U; }
             __asm__ __volatile__("" ::: "memory");
+            ceepew_secure_zero(t, sizeof(t));
             return err;
         }
 
@@ -204,8 +130,9 @@ CeePewErr_t crypto_hkdf_expand(const uint8_t *prk, const uint8_t *info, uint8_t 
         }
         input_buf[pos++] = (uint8_t)(block + 1U);
 
-        CeePewErr_t err = hmac_sha256(prk, 32U, input_buf, pos, t);
+        CeePewErr_t err = crypto_hmac_sha256(prk, 32U, input_buf, (uint32_t)pos, t);
         if (err != CEEPEW_OK) {
+            ceepew_secure_zero(t, sizeof(t));
             return err;
         }
 

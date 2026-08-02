@@ -790,12 +790,13 @@ static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
         p++;
     }
 
-    /* Cycle only on text length (not text_len_px + max_width).
-     * This ensures text wraps seamlessly without a blank gap.
-     * When text exits left, it immediately re-enters from right.
-     * Result: text is ALWAYS at least partially visible on screen. */
+    if (text_len_px == 0U) { return; }
+
+    /* Cycle over text length so scrolling loops continuously.
+     * A duplicate copy is rendered at text_len_px to the right
+     * so when the primary exits left the duplicate enters from
+     * the right — no blank gap. */
     uint16_t cycle_px = text_len_px;
-    if (cycle_px == 0U) { return; }
 
     /* Use provided scroll offset, or calculate independently if 0 */
     uint32_t scroll_px;
@@ -807,16 +808,21 @@ static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
     }
     int16_t text_x = (int16_t)x - (int16_t)scroll_px;
 
-    /* Render each character, clipping to [x .. x+max_width) */
+    /* Render each character twice (primary + wrap copy one cycle right),
+     * clipping to [x .. x+max_width) */
     const char *c = str;
     uint8_t char_idx = 0U;
     while (*c != '\0' && char_idx < 128U) {
         int16_t char_x = text_x + (int16_t)(char_idx * 6U);
         int16_t char_x_end = char_x + 5;
+        int16_t wrap_x = (int16_t)(char_x + (int16_t)text_len_px);
+        int16_t wrap_x_end = (int16_t)(wrap_x + 5);
 
-        /* Draw if any part of character is visible within [x .. x+max_width) */
         if (char_x_end >= (int16_t)x && char_x < (int16_t)(x + max_width)) {
             ui_draw_char_at(char_x, y, *c);
+        }
+        if (wrap_x_end >= (int16_t)x && wrap_x < (int16_t)(x + max_width)) {
+            ui_draw_char_at(wrap_x, y, *c);
         }
 
         char_idx++;
@@ -996,22 +1002,23 @@ static CeePewErr_t render_boot_anim(void)
 
     uint32_t f = g_ui_ctx.anim.frame_count;
 
-    /* ── Phase 1 (f 0–14): Star particles converge ── */
-    if (f < 40U) {
-       uint32_t progress = (f < 20U) ? f : 20U;  /* clamp at 20 */
-       for (uint8_t i = 0U; i < 12U; i++) {
-           int16_t px = (int16_t)BOOT_STARS[i].sx
-                      + (int16_t)((((int32_t)64 - BOOT_STARS[i].sx) * (int32_t)progress) / 30);
-           int16_t py = (int16_t)BOOT_STARS[i].sy
-                      + (int16_t)((((int32_t)32 - BOOT_STARS[i].sy) * (int32_t)progress) / 30);
-            if (f < 30U) {
-                /* Moving: draw as 2x2 pixel */
-                draw_pixel((uint8_t)px, (uint8_t)py);
-                if (px + 1 < 128 && py + 1 < 64) {
-                    draw_pixel((uint8_t)(px + 1), (uint8_t)(py + 1));
-                }
+    /* ── Phase 1 (f 0–18): Star particles converge into center and dissolve ── */
+    if (f < 19U) {
+        uint32_t progress = (f * 30U) / 18U;  /* smooth 0 to 30 over 18 frames */
+        if (progress > 30U) { progress = 30U; }
+
+        for (uint8_t i = 0U; i < 12U; i++) {
+            int16_t px = (int16_t)BOOT_STARS[i].sx
+                       + (int16_t)((((int32_t)64 - BOOT_STARS[i].sx) * (int32_t)progress) / 30);
+            int16_t py = (int16_t)BOOT_STARS[i].sy
+                       + (int16_t)((((int32_t)32 - BOOT_STARS[i].sy) * (int32_t)progress) / 30);
+
+            draw_pixel((uint8_t)px, (uint8_t)py);
+            /* Draw as 2x2 for outer frames, tapering down to 1x1 near center */
+            if (f < 15U && px + 1 < 128 && py + 1 < 64) {
+                draw_pixel((uint8_t)(px + 1), (uint8_t)(py + 1));
             }
-       }
+        }
     }
 
     /* ── Phase 2 (f 20–39): Logo letter-by-letter, each drops from top ── */
@@ -1044,32 +1051,64 @@ static CeePewErr_t render_boot_anim(void)
        }
     }
 
-    /* ── Phase 3 (f 42–57): Chunky loading bar fills ── */
-    if (f >= 42U && f < 58U) {
-       /* Bar border (moved up to increase gap below with frame) */
-       HalUIRect_t border = { .x = 14U, .y = 42U, .w = 100U, .h = 9U };
-       hal_ui_rect(&border, HAL_UI_WHITE);
+    /* ── Phase 3 (f >= 42): Chunky loading bar fills ── */
+    if (f >= 42U) {
+        /* Bar border (moved up to increase gap below with frame) */
+        HalUIRect_t border = { .x = 14U, .y = 42U, .w = 100U, .h = 9U };
+        hal_ui_rect(&border, HAL_UI_WHITE);
 
-       /* Chunky fill — 4-px wide segments with 1-px gaps */
-       uint32_t elapsed = f - 42U;
-       uint8_t  seg_count = (elapsed < 15U) ? (uint8_t)((elapsed * 12U) / 15U) : 12U;
-       for (uint8_t s = 0U; s < seg_count; s++) {
-           uint8_t seg_x = (uint8_t)(16U + s * 8U);
-           /* Safety clamp: prevent segment from extending beyond 120px boundary */
-           if (seg_x + 7U > 120U) break;
-           HalUIRect_t seg = { .x = seg_x, .y = (uint8_t)(border.y + 2U), .w = 7U, .h = (uint8_t)(border.h - 4U) };
-           hal_ui_rect_fill(&seg, HAL_UI_WHITE);
-       }
+        /* Chunky fill — 4-px wide segments with 1-px gaps */
+        uint32_t elapsed = (f >= 42U && f < 58U) ? (f - 42U) : 15U;
+        uint8_t  seg_count = (elapsed < 15U) ? (uint8_t)((elapsed * 12U) / 15U) : 12U;
+        for (uint8_t s = 0U; s < seg_count; s++) {
+            uint8_t seg_x = (uint8_t)(16U + s * 8U);
+            /* Safety clamp: prevent segment from extending beyond 120px boundary */
+            if (seg_x + 7U > 120U) break;
+            HalUIRect_t seg = { .x = seg_x, .y = (uint8_t)(border.y + 2U), .w = 7U, .h = (uint8_t)(border.h - 4U) };
+            hal_ui_rect_fill(&seg, HAL_UI_WHITE);
+        }
 
-       /* Percentage counter — placed below bar with clear separation */
-       uint8_t pct = (seg_count * 100U) / 12U;
-       char pct_str[5U];
-       (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
-       hal_ui_text(50U, 54U, pct_str, HAL_UI_WHITE);
+        /* Percentage counter — placed below bar with clear separation */
+        uint8_t pct = (seg_count * 100U) / 12U;
+        char pct_str[5U];
+        (void)snprintf(pct_str, sizeof(pct_str), "%3u%%", (unsigned int)pct);
+        hal_ui_text(50U, 54U, pct_str, HAL_UI_WHITE);
     }
 
-    /* ── Phase 4 (f >= 58): Transition ── */
+    /* ── Phase 4 (f 58–69): Rectangular border frame draws in from 4 corners ── */
     if (f >= 58U) {
+        uint32_t bf = f - 58U;
+        uint8_t arm_h = (bf < 12U) ? (uint8_t)(bf * 6U) : 64U;
+        if (arm_h > 64U) { arm_h = 64U; }
+        uint8_t arm_v = arm_h / 2U;
+
+        /* Top-left corner → extends right and down */
+        draw_hline(0U, 0U, arm_h);
+        draw_vline(0U, 0U, arm_v);
+
+        /* Top-right corner → extends left and down */
+        if (arm_h <= 128U) {
+            draw_hline((uint8_t)(128U - arm_h), 0U, arm_h);
+        }
+        draw_vline(127U, 0U, arm_v);
+
+        /* Bottom-left corner → extends right and up */
+        draw_hline(0U, 63U, arm_h);
+        if (arm_v <= 64U) {
+            draw_vline(0U, (uint8_t)(64U - arm_v), arm_v);
+        }
+
+        /* Bottom-right corner → extends left and up */
+        if (arm_h <= 128U) {
+            draw_hline((uint8_t)(128U - arm_h), 63U, arm_h);
+        }
+        if (arm_v <= 64U) {
+            draw_vline(127U, (uint8_t)(64U - arm_v), arm_v);
+        }
+    }
+
+    /* ── Phase 5 (f >= 70): Transition to Discovery ── */
+    if (f >= 70U) {
         g_ui_ctx.anim.frame_count = 0U;
         (void)ui_manager_transition_to(UI_STATE_DISCOVERY);
         g_ui_ctx.transition_ready = true;
@@ -1327,20 +1366,24 @@ static CeePewErr_t render_discovery(void)
      * length so each label loops seamlessly without a hardcoded cycle. */
     uint32_t shared_scroll_px = (g_ui_ctx.anim.frame_count / 3U);
 
-    /* Fixed title centered across full screen width (above divider) */
-    ui_draw_centered_text(Y_TITLE, "DISCOVERING PEERS");
-
     /* ── Peer discovery feedback ── */
     const BlePeerRecord_t *peer = transport_ble_get_peer();
     const bool peer_visible = (peer != NULL);
 
+    /* Dynamic title: "PEER FOUND" when visible, "DISCOVERING PEERS" otherwise */
+    ui_draw_centered_text(Y_TITLE, peer_visible ? "PEER FOUND" : "DISCOVERING PEERS");
+
     if (peer_visible) {
-       /* Peer found: show MAC, RSSI, pair prompt */
-       char peer_id[10U];
-       (void)snprintf(peer_id, sizeof(peer_id), "ID:%02X%02X%02X",
-                      peer->peer_mac[3], peer->peer_mac[4],
-                      peer->peer_mac[5]);
-       hal_ui_text(RPANEL_X, Y_PEER_ID, peer_id, HAL_UI_WHITE);
+       /* Peer found: show name, RSSI, pair prompt */
+       char peer_name_disp[16U];
+       if (peer->name_len > 0U && peer->name[0U] != '\0') {
+           (void)snprintf(peer_name_disp, sizeof(peer_name_disp), "%.15s", (const char *)peer->name);
+       } else {
+           (void)snprintf(peer_name_disp, sizeof(peer_name_disp), "ID:%02X%02X%02X",
+                          peer->peer_mac[3], peer->peer_mac[4],
+                          peer->peer_mac[5]);
+       }
+       ui_draw_rotating_text(RPANEL_X, Y_PEER_ID, peer_name_disp, RPANEL_WIDTH, shared_scroll_px);
 
        int16_t rssi_smooth = (int16_t)(g_ble_ctx.peer_rssi_smooth_x8 / 8);
        if (rssi_smooth < -90) { rssi_smooth = -90; }
@@ -1353,11 +1396,9 @@ static CeePewErr_t render_discovery(void)
        (void)snprintf(rssi_str, sizeof(rssi_str), "%ddBm", (int)rssi_smooth);
        hal_ui_text(RPANEL_X, Y_RSSI_DBM, rssi_str, HAL_UI_WHITE);
 
-       /* Prompt user to press the button to begin pairing (only if not already confirmed) */
-       if (!g_ble_ctx.commitment_verified && !transport_ble_handoff_ready()) {
-           hal_ui_text(RPANEL_X, Y_PAIR_BTN, "BTN:PAIR", HAL_UI_WHITE);
-           hal_ui_text(RPANEL_X, Y_HINT, "press btn", HAL_UI_WHITE);
-       }
+       /* Prompt user to press the button to begin pairing */
+       hal_ui_text(RPANEL_X, Y_PAIR_BTN, "BTN:PAIR", HAL_UI_WHITE);
+       hal_ui_text(RPANEL_X, Y_HINT, "press btn", HAL_UI_WHITE);
 
        /* Blip rendering — only visible while the peer is fresh */
        uint8_t blip_r = (uint8_t)(
@@ -1442,15 +1483,17 @@ static CeePewErr_t render_discovery(void)
 static const char *ui_pairing_result_reason_text(uint8_t reason)
 {
     switch ((PairingResultReason_t)reason) {
-        case UI_PAIRING_RESULT_SUCCESS: return "PAIRING COMPLETE";
-        case UI_PAIRING_RESULT_TIMED_OUT: return "PAIRING TIMED OUT";
-        case UI_PAIRING_RESULT_LINK_FAIL: return "PAIRING LINK FAILED";
-        case UI_PAIRING_RESULT_COMMITMENT_FAIL: return "PAIRING MISMATCH";
-        case UI_PAIRING_RESULT_IDENTITY_MISSING:
-        return "IDENTITY UNVERIFIED";
-    case UI_PAIRING_RESULT_UNKNOWN:
-    case UI_PAIRING_RESULT_NONE:
-    default: return "PAIRING FAILED";
+        case UI_PAIRING_RESULT_SUCCESS:          return "PAIRING COMPLETE";
+        case UI_PAIRING_RESULT_ALL_ZERO_CODE:    return "ALL ZERO CODE";
+        case UI_PAIRING_RESULT_TIMED_OUT:        return "PAIRING TIMED OUT";
+        case UI_PAIRING_RESULT_LINK_FAIL:        return "PAIRING LINK FAILED";
+        case UI_PAIRING_RESULT_COMMITMENT_FAIL:  return "PAIRING MISMATCH";
+        case UI_PAIRING_RESULT_IDENTITY_MISSING: return "IDENTITY UNVERIFIED";
+        case UI_PAIRING_RESULT_NO_PEER:          return "NO PEER FOUND";
+        case UI_PAIRING_RESULT_KEY_EXCHANGE_FAIL:return "KEY EXCH FAILED";
+        case UI_PAIRING_RESULT_UNKNOWN:
+        case UI_PAIRING_RESULT_NONE:
+        default:                                 return "PAIRING FAILED";
     }
 }
 
@@ -1459,18 +1502,24 @@ static const char *ui_pairing_result_detail_text(uint8_t reason)
     switch ((PairingResultReason_t)reason) {
         case UI_PAIRING_RESULT_SUCCESS:
             return "Link established cleanly.";
+        case UI_PAIRING_RESULT_ALL_ZERO_CODE:
+            return "Code 0000 not allowed. Please enter a non-zero code.";
         case UI_PAIRING_RESULT_TIMED_OUT:
-            return "Timer expired before handshake.";
+            return "Pairing window expired before completion.";
         case UI_PAIRING_RESULT_LINK_FAIL:
-            return "Pairing Failed. Bring devices closer";
+            return "BLE link lost. Move devices closer & retry.";
         case UI_PAIRING_RESULT_COMMITMENT_FAIL:
-            return "Code mismatch. Verify codes match.";
+            return "Code mismatch. Verify matching codes on both.";
         case UI_PAIRING_RESULT_IDENTITY_MISSING:
-            return "Peer identity not confirmed. Session will be marked UNVERIFIED.";
+            return "Peer key unconfirmed. Re-pair to authenticate.";
+        case UI_PAIRING_RESULT_NO_PEER:
+            return "No peer device found nearby. Bring peer closer.";
+        case UI_PAIRING_RESULT_KEY_EXCHANGE_FAIL:
+            return "Key derivation failed. Please try pairing again.";
         case UI_PAIRING_RESULT_UNKNOWN:
         case UI_PAIRING_RESULT_NONE:
         default:
-            return "Pairing did not finish cleanly.";
+            return "Pairing did not finish cleanly. Press button.";
     }
 }
 
@@ -1683,29 +1732,22 @@ static CeePewErr_t render_pairing_failed(void)
     ui_draw_centered_text(2U, "PAIRING FAILED");
     draw_hline(0U, 11U, 128U);
 
-    ui_draw_centered_text(15U, reason);
+    ui_draw_centered_text(13U, reason);
 
-    HalUIRect_t detail_box = { .x = 8U, .y = 22U, .w = 112U, .h = 22U };
+    /* Enlarged detail box: 120px wide, 27px high (y=22 to 49) to hold up to 3 lines cleanly */
+    HalUIRect_t detail_box = { .x = 4U, .y = 22U, .w = 120U, .h = 27U };
     hal_ui_rect(&detail_box, HAL_UI_WHITE);
-    ui_draw_text_wrapped(12U, 25U, detail, 102U, 8U);
+    ui_draw_text_wrapped(6U, 24U, detail, 116U, 8U);
 
-    /* Footer: "Press button" + blinking square on the same line */
+    /* Footer: "Press button" + blinking square centered on line 53 */
     {
-        const char *footer;
-        switch ((PairingResultReason_t)g_ui_ctx.pairing_result_reason) {
-            case UI_PAIRING_RESULT_LINK_FAIL:
-                footer = "Bring closer,";
-                break;
-            case UI_PAIRING_RESULT_TIMED_OUT:
-            case UI_PAIRING_RESULT_COMMITMENT_FAIL:
-            default:
-                footer = "Press button";
-                break;
-        }
-        hal_ui_text(8U, Y_STATUS, footer, HAL_UI_WHITE);
-        /* Blinking filled square aligned after the text */
+        const char *footer = "Press button";
+        uint8_t flen = (uint8_t)strlen(footer);
+        uint8_t fx = (uint8_t)(((uint16_t)HAL_UI_WIDTH_PX - (uint16_t)flen * 6U) / 2U);
+        hal_ui_text(fx, 53U, footer, HAL_UI_WHITE);
+        /* Blinking filled square aligned after footer text */
         if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
-            HalUIRect_t sq = { .x = 92U, .y = Y_STATUS, .w = 6U, .h = 6U };
+            HalUIRect_t sq = { .x = (uint8_t)(fx + flen * 6U + 4U), .y = 53U, .w = 5U, .h = 5U };
             hal_ui_rect_fill(&sq, HAL_UI_WHITE);
         }
     }
@@ -1746,9 +1788,9 @@ static CeePewErr_t render_pairing_degraded(void)
     ui_draw_centered_text(48U, "BTN=continue");
     ui_draw_centered_text(56U, "HOLD=cancel");
 
-    /* Blinking indicator square */
+    /* Blinking indicator square (positioned after HOLD=cancel text at x=104U, y=56U) */
     if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
-        HalUIRect_t sq = { .x = 62U, .y = 60U, .w = 4U, .h = 4U };
+        HalUIRect_t sq = { .x = 104U, .y = 56U, .w = 4U, .h = 4U };
         hal_ui_rect_fill(&sq, HAL_UI_WHITE);
     }
 
@@ -1813,12 +1855,12 @@ static CeePewErr_t render_confirm(void)
     } else {
         const char *spin = "|/-\\";
         char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
+        hal_ui_text(4U, 50U, sp, HAL_UI_WHITE);
         if (!g_ble_ctx.peer_commitment_pending && !g_ble_ctx.commitment_verified) {
-            ui_draw_centered_text(50U, "Waiting for peer...");
+            hal_ui_text(12U, 50U, "Waiting for peer...", HAL_UI_WHITE);
         } else {
-            ui_draw_centered_text(50U, "Verifying...");
+            hal_ui_text(12U, 50U, "Verifying...", HAL_UI_WHITE);
         }
-        hal_ui_text(10U, 50U, sp, HAL_UI_WHITE);
     }
 
     g_ui_ctx.anim.frame_count++;
@@ -2347,8 +2389,12 @@ CeePewErr_t ui_crypto_show_status(uint8_t status)
     uint8_t y_pos = Y_STATUS;
 
     if (status == 0U) {
-        /* Waiting for peer */
-        ui_draw_text_wrapped(8U, y_pos, "Waiting for peer...", 120U, 8U);
+        /* Waiting for peer with animated spinner */
+        const char *spin = "|/-\\";
+        uint32_t f = g_ui_ctx.anim.frame_count;
+        char sp[2U] = { spin[(f / 4U) % 4U], '\0' };
+        hal_ui_text(4U, y_pos, sp, HAL_UI_WHITE);
+        hal_ui_text(14U, y_pos, "Waiting for peer...", HAL_UI_WHITE);
     } else if (status == 1U) {
         /* Match - display checkmark and "MATCH" */
         hal_ui_char(8U, y_pos, (char)251, HAL_UI_WHITE);  /* checkmark symbol */
@@ -2609,8 +2655,8 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_prev = false;
             g_ui_ctx.reject_sequence_start_ms = 0U;
             g_ui_ctx.error_start_ms = 0U;
-            /* Trigger red LED pulse for pairing failure */
-            (void)rgb_set_pattern(RGB_RED_BLINK);
+            /* Trigger red PWM breathing LED for pairing failure */
+            (void)rgb_set_pattern(RGB_RED_PULSE);
 
             /* Force immediate restart of advertising/scan so the peer can
              * rediscover us during the hold period. */
@@ -2860,12 +2906,10 @@ CeePewErr_t ui_manager_update(void)
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                          ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
             if (dur >= 1500U) {
-                /* Long press = cancel → transition to PAIRING_FAILED */
+                /* Long press = cancel → return to discovery */
                 ESP_LOGW("ui", "PAIRING_DEGRADED: long press (%u ms) — cancelling degraded mode",
                          (unsigned)dur);
-                g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_UNKNOWN;
-                (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
-                g_ui_ctx.transition_ready = true;
+                (void)ui_restart_discovery_from_pairing();
             } else {
                 /* Short press = confirm degraded mode */
                 ESP_LOGW("ui", "PAIRING_DEGRADED: short press (%u ms) — confirming degraded identity",
@@ -2926,13 +2970,23 @@ CeePewErr_t ui_manager_update(void)
             uint32_t dur = 0U;
             if (now_ms >= g_ui_ctx.button_press_start_ms) { dur = now_ms - g_ui_ctx.button_press_start_ms; }
 
-            const uint32_t HOLD_MS = 1000U; /* press-and-hold threshold */
-            const uint32_t ENTRY_ARM_MS = 700U;
+            const uint32_t HOLD_MS = 600U;
+            const uint32_t ENTRY_ARM_MS = 700U; /* must be on code entry for 700ms before hold accepted */
             if (dur >= HOLD_MS &&
                 g_ui_ctx.code_entry_start_ms != 0U &&
                 now_ms >= g_ui_ctx.code_entry_start_ms &&
                 (now_ms - g_ui_ctx.code_entry_start_ms) >= ENTRY_ARM_MS) {
-                if (transport_ble_has_peer_cached()) {
+                /* Check if entered passcode is "0000" (all zero code not allowed) */
+                bool is_all_zero = (g_ui_ctx.code_digits[0] == '0' || g_ui_ctx.code_digits[0] == 0U) &&
+                                   (g_ui_ctx.code_digits[1] == '0' || g_ui_ctx.code_digits[1] == 0U) &&
+                                   (g_ui_ctx.code_digits[2] == '0' || g_ui_ctx.code_digits[2] == 0U) &&
+                                   (g_ui_ctx.code_digits[3] == '0' || g_ui_ctx.code_digits[3] == 0U);
+                if (is_all_zero) {
+                    ESP_LOGW("ui", "pairing confirm rejected: all-zero passcode 0000");
+                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_ALL_ZERO_CODE;
+                    (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
+                    g_ui_ctx.transition_ready = true;
+                } else if (transport_ble_has_peer_cached()) {
                     /* Confirm code and start verification */
                     memcpy(g_ui_ctx.peer_mac, g_ble_ctx.peer_mac, 6U);
                     (void)ui_manager_transition_to(UI_STATE_CONFIRM);
@@ -2940,7 +2994,7 @@ CeePewErr_t ui_manager_update(void)
                     g_ui_ctx.transition_ready = true;
                 } else {
                     ESP_LOGW("ui", "pairing confirm ignored: peer unavailable");
-                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_LINK_FAIL;
+                    g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_NO_PEER;
                     (void)ui_manager_transition_to(UI_STATE_PAIRING_FAILED);
                     g_ui_ctx.transition_ready = true;
                 }
@@ -2952,18 +3006,37 @@ CeePewErr_t ui_manager_update(void)
         }
 
     } else if (g_ui_ctx.current_state == UI_STATE_DISCOVERY) {
-       /* Button press during discovery: if peer found, connect and transition */
-       if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
-           if (transport_ble_get_peer() != NULL) {
-               (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
-               g_ui_ctx.transition_ready = true;
-           }
-            /* If peer not yet discovered, ignore button press (no-op) */
+        /* Button press during discovery: if peer found, connect and transition.
+         * Long press (>= 600ms) cancels/restarts discovery session. */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+            if (transport_ble_get_peer() != NULL) {
+                (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
+                g_ui_ctx.transition_ready = true;
+            }
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                         ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 600U) {
+                ESP_LOGW("ui", "Long press during discovery — restarting scan");
+                (void)transport_ble_restart_discovery_session();
+                (void)rgb_set_pattern(RGB_BLUE_PULSE);
+            }
         }
-    } else if (g_ui_ctx.current_state == UI_STATE_PAIRING) {
-        /* No short-press action — pairing is non-interactive once
-         * the user has confirmed the code. Short press is ignored
-         * to avoid accidental state churn. */
+    } else if (g_ui_ctx.current_state == UI_STATE_CONFIRM ||
+               g_ui_ctx.current_state == UI_STATE_PAIRING ||
+               g_ui_ctx.current_state == UI_STATE_COUNTDOWN) {
+        /* Long press (>= 600ms) during waiting / verification cancels pairing */
+        if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                         ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 600U) {
+                ESP_LOGW("ui", "Long press (%u ms) during waiting/pairing phase — user cancelled operation", (unsigned)dur);
+                (void)ui_restart_discovery_from_pairing();
+            }
+        }
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
         /* Chat thread: potentiometer selects message, short press opens detail view, long press returns to menu */
         uint8_t count = msg_store_count();
@@ -3547,7 +3620,7 @@ CeePewErr_t ui_manager_draw(void)
 
 CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
-    CEEPEW_ASSERT(next_state <= UI_STATE_CHAT_DETAIL, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(next_state <= UI_STATE_PAIRING_DEGRADED, CEEPEW_ERR_PARAM);
     if (next_state == UI_STATE_PAIRING_FAILED) {
         ESP_LOGW("ui_transition", "-> PAIRING_FAILED (was %u)", g_ui_ctx.current_state);
     }

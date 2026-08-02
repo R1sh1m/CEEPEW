@@ -103,7 +103,8 @@ CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx,
     (void)memcpy(perm, BASE_CHANNELS, sizeof(perm));
 
     uint8_t prf_out[32U];
-    uint8_t hop_idx = (uint8_t)((nonce_counter >> CEEPEW_HOP_SHIFT) & 0xFFULL);
+    uint64_t nc_parity_stripped = nonce_counter & ~1ULL;
+    uint8_t hop_idx = (uint8_t)((nc_parity_stripped >> CEEPEW_HOP_SHIFT) & 0xFFULL);
 
     /* Use local_key for all HMAC-SHA256 PRF calls */
     uint8_t msg[4U];
@@ -138,7 +139,7 @@ CeePewErr_t transport_get_current_channel(const CryptoCtx_t *ctx,
 
     ceepew_secure_zero(local_key, sizeof(local_key));
 
-    uint8_t sel = (uint8_t)((nonce_counter >> (CEEPEW_HOP_SHIFT + 8U)) % (uint64_t)CEEPEW_HOP_CHANNELS);
+    uint8_t sel = (uint8_t)((nc_parity_stripped >> (CEEPEW_HOP_SHIFT + 8U)) % (uint64_t)CEEPEW_HOP_CHANNELS);
     *channel_out = perm[sel];
     return CEEPEW_OK;
 }

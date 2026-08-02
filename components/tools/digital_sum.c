@@ -11,7 +11,7 @@
  * This algorithm is protocol-bound: removing it requires a version bump.
  */
 
-uint8_t digital_sum_reduce(const uint8_t *data, uint16_t len) {
+static uint8_t digital_sum_reduce(const uint8_t *data, uint16_t len) {
     CEEPEW_ASSERT(data != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(len > 0U && len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
 

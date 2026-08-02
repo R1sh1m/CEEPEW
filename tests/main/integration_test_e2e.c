@@ -18,6 +18,7 @@
 #include "session_fsm.h"
 #include "session_msgstore.h"
 #include "crypto_hkdf.h"
+#include "task_arch.h"
 #include <esp_log.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -60,6 +61,7 @@ static diag_subsys_t s_report[] = {
     { "RNG Health",        false },
     { "ARQ Negative",      false },
     { "Low Order Reject",  false },
+    { "Task Arch",         false },
 };
 
 #define REPORT_SET(_label, ok_expr) do {                                        \
@@ -78,6 +80,17 @@ static diag_subsys_t s_report[] = {
 /* Fixed test values */
 static const uint8_t DEVICE_A_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
 static const uint8_t DEVICE_B_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02};
+
+/* Mock Ed25519 public key for tests that simulate a successful GATT identity
+ * exchange. Must be non-zero to avoid triggering low-order point rejection.
+ * Uses RFC 8032 test vector public key. */
+static const uint8_t MOCK_PEER_SIGN_PK[32] = {
+    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+    0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
+};
+
 static const uint8_t SESSION_CODE[32] = {
     0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,  /* "12345678" */
     0x39, 0x30, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
@@ -169,6 +182,12 @@ static void test_session_phase2_pairing(void){
     uint8_t phase = session_get_phase();
     test_assert_eq_u32(2U, phase, "phase after initiate");
 
+    /* Simulate role assignment: A is initiator (lower MAC) */
+    session_set_role(true);
+
+    /* Simulate successful GATT identity exchange */
+    test_assert_ok(session_set_peer_public_key(MOCK_PEER_SIGN_PK), "session_set_peer_public_key");
+
     /* Simulate GATT WiFi MAC verification */
     test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
     test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
@@ -189,6 +208,9 @@ static void test_session_phase2_pairing(void){
         ESP_LOGE(TAG, "[FAIL] session should be active in phase 3");
         s_tests_failed++;
     }
+
+    /* Cleanup: terminate session so subsequent tests start clean. */
+    session_end();
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -211,6 +233,9 @@ static void test_nonce_enforcement(void){
     /* Set role BEFORE derive_key so the nonce counter is initialized
      * with the correct parity (initiator=even, responder=odd). */
     session_set_role(true);
+
+    /* Simulate successful GATT identity exchange */
+    test_assert_ok(session_set_peer_public_key(MOCK_PEER_SIGN_PK), "session_set_peer_public_key");
 
     /* Simulate GATT WiFi MAC verification */
     test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
@@ -235,6 +260,9 @@ static void test_nonce_enforcement(void){
             break;
         }
     }
+
+    /* Cleanup: terminate session so subsequent tests start clean. */
+    session_end();
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -254,6 +282,8 @@ static void test_mac_lock_check(void){
     err = session_phase2_initiate(SESSION_CODE);
     test_assert_ok(err, "session_phase2_initiate");
 
+    session_set_role(true);
+    test_assert_ok(session_set_peer_public_key(MOCK_PEER_SIGN_PK), "session_set_peer_public_key");
     test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
     test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
 
@@ -275,6 +305,9 @@ static void test_mac_lock_check(void){
         ESP_LOGE(TAG, "[FAIL] mac_lock_check should reject wrong peer");
         s_tests_failed++;
     }
+
+    /* Cleanup: terminate session so subsequent tests start clean. */
+    session_end();
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -294,6 +327,8 @@ static void test_session_termination(void){
     err = session_phase2_initiate(SESSION_CODE);
     test_assert_ok(err, "session_phase2_initiate");
 
+    session_set_role(true);
+    test_assert_ok(session_set_peer_public_key(MOCK_PEER_SIGN_PK), "session_set_peer_public_key");
     test_assert_ok(session_set_self_wifi_mac(DEVICE_A_MAC), "session_set_self_wifi_mac");
     test_assert_ok(session_set_peer_wifi_mac(DEVICE_B_MAC), "session_set_peer_wifi_mac");
 
@@ -337,18 +372,15 @@ static void test_session_termination(void){
 static void test_region_alloc_reset(void){
     ESP_LOGI(TAG, "=== Test: Region alloc after reset ===");
 
-    /* Region_t is ~51KB (48KB pool + metadata) - too large for 8KB main task stack.
-     * Allocate dynamically on the heap to avoid both stack overflow and DRAM overflow. */
-    Region_t *r = malloc(sizeof(Region_t));
-    if (r == NULL) {
-        ESP_LOGE(TAG, "[FAIL] malloc Region_t failed");
-        s_tests_failed++;
-        return;
-    }
-    CeePewErr_t err = region_init(r);
-    test_assert_ok(err, "region_init");
+    /* Save global region state so other tests are not affected. */
+    uint32_t saved_bump = g_region.bump;
+    uint32_t saved_hwm = g_region.hwm;
+    uint16_t saved_count = g_region.alloc_count;
+    bool saved_init = g_region.initialised;
 
-    void *p = region_alloc(r, 100U);
+    if (!g_region.initialised) { (void)region_init(&g_region); }
+
+    void *p = region_alloc(&g_region, 100U);
     if (p != NULL) {
         ESP_LOGI(TAG, "[PASS] region_alloc(100) first");
         s_tests_passed++;
@@ -357,8 +389,8 @@ static void test_region_alloc_reset(void){
         s_tests_failed++;
     }
 
-    region_reset(r);
-    p = region_alloc(r, 100U);
+    region_reset(&g_region);
+    p = region_alloc(&g_region, 100U);
     if (p != NULL) {
         ESP_LOGI(TAG, "[PASS] region_alloc(100) after reset");
         s_tests_passed++;
@@ -367,7 +399,11 @@ static void test_region_alloc_reset(void){
         s_tests_failed++;
     }
 
-    free(r);
+    /* Restore global region state. */
+    g_region.bump = saved_bump;
+    g_region.hwm = saved_hwm;
+    g_region.alloc_count = saved_count;
+    g_region.initialised = saved_init;
 }
 
 void test_arq_negative(void);
@@ -457,6 +493,20 @@ static void test_crypto_hkdf_smoke(void){
     }
 }
 
+/* task architecture handle test */
+static void test_task_arch_handles(void){
+    ESP_LOGI(TAG, "=== Test: Task Architecture Handles ===");
+    TaskHandle_t ui = task_arch_get_ui_handle();
+    TaskHandle_t session = task_arch_get_session_handle();
+    if (ui != NULL && session != NULL) {
+        ESP_LOGI(TAG, "[PASS] task_arch handles: ui=%p session=%p", (void *)ui, (void *)session);
+        s_tests_passed++;
+    } else {
+        ESP_LOGE(TAG, "[FAIL] task_arch handles: ui=%p session=%p", (void *)ui, (void *)session);
+        s_tests_failed++;
+    }
+}
+
 /* transport hop deterministic test - call unit test helper */
 void test_hop_determinism(void);
 
@@ -496,6 +546,7 @@ void integration_tests_run_all(void){
     bool rng_health_ok        = false;
     bool arq_negative_ok      = false;
     bool low_order_ok         = false;
+    bool task_arch_ok         = false;
 
     uint32_t pass_before = s_tests_passed;
     uint32_t fail_before = s_tests_failed;
@@ -597,6 +648,11 @@ void integration_tests_run_all(void){
     loworder_selftest_run();
     low_order_ok = true;
 
+    /* Task architecture handle test */
+    fail_before = s_tests_failed;
+    test_task_arch_handles();
+    task_arch_ok = (s_tests_failed == fail_before);
+
     /* Update structured report. */
     REPORT_SET("Session FSM",       session_fsm_ok);
     REPORT_SET("Nonce Enforcement", nonce_ok);
@@ -615,6 +671,7 @@ void integration_tests_run_all(void){
     REPORT_SET("RNG Health",        rng_health_ok);
     REPORT_SET("ARQ Negative",      arq_negative_ok);
     REPORT_SET("Low Order Reject",  low_order_ok);
+    REPORT_SET("Task Arch",         task_arch_ok);
 
     /* Legacy pass/fail summary (preserved for human readability). */
     ESP_LOGI(TAG, "");

@@ -24,9 +24,13 @@ static EccHammingCtx_t s_ctx = {.initialised = false};
 
 /* FEC statistics for empirical tuning */
 static uint32_t s_fec_corrections_total = 0U;
-static uint32_t s_fec_failures_total = 0U;
 
-/* Maps 4-bit syndrome -> bit position to flip (0-14), 15 = uncorrectable */
+/* Maps 4-bit syndrome -> bit position (0-indexed) to flip, 15 = uncorrectable.
+ * Basic Hamming(15,11) corrects all single-bit errors. All 16 syndromes map
+ * to valid correction positions 0-14; syndrome 15 is never returned by
+ * hamming_compute_syndrome() for any 15-bit codeword, so the uncorrectable-
+ * error path (flip_idx == 15) is unreachable. This code does NOT provide
+ * SECDED — double-bit errors are silently mis-corrected as single-bit errors. */
 static const uint8_t SYNDROME_TABLE[16] = {0U, 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U};
 
 static inline uint8_t bit_get_msb(const uint8_t *buf, uint32_t bit_pos, uint32_t total_bits) {
@@ -259,12 +263,6 @@ CeePewErr_t ecc_hamming_decode(const uint8_t *in, uint16_t in_len, uint8_t *out,
         uint8_t syndrome = hamming_compute_syndrome(code);
         if (syndrome != 0U){
             uint8_t flip_idx = SYNDROME_TABLE[syndrome];
-            if (flip_idx == 15U) { 
-                s_fec_failures_total++;
-                ESP_LOGD(TAG, "FEC: Uncorrectable error detected (syndrome=%u, total_failures=%lu)", 
-                         syndrome, s_fec_failures_total);
-                return CEEPEW_ERR_FEC; 
-            }
             uint8_t pos1 = (uint8_t)(flip_idx + 1U);
             code ^= (uint16_t)(1U << (CEEPEW_HAMMING_CODE_BITS - pos1));
             *corrected = true;

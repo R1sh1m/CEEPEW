@@ -33,7 +33,7 @@ extern "C" {
 /* ────────────────────────────────────────────────────────────────────── */
 
 /* Number of symbols in primary Huffman table */
-#define CEEPEW_HUFFMAN_PRIMARY_SYMBOLS  51U
+#define CEEPEW_HUFFMAN_PRIMARY_SYMBOLS  54U
 
 /* Escape code for symbols not in primary table */
 #define CEEPEW_HUFFMAN_ESCAPE_CODE      (0x0FFFU)  /* 12-bit sentinel */
@@ -42,9 +42,13 @@ extern "C" {
 #define CEEPEW_HUFFMAN_FLAG_PASSTHROUGH 0x3U       /* 0b11 */
 #define CEEPEW_HUFFMAN_FLAG_COMPRESSED  0x2U       /* 0b10 */
 
-/* Maximum input/output sizes (region allocator bound) */
+/* Maximum input/output sizes (region allocator bound).
+ * Max output for 160-byte input with worst-case expansion:
+ * 3 bytes header + each symbol as 12-bit escape + 8-bit literal.
+ * 160 symbols × 20 bits = 400 bytes → 50 bytes header overhead.
+ * Round up to 256 for safety with 7-bit codes (padding bits). */
 #define CEEPEW_HUFFMAN_MAX_INPUT_BYTES  (160U)
-#define CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES (200U)
+#define CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES (256U)
 
 /* ────────────────────────────────────────────────────────────────────── */
 /* Huffman Encoding Entry (static table)                                  */

@@ -20,6 +20,14 @@ CeePewErr_t task_arch_deinit(void);
 /* Get handle to session inbound queue for transport layer to post events */
 QueueHandle_t task_arch_get_session_queue(void);
 
+/* Set task handles so task_arch_deinit() can clean up on teardown */
+void task_arch_set_ui_handle(TaskHandle_t handle);
+void task_arch_set_session_handle(TaskHandle_t handle);
+
+/* Get task handles (for diagnostic verification) */
+TaskHandle_t task_arch_get_ui_handle(void);
+TaskHandle_t task_arch_get_session_handle(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -58,6 +58,14 @@ static const uint8_t CODE_32[32] = {
     '7','8','9','0','1','2','3','4','5','6','7','8','9','0','1','2'
 };
 
+/* Mock Ed25519 public key for tests that simulate a GATT identity exchange. */
+static const uint8_t MOCK_PEER_SIGN_PK[32] = {
+    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+    0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
+};
+
 /* Snapshot the derived key material from g_crypto_ctx. */
 static void snapshot_derived(uint8_t ascon_key[16],
                              uint8_t box_seed[32],
@@ -91,6 +99,8 @@ static void test_keys_converge_without_fresh_salt(void)
     check(err == CEEPEW_OK, "A: phase2_initiate");
     err = session_set_role(true);   /* A is initiator */
     check(err == CEEPEW_OK, "A: set_role(initiator)");
+    err = session_set_peer_public_key(MOCK_PEER_SIGN_PK);
+    check(err == CEEPEW_OK, "A: set_peer_public_key");
     err = session_set_self_wifi_mac(MAC_A);
     check(err == CEEPEW_OK, "A: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
@@ -117,6 +127,8 @@ static void test_keys_converge_without_fresh_salt(void)
     check(err == CEEPEW_OK, "B: phase2_initiate");
     err = session_set_role(false);  /* B is responder */
     check(err == CEEPEW_OK, "B: set_role(responder)");
+    err = session_set_peer_public_key(MOCK_PEER_SIGN_PK);
+    check(err == CEEPEW_OK, "B: set_peer_public_key");
     err = session_set_self_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "B: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_A);
@@ -175,6 +187,8 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(err == CEEPEW_OK, "A2: phase2_initiate");
     err = session_set_role(true);
     check(err == CEEPEW_OK, "A2: set_role(initiator)");
+    err = session_set_peer_public_key(MOCK_PEER_SIGN_PK);
+    check(err == CEEPEW_OK, "A2: set_peer_public_key");
     err = session_set_self_wifi_mac(MAC_A);
     check(err == CEEPEW_OK, "A2: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
@@ -221,6 +235,8 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(err == CEEPEW_OK, "B2: phase2_initiate");
     err = session_set_role(false);
     check(err == CEEPEW_OK, "B2: set_role(responder)");
+    err = session_set_peer_public_key(MOCK_PEER_SIGN_PK);
+    check(err == CEEPEW_OK, "B2: set_peer_public_key");
     err = session_set_self_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "B2: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_A);
@@ -280,11 +296,14 @@ static void test_different_session_code_different_keys(void)
     check(err == CEEPEW_OK, "diffA: phase2_initiate");
     err = session_set_role(true);
     check(err == CEEPEW_OK, "diffA: set_role");
+    err = session_set_peer_public_key(MOCK_PEER_SIGN_PK);
+    check(err == CEEPEW_OK, "diffA: set_peer_public_key");
     err = session_set_self_wifi_mac(MAC_A);
     check(err == CEEPEW_OK, "diffA: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "diffA: set_peer_wifi_mac");
     err = session_phase2_derive_key();
+    check(err == CEEPEW_OK, "diffA: derive_key");
     snapshot_derived(a_ascon, a_box, a_sid);
 
     /* Peer B with OTHER_CODE */
@@ -298,6 +317,8 @@ static void test_different_session_code_different_keys(void)
     check(err == CEEPEW_OK, "diffB: phase2_initiate");
     err = session_set_role(true);
     check(err == CEEPEW_OK, "diffB: set_role");
+    err = session_set_peer_public_key(MOCK_PEER_SIGN_PK);
+    check(err == CEEPEW_OK, "diffB: set_peer_public_key");
     err = session_set_self_wifi_mac(MAC_A);
     check(err == CEEPEW_OK, "diffB: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
@@ -474,74 +495,84 @@ static void test_identity_degraded_blocks_derivation(void)
 {
     ESP_LOGI(TAG, "--- test_identity_degraded_blocks_derivation ---");
 
-    /* ── Set up peer A (initiator) with NO sign_pk ── */
-    CeePewErr_t err = session_reset_to_discovery();
-    check(err == CEEPEW_OK, "degA: reset");
-    err = session_phase1_init(MAC_A);
-    check(err == CEEPEW_OK, "degA: phase1_init");
-    err = session_phase1_accept_peer(MAC_B);
-    check(err == CEEPEW_OK, "degA: accept_peer");
+    CeePewErr_t err;
 
-    /* Start phase 2 (generates local sign_pk, box keypair) but do NOT
-     * call session_set_peer_public_key() — simulates GATT identity
-     * exchange never completing. */
-    err = session_phase2_initiate(CODE_32);
-    check(err == CEEPEW_OK, "degA: phase2_initiate");
-    err = session_set_role(true);
-    check(err == CEEPEW_OK, "degA: set_role(initiator)");
-    err = session_set_self_wifi_mac(MAC_A);
-    check(err == CEEPEW_OK, "degA: set_self_wifi_mac");
-    err = session_set_peer_wifi_mac(MAC_B);
-    check(err == CEEPEW_OK, "degA: set_peer_wifi_mac");
+    /* ══════ Scenario A: Derivation WITHOUT degraded confirmation — MUST FAIL ══════ */
+    {
+        err = session_reset_to_discovery();
+        check(err == CEEPEW_OK, "degA: reset");
+        err = session_phase1_init(MAC_A);
+        check(err == CEEPEW_OK, "degA: phase1_init");
+        err = session_phase1_accept_peer(MAC_B);
+        check(err == CEEPEW_OK, "degA: accept_peer");
 
-    /* CRITICAL: peer sign_pk is NOT set — identity exchange never completed.
-     * session_set_peer_public_key() is NOT called. */
+        /* Start phase 2 but do NOT call session_set_peer_public_key() —
+         * simulates GATT identity exchange never completing. */
+        err = session_phase2_initiate(CODE_32);
+        check(err == CEEPEW_OK, "degA: phase2_initiate");
+        err = session_set_role(true);
+        check(err == CEEPEW_OK, "degA: set_role(initiator)");
+        err = session_set_self_wifi_mac(MAC_A);
+        check(err == CEEPEW_OK, "degA: set_self_wifi_mac");
+        err = session_set_peer_wifi_mac(MAC_B);
+        check(err == CEEPEW_OK, "degA: set_peer_wifi_mac");
 
-    /* Verify flag state before derivation attempt */
-    check(session_peer_sign_pk_valid() == false,
-          "degA: peer_sign_pk_valid is false before derive");
-    check(session_is_identity_degraded() == false,
-          "degA: identity_degraded is false before any action");
+        check(session_peer_sign_pk_valid() == false,
+              "degA: peer_sign_pk_valid is false before derive");
+        check(session_is_identity_degraded() == false,
+              "degA: identity_degraded is false before any action");
 
-    /* ── Attempt 1: WITHOUT degraded confirmation — MUST FAIL ── */
-    err = session_phase2_derive_key();
-    check(err != CEEPEW_OK,
-          "degA: derive_key WITHOUT degraded confirmation MUST fail");
+        err = session_phase2_derive_key();
+        check(err != CEEPEW_OK,
+              "degA: derive_key WITHOUT degraded confirmation MUST fail");
 
-    /* Verify session is NOT active after blocked derivation */
-    check(session_is_active() == false,
-          "degA: session NOT active after blocked derivation");
-    check(session_get_phase() == 2U,
-          "degA: phase still 2 after blocked derivation");
+        check(session_is_active() == false,
+              "degA: session NOT active after blocked derivation");
+        check(session_get_phase() == 2U,
+              "degA: phase still 2 after blocked derivation");
+    }
 
-    /* ── Now simulate USER CONFIRMATION of degraded mode ── */
-    session_set_identity_degraded();
-    check(session_is_identity_degraded() == true,
-          "degA: identity_degraded is true after user confirmation");
-    check(session_peer_sign_pk_valid() == false,
-          "degA: peer_sign_pk_valid still false "
-          "(sign_pk was never exchanged)");
+    /* ══════ Scenario B: Derivation WITH degraded confirmation — MUST SUCCEED ══════ */
+    {
+        err = session_reset_to_discovery();
+        check(err == CEEPEW_OK, "degB: reset");
+        err = session_phase1_init(MAC_A);
+        check(err == CEEPEW_OK, "degB: phase1_init");
+        err = session_phase1_accept_peer(MAC_B);
+        check(err == CEEPEW_OK, "degB: accept_peer");
 
-    /* ── Attempt 2: WITH degraded confirmation — MUST SUCCEED ── */
-    err = session_phase2_derive_key();
-    check(err == CEEPEW_OK,
-          "degA: derive_key WITH degraded confirmation MUST succeed");
+        err = session_phase2_initiate(CODE_32);
+        check(err == CEEPEW_OK, "degB: phase2_initiate");
+        err = session_set_role(true);
+        check(err == CEEPEW_OK, "degB: set_role(initiator)");
+        err = session_set_self_wifi_mac(MAC_A);
+        check(err == CEEPEW_OK, "degB: set_self_wifi_mac");
+        err = session_set_peer_wifi_mac(MAC_B);
+        check(err == CEEPEW_OK, "degB: set_peer_wifi_mac");
 
-    /* Verify session is active after degraded derivation */
-    check(session_is_active() == true,
-          "degA: session active after degraded derivation");
-    check(session_get_phase() == 3U,
-          "degA: phase is 3 after degraded derivation");
+        /* Simulate user confirmation of degraded mode BEFORE derivation. */
+        session_set_identity_degraded();
+        check(session_is_identity_degraded() == true,
+              "degB: identity_degraded is true after user confirmation");
+        check(session_peer_sign_pk_valid() == false,
+              "degB: peer_sign_pk_valid still false "
+              "(sign_pk was never exchanged)");
 
-    /* Verify degraded flag persists */
-    check(session_is_identity_degraded() == true,
-          "degA: identity_degraded remains true after derivation");
-    check(session_peer_sign_pk_valid() == false,
-          "degA: peer_sign_pk_valid still false after degraded derivation");
+        err = session_phase2_derive_key();
+        check(err == CEEPEW_OK,
+              "degB: derive_key WITH degraded confirmation MUST succeed");
 
-    /* Verify nonce parity is correct for initiator */
-    check(session_get_nonce_counter() == 0ULL,
-          "degA: nonce starts at 0 (even parity for degraded initiator)");
+        check(session_is_active() == true,
+              "degB: session active after degraded derivation");
+        check(session_get_phase() == 3U,
+              "degB: phase is 3 after degraded derivation");
+        check(session_is_identity_degraded() == true,
+              "degB: identity_degraded remains true after derivation");
+        check(session_peer_sign_pk_valid() == false,
+              "degB: peer_sign_pk_valid still false after degraded derivation");
+        check(session_get_nonce_counter() == 0ULL,
+              "degB: nonce starts at 0 (even parity for degraded initiator)");
+    }
 
     ESP_LOGI(TAG, "--- test_identity_degraded_blocks_derivation PASS ---");
 }

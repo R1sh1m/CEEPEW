@@ -29,6 +29,22 @@ QueueHandle_t task_arch_get_session_queue(void){
     return s_session_queue;
 }
 
+void task_arch_set_ui_handle(TaskHandle_t handle){
+    s_ui_task_handle = handle;
+}
+
+void task_arch_set_session_handle(TaskHandle_t handle){
+    s_session_task_handle = handle;
+}
+
+TaskHandle_t task_arch_get_ui_handle(void){
+    return s_ui_task_handle;
+}
+
+TaskHandle_t task_arch_get_session_handle(void){
+    return s_session_task_handle;
+}
+
 CeePewErr_t task_arch_init(void){
     if (s_task_arch_initialised) {
         CEEPEW_ASSERT(s_session_queue != NULL && s_session_timer != NULL, CEEPEW_ERR_INTERNAL);
@@ -36,7 +52,7 @@ CeePewErr_t task_arch_init(void){
     }
 
     /* Create session queue */
-    s_session_queue = xQueueCreate(CEEPEW_QUEUE_DEPTH, sizeof(void *));
+    s_session_queue = xQueueCreate(1U, sizeof(void *));
     if (s_session_queue == NULL) { return CEEPEW_ERR_ALLOC; }
 
     /* Create periodic esp_timer for session housekeeping (1s) */

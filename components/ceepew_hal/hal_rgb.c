@@ -104,6 +104,7 @@ static const RgbStep_t s_steps_blue_blink[] = {    {0U, 0U, 1U, 300U},    {0U, 0
    These are interpreted specially: the pattern defines which channels to pulse,
    and the duration is ignored (PWM runs continuously until switched).
    Pulse patterns: 1.0 Hz (960ms period) sine wave on active channels */
+static const RgbStep_t s_steps_red_pulse[] = {      {1U, 0U, 0U, UINT32_MAX}};
 static const RgbStep_t s_steps_white_pulse[] = {    {1U, 1U, 1U, UINT32_MAX}};
 static const RgbStep_t s_steps_blue_pulse[] = {    {0U, 0U, 1U, UINT32_MAX}};
 static const RgbStep_t s_steps_green_pulse[] = {    {0U, 1U, 0U, UINT32_MAX}};
@@ -130,6 +131,7 @@ static const RgbPatternDef_t s_patterns[RGB_PATTERN_COUNT] = {
     {s_steps_red_blink, 2U, true},
     {s_steps_green_blink, 2U, true},
     {s_steps_blue_blink, 2U, true},
+    {s_steps_red_pulse, 1U, false},     /* PWM mode: smooth red breathe   */
     {s_steps_white_pulse, 1U, false},   /* PWM mode: smooth white breathe */
     {s_steps_blue_pulse, 1U, false},    /* PWM mode: smooth blue breathe  */
     {s_steps_green_pulse, 1U, false},   /* PWM mode: smooth green breathe */
@@ -319,7 +321,7 @@ static void rgb_unified_timer_cb(TimerHandle_t timer) {
 CeePewErr_t rgb_init(void){
     CEEPEW_ASSERT(GPIO_IS_VALID_OUTPUT_GPIO(CEEPEW_PIN_RGB_RED) && GPIO_IS_VALID_OUTPUT_GPIO(CEEPEW_PIN_RGB_GREEN) && GPIO_IS_VALID_OUTPUT_GPIO(CEEPEW_PIN_RGB_BLUE), CEEPEW_ERR_PINS);
     CEEPEW_ASSERT(CEEPEW_PIN_RGB_RED != CEEPEW_PIN_RGB_GREEN && CEEPEW_PIN_RGB_RED != CEEPEW_PIN_RGB_BLUE && CEEPEW_PIN_RGB_GREEN != CEEPEW_PIN_RGB_BLUE, CEEPEW_ERR_PINS);
-    CEEPEW_ASSERT(RGB_PATTERN_COUNT == 20U, CEEPEW_ERR_INTERNAL);
+    CEEPEW_ASSERT(RGB_PATTERN_COUNT == 21U, CEEPEW_ERR_INTERNAL);
 
     if (s_state.initialised) {
         CEEPEW_ASSERT(s_state.lock != NULL && s_state.timer != NULL, CEEPEW_ERR_INTERNAL);

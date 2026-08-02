@@ -20,69 +20,79 @@
 #include <string.h>
 
 /* ────────────────────────────────────────────────────────────────────── */
-/* Static Huffman Table (51 symbols, sorted by frequency descending)     */
+/* Static Huffman Table (54 symbols, canonical prefix-free codes)        */
 /* ────────────────────────────────────────────────────────────────────── */
 
-/* English letter frequency distribution training data:
-   Most common: space (13.0%), e (12.7%), t (9.1%), a (8.2%), o (7.5%)
-   Rare symbols (j, x, q, z) get longer codes or escape sequences
-   
-   Code lengths determined by canonical Huffman construction from frequencies.
-   Codes are bit-packed MSB-first within 12-bit fields.
+/* Canonical prefix-free Huffman codes derived from English letter
+   frequency distribution. Code lengths (5/6/7 bits) satisfy the Kraft
+   inequality: Σ 2^(-len) = 12/32 + 38/64 + 4/128 = 1.0.
+
+   Codes are assigned MSB-first in the bit stream (encoder writes the
+   highest bit of the code value first). Sorted by frequency descending
+   within each code length group for canonical code assignment.
+
+   Frequency distribution: space (~13%), e (~12.7%), t (~9.1%),
+   a/o/i/n/s/h/r/d (~4-8%), l/c/u/m/w/f/g/y/p/b/v/k (~1-4%),
+   j/x/q/z/E/A/T/O/I/S/H/R/N/D/L/C/M/U/W/F/G/0-9 (<1% each).
 */
 static const CeePewHuffEntry_t g_huffman_table[CEEPEW_HUFFMAN_PRIMARY_SYMBOLS] = {
-    /* symbol, code,    len */
-    { ' ',    0x0000U,  2 },   /* space:     00           (13.00%) */
-    { 'e',    0x0002U,  3 },   /* e:         010          (12.70%) */
-    { 't',    0x0003U,  3 },   /* t:         011          ( 9.06%) */
-    { 'a',    0x0008U,  4 },   /* a:         1000         ( 8.17%) */
-    { 'o',    0x0009U,  4 },   /* o:         1001         ( 7.51%) */
-    { 'i',    0x000AU,  4 },   /* i:         1010         ( 6.97%) */
-    { 'n',    0x000BU,  4 },   /* n:         1011         ( 6.75%) */
-    { 's',    0x000CU,  4 },   /* s:         1100         ( 6.33%) */
-    { 'h',    0x000DU,  4 },   /* h:         1101         ( 6.09%) */
-    { 'r',    0x000EU,  4 },   /* r:         1110         ( 5.99%) */
-    { 'd',    0x000FU,  4 },   /* d:         1111         ( 4.25%) */
-    { 'l',    0x0050U,  5 },   /* l:         10100        ( 4.03%) */
-    { 'c',    0x0051U,  5 },   /* c:         10101        ( 2.78%) */
-    { 'u',    0x0052U,  5 },   /* u:         10110        ( 2.76%) */
-    { 'm',    0x0053U,  5 },   /* m:         10111        ( 2.41%) */
-    { 'w',    0x0054U,  5 },   /* w:         11000        ( 1.92%) */
-    { 'f',    0x0055U,  5 },   /* f:         11001        ( 2.23%) */
-    { 'g',    0x0056U,  5 },   /* g:         11010        ( 2.02%) */
-    { 'y',    0x0057U,  5 },   /* y:         11011        ( 1.97%) */
-    { 'p',    0x0058U,  5 },   /* p:         11100        ( 1.93%) */
-    { 'b',    0x0059U,  5 },   /* b:         11101        ( 1.29%) */
-    { 'v',    0x005AU,  5 },   /* v:         11110        ( 0.98%) */
-    { 'k',    0x005BU,  5 },   /* k:         11111        ( 0.77%) */
-    { 'j',    0x0180U,  6 },   /* j:         100000       ( 0.15%) */
-    { 'x',    0x0181U,  6 },   /* x:         100001       ( 0.15%) */
-    { 'q',    0x0182U,  6 },   /* q:         100010       ( 0.10%) */
-    { 'z',    0x0183U,  6 },   /* z:         100011       ( 0.07%) */
-    { 'E',    0x0184U,  6 },   /* E:         100100       */
-    { 'A',    0x0185U,  6 },   /* A:         100101       */
-    { 'T',    0x0186U,  6 },   /* T:         100110       */
-    { 'O',    0x0187U,  6 },   /* O:         100111       */
-    { 'I',    0x0188U,  6 },   /* I:         101000       */
-    { 'S',    0x0189U,  6 },   /* S:         101001       */
-    { 'H',    0x018AU,  6 },   /* H:         101010       */
-    { 'R',    0x018BU,  6 },   /* R:         101011       */
-    { 'N',    0x018CU,  6 },   /* N:         101100       */
-    { 'D',    0x018DU,  6 },   /* D:         101101       */
-    { 'L',    0x018EU,  6 },   /* L:         101110       */
-    { 'C',    0x018FU,  6 },   /* C:         101111       */
-    { 'M',    0x0190U,  6 },   /* M:         110000       */
-    { 'U',    0x0191U,  6 },   /* U:         110001       */
-    { 'W',    0x0192U,  6 },   /* W:         110010       */
-    { 'F',    0x0193U,  6 },   /* F:         110011       */
-    { 'G',    0x0194U,  6 },   /* G:         110100       */
-    { '0',    0x0195U,  6 },   /* 0:         110101       */
-    { '1',    0x0196U,  6 },   /* 1:         110110       */
-    { '2',    0x0197U,  6 },   /* 2:         110111       */
-    { '3',    0x0198U,  6 },   /* 3:         111000       */
-    { '4',    0x0199U,  6 },   /* 4:         111001       */
-    { '5',    0x019AU,  6 },   /* 5:         111010       */
-    { '6',    0x019BU,  6 },   /* 6:         111011       */
+    /* Len 5 (12 most frequent symbols) */
+    { ' ',    0x0000U,  5 },
+    { 'e',    0x0001U,  5 },
+    { 't',    0x0002U,  5 },
+    { 'a',    0x0003U,  5 },
+    { 'o',    0x0004U,  5 },
+    { 'i',    0x0005U,  5 },
+    { 'n',    0x0006U,  5 },
+    { 's',    0x0007U,  5 },
+    { 'h',    0x0008U,  5 },
+    { 'r',    0x0009U,  5 },
+    { 'd',    0x000AU,  5 },
+    { 'l',    0x000BU,  5 },
+    /* Len 6 (38 medium-frequency symbols) */
+    { 'c',    0x0018U,  6 },
+    { 'u',    0x0019U,  6 },
+    { 'm',    0x001AU,  6 },
+    { 'w',    0x001BU,  6 },
+    { 'f',    0x001CU,  6 },
+    { 'g',    0x001DU,  6 },
+    { 'y',    0x001EU,  6 },
+    { 'p',    0x001FU,  6 },
+    { 'b',    0x0020U,  6 },
+    { 'v',    0x0021U,  6 },
+    { 'k',    0x0022U,  6 },
+    { 'j',    0x0023U,  6 },
+    { 'x',    0x0024U,  6 },
+    { 'q',    0x0025U,  6 },
+    { 'z',    0x0026U,  6 },
+    { 'E',    0x0027U,  6 },
+    { 'A',    0x0028U,  6 },
+    { 'T',    0x0029U,  6 },
+    { 'O',    0x002AU,  6 },
+    { 'I',    0x002BU,  6 },
+    { 'S',    0x002CU,  6 },
+    { 'H',    0x002DU,  6 },
+    { 'R',    0x002EU,  6 },
+    { 'N',    0x002FU,  6 },
+    { 'D',    0x0030U,  6 },
+    { 'L',    0x0031U,  6 },
+    { 'C',    0x0032U,  6 },
+    { 'M',    0x0033U,  6 },
+    { 'U',    0x0034U,  6 },
+    { 'W',    0x0035U,  6 },
+    { 'F',    0x0036U,  6 },
+    { 'G',    0x0037U,  6 },
+    { '0',    0x0038U,  6 },
+    { '1',    0x0039U,  6 },
+    { '2',    0x003AU,  6 },
+    { '3',    0x003BU,  6 },
+    { '4',    0x003CU,  6 },
+    { '5',    0x003DU,  6 },
+    /* Len 7 (4 least frequent symbols) */
+    { '6',    0x007CU,  7 },
+    { '7',    0x007DU,  7 },
+    { '8',    0x007EU,  7 },
+    { '9',    0x007FU,  7 },
 };
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -169,6 +179,25 @@ CeePewErr_t compress_huffman_compress(
         stats->input_bits = (uint32_t)in_len * 8U;
     }
 
+    /* If passthrough would not be worse, skip compression entirely.
+     * This avoids overflowing the output buffer with escape sequences
+     * for incompressible data, and saves CPU. */
+    if (in_len > 0U && compress_huffman_estimate_output_size(in, in_len) >= in_len + 1U) {
+        if (in_len + 1U > max_out_len) {
+            return CEEPEW_ERR_BOUNDS;
+        }
+        memset(out, 0U, max_out_len);
+        out[0] = CEEPEW_HUFFMAN_FLAG_PASSTHROUGH;
+        memcpy(out + 1U, in, in_len);
+        *out_len = 1U + in_len;
+        if (stats != NULL) {
+            stats->passthrough_applied = 1U;
+            stats->output_bits = (uint32_t)(*out_len) * 8U;
+            stats->symbols_encoded = in_len;
+        }
+        return CEEPEW_OK;
+    }
+
     /* Reserve space for flag byte (2 bits in byte 0) */
     if (max_out_len < 1U) {
         return CEEPEW_ERR_BOUNDS;
@@ -177,16 +206,16 @@ CeePewErr_t compress_huffman_compress(
     BitWriter_t bw;
     bitwriter_init(&bw, out, max_out_len);
 
-    /* Write compressed mode flag into first 2 bits of byte 0.
-     * NOTE: bitwriter writes bits MSB-first into LSB-order byte positions.
-     * For a 2-bit code AB, the byte's lower 2 bits become BA (bit-reversed).
-     * COMPRESSED = 0x02 means the byte must read as 0x02 (bits 1:0 = 10),
-     * which requires writing MSB=0, LSB=1 → code 0x01.
-     * To avoid the reversal confusion we set byte[0] directly.
-     */
+    /* Write compressed mode flag into first 2 bits of byte 0,
+     * followed by the original input length (2 bytes, little-endian).
+     * The length prefix lets the decoder stop after exactly in_len
+     * symbols, avoiding false matches from zero-padding bits. */
     out[0] = CEEPEW_HUFFMAN_FLAG_COMPRESSED; /* 0x02 → bits 1:0 = 10 */
-    bw.bit_pos = 2U;
-    bw.total_bits_written = 2U;
+    out[1] = (uint8_t)(in_len & 0xFFU);
+    out[2] = (uint8_t)((in_len >> 8) & 0xFFU);
+    bw.bit_pos = 0U;
+    bw.byte_pos = 3U;   /* skip flag byte + 2 length bytes */
+    bw.total_bits_written = 2U + 16U;
 
     CeePewErr_t err;
 
@@ -317,12 +346,29 @@ CeePewErr_t compress_huffman_decompress(
         return CEEPEW_ERR_PARAM;  /* Invalid mode bits */
     }
 
+    /* Read original input length from bytes 1-2 (little-endian) */
+    if (in_len < 3U) {
+        return CEEPEW_ERR_BOUNDS;  /* Need at least 3 bytes (flag + 2 len) */
+    }
+    uint16_t expected_out_len = (uint16_t)((uint16_t)in[1] | ((uint16_t)in[2] << 8U));
+    if (expected_out_len > max_out_len) {
+        return CEEPEW_ERR_BOUNDS;
+    }
+
     /* Compressed mode: decode Huffman stream */
     uint32_t byte_pos = 0U;
-    uint8_t bit_pos = 2U;  /* Start after mode flag (2 bits) */
+    uint8_t bit_pos = 2U;  /* Start after mode flag (2 bits, byte 0) */
     uint16_t out_pos = 0U;
 
-    while (byte_pos < in_len && out_pos < max_out_len) {
+    /* Skip to byte 3 (after flag + length prefix) */
+    byte_pos = 3U;
+    bit_pos = 0U;
+    /* If length bytes straddle into subsequent bytes, advance byte_pos */
+    if (byte_pos >= in_len) {
+        return CEEPEW_ERR_BOUNDS;
+    }
+
+    while (out_pos < expected_out_len && out_pos < max_out_len) {
         /* Save stream position before this symbol */
         uint32_t save_byte = byte_pos;
         uint8_t save_bit  = bit_pos;
@@ -334,9 +380,13 @@ CeePewErr_t compress_huffman_decompress(
         uint8_t  best_idx = 0U;
         bool     is_escape = false;
 
-        /* Read up to 12 bits, tracking the longest valid match to
-         * resolve prefix ambiguity (canonical Huffman property).
-         * Also apply mask to stored code for correct comparison. */
+        /* Read up to 12 bits, tracking the longest valid match.
+         * The stored code values in the static table are not strictly
+         * prefix-free (shorter codes can appear as prefixes of longer
+         * bit sequences when read past symbol boundaries), so taking
+         * the longest match resolves the ambiguity correctly.
+         * The length prefix (bytes 1-2) ensures we stop after the
+         * correct number of symbols regardless of trailing bits. */
         for (uint8_t try_len = 1U; try_len <= 12U; try_len++) {
             if (byte_pos >= in_len) {
                 break;
@@ -437,8 +487,8 @@ uint16_t compress_huffman_estimate_output_size(const uint8_t *data, uint16_t len
         return 1U;  /* Just the flag byte */
     }
 
-    /* Estimate bits needed: flag (2) + average code length per symbol */
-    uint32_t estimated_bits = 2U;  /* Mode flag */
+    /* Estimate bits needed: flag (2) + 2-byte length prefix (16) + symbol code lengths */
+    uint32_t estimated_bits = 2U + 16U;  /* Mode flag + length prefix */
 
     for (uint16_t i = 0U; i < len; i++) {
         uint8_t sym = data[i];

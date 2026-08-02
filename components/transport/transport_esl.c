@@ -22,8 +22,11 @@
 #include "../crypto/crypto_ctx.h"
 #include "../crypto/crypto_rng.h"
 #include "../crypto/crypto_ascon.h"
+#include "../crypto/crypto_hmac.h"
 #include "../../main/session_fsm.h"
 #include "ceepew_security_utils.h"
+#include "ceepew_pipeline.h"
+#include "ceepew_region.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "esp_timer.h"
@@ -37,7 +40,6 @@ static const char *TAG = "ESL";
 
 /* Forward declarations */
 CeePewErr_t transport_replay_check(uint64_t msg_id, uint32_t timestamp, bool *is_replay);
-CeePewErr_t crypto_sha256_compute(const uint8_t *in, uint32_t in_len, uint8_t out[32]);
 
 /* DoS cookie context — server-side state for rate limiting */
 typedef struct {
@@ -77,6 +79,280 @@ typedef struct __attribute__((packed)) {
 #define CEEPEW_ESL_FLAG_COOKIE_REQ   0x01U
 #define CEEPEW_ESL_FLAG_HAS_COOKIE   0x02U
 
+/* Forward declaration for DoS cookie verification (defined below) */
+static CeePewErr_t dos_verify_cookie(const uint8_t sender_mac[6],
+                                     uint32_t timestamp_rounded,
+                                     const uint8_t received_cookie[CEEPEW_COOKIE_BYTES]);
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* ESL Receive Pipeline — 7 stages composed via Pipeline_t                     */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+/* Shared context for the ESL receive pipeline stages.
+ * Most fields are filled by stage 1 (DoS) and consumed by stage 7 (strip). */
+typedef struct {
+    const uint8_t *peer_mac;       /* from caller */
+    uint32_t       queue_depth;     /* from caller */
+    bool           dos_load_high;   /* set by DoS stage */
+    bool           cookie_present;  /* set by DoS stage */
+    uint16_t       payload_offset;  /* computed by DoS stage, used by strip */
+    EslHeader_t    hdr;             /* parsed header (filled by stage 1) */
+} EslPipelineCtx_t;
+
+/* Stage 1: DoS guard — MAC-based cookie validation if queue is high.
+ * Parses the header into ctx, then checks for DoS cookie. */
+static CeePewErr_t stage_esl_dos(Region_t *region, const uint8_t *in,
+                                  uint16_t in_len, uint8_t **out,
+                                  uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    EslPipelineCtx_t *ctx = (EslPipelineCtx_t *)stage_ctx;
+    CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
+
+    if (in_len < CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES) {
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return CEEPEW_ERR_PARAM;
+    }
+
+    memcpy(&ctx->hdr, in, sizeof(ctx->hdr));
+
+    uint16_t frame_len = in_len;
+    uint16_t payload_len = (uint16_t)(frame_len - CEEPEW_ESL_HEADER_BYTES - CEEPEW_ESL_CRC_BYTES);
+
+    ctx->dos_load_high = (ctx->queue_depth > CEEPEW_DOS_QUEUE_THRESHOLD);
+    ctx->payload_offset = CEEPEW_ESL_HEADER_BYTES;
+    ctx->cookie_present = false;
+
+    if (ctx->dos_load_high) {
+        if ((ctx->hdr.flags & CEEPEW_ESL_FLAG_HAS_COOKIE) == 0U) {
+            ESP_LOGD(TAG, "DoS: No cookie found, high queue depth (%lu)", ctx->queue_depth);
+            *out = (uint8_t *)in;
+            *out_len = in_len;
+            return CEEPEW_ERR_TRANSPORT;
+        }
+        if (payload_len < CEEPEW_COOKIE_BYTES) {
+            ESP_LOGW(TAG, "DoS: Cookie missing or truncated (payload_len=%u)", payload_len);
+            *out = (uint8_t *)in;
+            *out_len = in_len;
+            return CEEPEW_ERR_TRANSPORT;
+        }
+        uint8_t rx_cookie[CEEPEW_COOKIE_BYTES];
+        memcpy(rx_cookie, in + CEEPEW_ESL_HEADER_BYTES, CEEPEW_COOKIE_BYTES);
+        uint32_t ts_rounded = (ctx->hdr.timestamp_s / 10U) * 10U;
+        CeePewErr_t err = dos_verify_cookie(ctx->peer_mac, ts_rounded, rx_cookie);
+        ceepew_secure_zero(rx_cookie, sizeof(rx_cookie));
+        if (err != CEEPEW_OK) {
+            ESP_LOGD(TAG, "DoS: Cookie verification failed (err=%d)", err);
+            *out = (uint8_t *)in;
+            *out_len = in_len;
+            return err;
+        }
+        ctx->payload_offset = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_COOKIE_BYTES);
+        ctx->cookie_present = true;
+    }
+
+    *out = (uint8_t *)in;
+    *out_len = in_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 2: MAC lock — constant-time peer identity verification */
+static CeePewErr_t stage_esl_mac(Region_t *region, const uint8_t *in,
+                                  uint16_t in_len, uint8_t **out,
+                                  uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    EslPipelineCtx_t *ctx = (EslPipelineCtx_t *)stage_ctx;
+    CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
+
+    CEEPEW_ASSERT(s_esl_callbacks_registered, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_mac_cb != NULL, CEEPEW_ERR_PARAM);
+    CeePewErr_t err = s_mac_cb(ctx->peer_mac);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "MAC lock failed: peer MAC not in session (err=%d)", err);
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return err;
+    }
+    *out = (uint8_t *)in;
+    *out_len = in_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 3: Magic + Version validation */
+static CeePewErr_t stage_esl_magic(Region_t *region, const uint8_t *in,
+                                    uint16_t in_len, uint8_t **out,
+                                    uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    (void)stage_ctx;
+    EslHeader_t hdr;
+    memcpy(&hdr, in, sizeof(hdr));
+
+    if ((hdr.magic0 != CEEPEW_ESL_MAGIC0) || (hdr.magic1 != CEEPEW_ESL_MAGIC1) ||
+        (hdr.version != CEEPEW_ESL_VERSION)) {
+        ESP_LOGW(TAG, "Malformed frame: magic=%02x%02x version=%u (expected %02x%02x v%u)",
+                 hdr.magic0, hdr.magic1, hdr.version,
+                 CEEPEW_ESL_MAGIC0, CEEPEW_ESL_MAGIC1, CEEPEW_ESL_VERSION);
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    *out = (uint8_t *)in;
+    *out_len = in_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 4: CRC-32 validation */
+static CeePewErr_t stage_esl_crc(Region_t *region, const uint8_t *in,
+                                  uint16_t in_len, uint8_t **out,
+                                  uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    (void)stage_ctx;
+    if (in_len < CEEPEW_ESL_CRC_BYTES) {
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return CEEPEW_ERR_PARAM;
+    }
+    uint32_t rx_crc = 0U;
+    memcpy(&rx_crc, in + in_len - CEEPEW_ESL_CRC_BYTES, sizeof(rx_crc));
+    uint32_t calc_crc = esp_crc32_le(0U, in, (size_t)(in_len - CEEPEW_ESL_CRC_BYTES));
+    if (rx_crc != calc_crc) {
+        ESP_LOGD(TAG, "CRC mismatch: rx=%08lx calc=%08lx", rx_crc, calc_crc);
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    *out = (uint8_t *)in;
+    *out_len = in_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 5: Timestamp validation — ±CEEPEW_TIMESTAMP_SLACK_S window */
+static CeePewErr_t stage_esl_timestamp(Region_t *region, const uint8_t *in,
+                                        uint16_t in_len, uint8_t **out,
+                                        uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    (void)stage_ctx;
+    EslHeader_t hdr;
+    memcpy(&hdr, in, sizeof(hdr));
+
+    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    int32_t peer_off_s = session_get_peer_uptime_offset();
+    uint32_t peer_now_s = now_s + (uint32_t)peer_off_s;
+    uint32_t hdr_s = hdr.timestamp_s;
+    uint32_t diff = (peer_now_s > hdr_s) ? (peer_now_s - hdr_s) : (hdr_s - peer_now_s);
+    if (diff > CEEPEW_TIMESTAMP_SLACK_S) {
+        ESP_LOGW(TAG, "ESL discard: timestamp outside tolerance (diff=%d slack=%u)",
+                 (int)diff, (unsigned)CEEPEW_TIMESTAMP_SLACK_S);
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    *out = (uint8_t *)in;
+    *out_len = in_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 6: Replay window (WireGuard bitmap, silent fail) */
+static CeePewErr_t stage_esl_replay(Region_t *region, const uint8_t *in,
+                                     uint16_t in_len, uint8_t **out,
+                                     uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    (void)stage_ctx;
+    EslHeader_t hdr;
+    memcpy(&hdr, in, sizeof(hdr));
+
+    bool is_replay = false;
+    CeePewErr_t err = transport_replay_check(hdr.seq, hdr.timestamp_s, &is_replay);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW(TAG, "ESL discard: replay check error (err=%d seq=%lu)",
+                 (int)err, (unsigned long)hdr.seq);
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return err;
+    }
+    if (is_replay) {
+        ESP_LOGW(TAG, "ESL discard: replay detected (seq=%lu)", (unsigned long)hdr.seq);
+        *out = (uint8_t *)in;
+        *out_len = in_len;
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    *out = (uint8_t *)in;
+    *out_len = in_len;
+    return CEEPEW_OK;
+}
+
+/* Stage 7: Strip ESL header (+ cookie if present).
+ * Produces the clean payload by memmove-ing it to the start of the buffer. */
+static CeePewErr_t stage_esl_strip(Region_t *region, const uint8_t *in,
+                                    uint16_t in_len, uint8_t **out,
+                                    uint16_t *out_len, void *stage_ctx)
+{
+    (void)region;
+    EslPipelineCtx_t *ctx = (EslPipelineCtx_t *)stage_ctx;
+    CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
+
+    uint16_t frame_len = in_len;
+    uint16_t payload_len = (uint16_t)(frame_len - CEEPEW_ESL_HEADER_BYTES - CEEPEW_ESL_CRC_BYTES);
+    if (ctx->cookie_present) {
+        payload_len = (uint16_t)(payload_len - CEEPEW_COOKIE_BYTES);
+    }
+
+    /* In-place move: shift payload to the start of the writable buffer */
+    uint8_t *writable = (uint8_t *)in;
+    memmove(writable, in + ctx->payload_offset, payload_len);
+
+    *out = writable;
+    *out_len = payload_len;
+    return CEEPEW_OK;
+}
+
+/* Build-once ESL ingress pipeline handle */
+static Pipeline_t s_esl_pipeline;
+static bool s_esl_pipeline_built = false;
+
+/* Per-call pipeline context shared across stages that need it.
+ * Filled by esl_rx() before pipeline_run(), consumed by
+ * stage_esl_dos, stage_esl_mac, and stage_esl_strip. */
+static EslPipelineCtx_t s_esl_pipeline_ctx;
+
+static CeePewErr_t esl_build_pipeline(void)
+{
+    CeePewErr_t err;
+
+    err = pipeline_reset(&s_esl_pipeline);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_dos, &s_esl_pipeline_ctx);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_mac, &s_esl_pipeline_ctx);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_magic, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_crc, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_timestamp, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_replay, NULL);
+    if (err != CEEPEW_OK) { return err; }
+
+    err = pipeline_add_stage(&s_esl_pipeline, stage_esl_strip, &s_esl_pipeline_ctx);
+    if (err != CEEPEW_OK) { return err; }
+
+    s_esl_pipeline_built = true;
+    return CEEPEW_OK;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* DoS Cookie Mechanism (WireGuard-style)                                      */
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -93,67 +369,6 @@ static CeePewErr_t dos_init(void) {
     return CEEPEW_OK;
 }
 
-static CeePewErr_t hmac_sha256(const uint8_t *key,
-                               uint16_t key_len,
-                               const uint8_t *msg,
-                               uint16_t msg_len,
-                               uint8_t out[32U])
-{
-    CEEPEW_ASSERT(key != NULL || key_len == 0U, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
-
-    uint8_t key_block[64U];
-    uint8_t inner_pad[64U];
-    uint8_t outer_pad[64U];
-    uint8_t inner_hash[32U];
-    uint8_t inner_msg[64U + CEEPEW_DEVICE_ID_BYTES + sizeof(uint32_t)];
-    uint8_t outer_msg[64U + 32U];
-
-    memset(key_block, 0U, sizeof(key_block));
-    if (key_len > sizeof(key_block)) {
-        CeePewErr_t err = crypto_sha256_compute(key, key_len, key_block);
-        if (err != CEEPEW_OK) {
-            ceepew_secure_zero(key_block, (uint32_t)sizeof(key_block));
-            return err;
-        }
-    } else if (key_len > 0U) {
-        memcpy(key_block, key, key_len);
-    }
-
-    for (uint8_t i = 0U; i < 64U; i++) {
-        inner_pad[i] = (uint8_t)(key_block[i] ^ 0x36U);
-        outer_pad[i] = (uint8_t)(key_block[i] ^ 0x5CU);
-    }
-
-    memcpy(inner_msg, inner_pad, 64U);
-    if (msg_len > 0U) {
-        memcpy(inner_msg + 64U, msg, msg_len);
-    }
-    CeePewErr_t err = crypto_sha256_compute(inner_msg, (uint32_t)(64U + msg_len), inner_hash);
-    if (err != CEEPEW_OK) {
-        ceepew_secure_zero(key_block, (uint32_t)sizeof(key_block));
-        ceepew_secure_zero(inner_pad, (uint32_t)sizeof(inner_pad));
-        ceepew_secure_zero(outer_pad, (uint32_t)sizeof(outer_pad));
-        ceepew_secure_zero(inner_hash, (uint32_t)sizeof(inner_hash));
-        ceepew_secure_zero(inner_msg, (uint32_t)sizeof(inner_msg));
-        ceepew_secure_zero(outer_msg, (uint32_t)sizeof(outer_msg));
-        return err;
-    }
-
-    memcpy(outer_msg, outer_pad, 64U);
-    memcpy(outer_msg + 64U, inner_hash, 32U);
-    err = crypto_sha256_compute(outer_msg, 96U, out);
-
-    ceepew_secure_zero(key_block, (uint32_t)sizeof(key_block));
-    ceepew_secure_zero(inner_pad, (uint32_t)sizeof(inner_pad));
-    ceepew_secure_zero(outer_pad, (uint32_t)sizeof(outer_pad));
-    ceepew_secure_zero(inner_hash, (uint32_t)sizeof(inner_hash));
-    ceepew_secure_zero(inner_msg, (uint32_t)sizeof(inner_msg));
-    ceepew_secure_zero(outer_msg, (uint32_t)sizeof(outer_msg));
-    return err;
-}
-
 CeePewErr_t esl_register_callbacks(EslMacCheckFn mac_cb, EslNonceFn nonce_cb)
 {
     CEEPEW_ASSERT(mac_cb != NULL && nonce_cb != NULL, CEEPEW_ERR_NULL_PTR);
@@ -167,6 +382,14 @@ CeePewErr_t esl_register_callbacks(EslMacCheckFn mac_cb, EslNonceFn nonce_cb)
 
 void esl_reset_callbacks(void)
 {
+    /* Wipe the DoS server secret so it does not persist across sessions.
+     * server_secret is an HMAC key for anti-DoS cookies — not a traffic
+     * encryption key, but the project policy requires zeroing all key
+     * material on session end. */
+    ceepew_secure_zero(s_dos_ctx.server_secret, sizeof(s_dos_ctx.server_secret));
+    s_dos_ctx.last_rotate_time = 0U;
+    s_dos_ctx_initialized = false;
+
     s_mac_cb = NULL;
     s_nonce_cb = NULL;
     s_esl_callbacks_registered = false;
@@ -193,8 +416,8 @@ static CeePewErr_t dos_generate_cookie(const uint8_t sender_mac[6], uint32_t tim
     memcpy(hmac_input + CEEPEW_DEVICE_ID_BYTES, &timestamp_rounded, sizeof(uint32_t));
 
     uint8_t full_hmac[32U];
-    err = hmac_sha256(s_dos_ctx.server_secret, (uint16_t)sizeof(s_dos_ctx.server_secret),
-                      hmac_input, (uint16_t)sizeof(hmac_input), full_hmac);
+    err = crypto_hmac_sha256(s_dos_ctx.server_secret, (uint16_t)sizeof(s_dos_ctx.server_secret),
+                             hmac_input, (uint32_t)sizeof(hmac_input), full_hmac);
     ceepew_secure_zero(hmac_input, (uint32_t)sizeof(hmac_input));
     if (err != CEEPEW_OK) {
         return err;
@@ -219,8 +442,13 @@ static CeePewErr_t dos_verify_cookie(const uint8_t sender_mac[6], uint32_t times
 
     uint8_t expected_cookie[CEEPEW_COOKIE_BYTES];
     CeePewErr_t err = dos_generate_cookie(sender_mac, timestamp_rounded, expected_cookie);
-    if (err != CEEPEW_OK) { return err; }
-    if (!ceepew_ct_equal(expected_cookie, received_cookie, CEEPEW_COOKIE_BYTES)) {
+    if (err != CEEPEW_OK) {
+        ceepew_secure_zero(expected_cookie, CEEPEW_COOKIE_BYTES);
+        return err;
+    }
+    bool match = ceepew_ct_equal(expected_cookie, received_cookie, CEEPEW_COOKIE_BYTES);
+    ceepew_secure_zero(expected_cookie, CEEPEW_COOKIE_BYTES);
+    if (!match) {
         return CEEPEW_ERR_TRANSPORT;  /* Silent fail */
     }
     return CEEPEW_OK;
@@ -260,7 +488,9 @@ CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16
 /* Incoming (RX) Security Pipeline (EXACT ORDER — do not reorder)              */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
-CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const uint8_t peer_mac[6], uint32_t queue_depth) {
+CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len,
+                                            const uint8_t peer_mac[6],
+                                            uint32_t queue_depth) {
     CEEPEW_ASSERT(frame != NULL && len != NULL && peer_mac != NULL, CEEPEW_ERR_NULL_PTR);
     if (*len < (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES)) {
         return CEEPEW_ERR_PARAM;
@@ -268,122 +498,40 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len, const 
 
     if (!s_dos_ctx_initialized) { dos_init(); }
 
-    uint16_t frame_len = *len;
-    uint16_t payload_len = (uint16_t)(frame_len - CEEPEW_ESL_HEADER_BYTES - CEEPEW_ESL_CRC_BYTES);
-    EslHeader_t hdr;
-    memcpy(&hdr, frame, sizeof(hdr));
-    s_last_nonce_counter = hdr.nonce_counter;
-
-    /* ═ STEP 1: DoS Guard (MAC-based cookie if queue is high) ═ */
-    bool dos_load_high = (queue_depth > CEEPEW_DOS_QUEUE_THRESHOLD);
-    if (dos_load_high) {
-        if ((hdr.flags & CEEPEW_ESL_FLAG_HAS_COOKIE) == 0U) {
-            /* Request cookie from peer — send CHALLENGE_COOKIE frame */
-            ESP_LOGD(TAG, "DoS: No cookie found, high queue depth (%lu)", queue_depth);
-            return CEEPEW_ERR_TRANSPORT;  /* Silent fail; peer should retry with cookie */
-        }
-        /* Extract and verify cookie */
-        if (payload_len < CEEPEW_COOKIE_BYTES) {
-            ESP_LOGW(TAG, "DoS: Cookie missing or truncated (payload_len=%u)", payload_len);
-            return CEEPEW_ERR_TRANSPORT;
-        }
-        uint8_t rx_cookie[CEEPEW_COOKIE_BYTES];
-        memcpy(rx_cookie, frame + CEEPEW_ESL_HEADER_BYTES, CEEPEW_COOKIE_BYTES);
-        uint32_t ts_rounded = (hdr.timestamp_s / 10U) * 10U;  /* Round to 10s buckets */
-        CeePewErr_t err = dos_verify_cookie(peer_mac, ts_rounded, rx_cookie);
-        if (err != CEEPEW_OK) {
-            ESP_LOGD(TAG, "DoS: Cookie verification failed (err=%d)", err);
-            return err;  /* Silent fail */
-        }
-        payload_len = (uint16_t)(payload_len - CEEPEW_COOKIE_BYTES);
+    /* Extract nonce_counter from header before pipeline stages process it.
+     * The stage_esl_strip stage moves payload data which would overwrite the
+     * header bytes, so we snapshot this here while the header is intact. */
+    {
+        EslHeader_t tmp;
+        memcpy(&tmp, frame, sizeof(tmp));
+        s_last_nonce_counter = tmp.nonce_counter;
     }
 
-    /* ═ STEP 2: MAC Lock (constant-time, peer identity check) ═ */
-    CEEPEW_ASSERT(s_esl_callbacks_registered, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(s_mac_cb != NULL, CEEPEW_ERR_PARAM);
-    CeePewErr_t err = s_mac_cb(peer_mac);
-    if (err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "MAC lock failed: peer MAC not in session (err=%d)", err);
-        return err;  /* Silent fail */
+    /* Build ESL pipeline on first use */
+    if (!s_esl_pipeline_built) {
+        CeePewErr_t err = esl_build_pipeline();
+        if (err != CEEPEW_OK) { return err; }
     }
 
-    /* ═ STEP 3: Magic & Version (transport-level validation) ═ */
-    if ((hdr.magic0 != CEEPEW_ESL_MAGIC0) || (hdr.magic1 != CEEPEW_ESL_MAGIC1) || (hdr.version != CEEPEW_ESL_VERSION)) {
-        ESP_LOGW(TAG, "Malformed frame: magic=%02x%02x version=%u (expected %02x%02x v%u)",
-                 hdr.magic0, hdr.magic1, hdr.version,
-                 CEEPEW_ESL_MAGIC0, CEEPEW_ESL_MAGIC1, CEEPEW_ESL_VERSION);
-        return CEEPEW_ERR_TRANSPORT;  /* Malformed frame */
-    }
+    /* Set up per-call pipeline context (shared via static so stages
+     * registered via pipeline_add_stage can see it). Reset all fields
+     * before each run — pipeline stages run sequentially on one core,
+     * so there is no concurrency concern. */
+    ceepew_secure_zero(&s_esl_pipeline_ctx, sizeof(s_esl_pipeline_ctx));
+    s_esl_pipeline_ctx.peer_mac = peer_mac;
+    s_esl_pipeline_ctx.queue_depth = queue_depth;
+    s_esl_pipeline_ctx.payload_offset = CEEPEW_ESL_HEADER_BYTES;
 
-    /* ═ STEP 4: CRC-32 (can return NACK — is a transport error, not an auth failure) ═ */
-    uint32_t rx_crc = 0U;
-    memcpy(&rx_crc, frame + frame_len - CEEPEW_ESL_CRC_BYTES, sizeof(rx_crc));
-    uint32_t calc_crc = esp_crc32_le(0U, frame, (size_t)(frame_len - CEEPEW_ESL_CRC_BYTES));
-    if (rx_crc != calc_crc) {
-        ESP_LOGD(TAG, "CRC mismatch: rx=%08lx calc=%08lx", rx_crc, calc_crc);
-        return CEEPEW_ERR_TRANSPORT;  /* CRC mismatch — can return NACK */
-    }
+    /* Run the 7-stage ESL ingress pipeline (DoS → MAC → Magic → CRC →
+     * Timestamp → Replay → Strip). All stages pass the frame buffer through
+     * until the final strip stage which memmove-s the payload to the front. */
+    uint8_t *output = NULL;
+    uint16_t output_len = 0U;
+    CeePewErr_t err = pipeline_run(&s_esl_pipeline, &g_region,
+                                    frame, *len, &output, &output_len);
+    if (err != CEEPEW_OK) { return err; }
 
-    /* ═ STEP 5: Timestamp Validation (±45s, silent fail) ═
-     * 
-     * SECURITY: This check prevents several attacks:
-     * 1. Replay attacks via timestamp spoofing — old messages with crafted timestamps
-     * 2. Preplay attacks — injecting future-dated messages to bypass the window
-     * 3. Clock skew attacks — exploiting mismatched device clocks
-     * 
-     * LIMITATION: The ±45 second window assumes:
-     * - Both device clocks are synchronized within ±45 seconds (via NTP or similar)
-     * - Legitimate messages are encrypted and transmitted within milliseconds
-     * - Attackers cannot predict the session_code and timestamps simultaneously
-     * 
-     * The window CEEPEW_TIMESTAMP_SLACK_S (45 seconds) is chosen to:
-     * - Allow for typical clock drift on ESP32 devices without NTP
-     * - Prevent a 45-second replay window that an attacker could exploit
-     * - Be short enough that replaying old messages becomes impractical
-     *
-     * If devices have unsynchronized clocks (> ±45s apart by default), legitimate
-     * messages will be silently rejected. The transport layer can apply a
-     * peer_uptime_offset (set via session_set_peer_uptime_offset) to compensate
-     * for raw-uptime differences; without it, both devices' ESL headers carry
-     * their own boot uptime, which diverges as soon as one device reboots.
-     *
-     * Silent fail (no error response) prevents timing-based clock inference attacks.
-     */
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    /* Apply the peer's uptime offset so the local clock can be compared to
-     * the peer's local clock on equal terms. The offset is set by the BLE
-     * layer after a one-shot time-sync GATT read; if not set, the offset is
-     * 0 and the check is the same as before. */
-    int32_t peer_off_s = session_get_peer_uptime_offset();
-    uint32_t peer_now_s = now_s + (uint32_t)peer_off_s;  /* peer_off_s clamped to +/-86400 in session_set_peer_uptime_offset */
-    uint32_t hdr_s      = hdr.timestamp_s;
-    uint32_t diff = (peer_now_s > hdr_s) ? (peer_now_s - hdr_s) : (hdr_s - peer_now_s);
-    if (diff > CEEPEW_TIMESTAMP_SLACK_S) {
-        ESP_LOGW(TAG, "ESL discard: timestamp outside tolerance (diff=%d slack=%u)",
-                 (int)diff, (unsigned)CEEPEW_TIMESTAMP_SLACK_S);
-        return CEEPEW_ERR_TRANSPORT;  /* Silent fail — prevents replay via timestamp spoofing */
-    }
-
-    /* ═ STEP 6: Replay Window (WireGuard bitmap, silent fail) ═ */
-    bool is_replay = false;
-    err = transport_replay_check(hdr.seq, hdr.timestamp_s, &is_replay);
-    if (err != CEEPEW_OK) {
-        ESP_LOGW(TAG, "ESL discard: replay check error (err=%d seq=%lu)",
-                 (int)err, (unsigned long)hdr.seq);
-        return err;  /* Silent fail */
-    }
-    if (is_replay) {
-        ESP_LOGW(TAG, "ESL discard: replay detected (seq=%lu)", (unsigned long)hdr.seq);
-        return CEEPEW_ERR_TRANSPORT;  /* Silent fail */
-    }
-
-    /* ═ STEP 7: Strip ESL header — payload follows ═ */
-    uint16_t payload_offset = CEEPEW_ESL_HEADER_BYTES;
-    if (dos_load_high && ((hdr.flags & CEEPEW_ESL_FLAG_HAS_COOKIE) != 0U)) {
-        payload_offset = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_COOKIE_BYTES);
-    }
-    memmove(frame, frame + payload_offset, payload_len);
-    *len = payload_len;
+    *len = output_len;
     return CEEPEW_OK;
 }
 

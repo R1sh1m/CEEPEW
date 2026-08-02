@@ -118,7 +118,7 @@ static uint8_t s_sign_pk_attr_val[GATT_CRYPTO_TOTAL_BYTES] = {0};
 
 static esp_attr_value_t s_sign_pk_attr_val_cfg = {
     .attr_max_len = sizeof(s_sign_pk_attr_val),
-    .attr_len = 0,
+    .attr_len = sizeof(s_sign_pk_attr_val),
     .attr_value = s_sign_pk_attr_val
 };
 
@@ -371,10 +371,12 @@ static void transport_ble_clear_discovery_peer_state_unlocked(void)
     g_ble_ctx.scan_seen_count     = 0U;
     g_ble_ctx.adv_packet_count    = 0U;
     g_ble_ctx.discovered          = false;
-    g_ble_ctx.commitment_verified = false;
-    g_ble_ctx.handoff_ready       = false;
-    g_ble_ctx.ready_for_chat      = false;
-    g_ble_ctx.peer_ready_for_chat = false;
+    if (!g_ble_ctx.commitment_verified) {
+        g_ble_ctx.commitment_verified = false;
+        g_ble_ctx.handoff_ready       = false;
+        g_ble_ctx.ready_for_chat      = false;
+        g_ble_ctx.peer_ready_for_chat = false;
+    }
     g_ble_ctx.peer_ready_timestamp_ms = 0U;
     g_ble_ctx.local_commitment_len = 0U;
     g_ble_ctx.pending_peer_commitment_len = 0U;
@@ -765,7 +767,10 @@ CeePewErr_t transport_ble_send_handoff_ready_beacon(void)
 
 CeePewErr_t transport_ble_init(void)
 {
-    CEEPEW_ASSERT(!s_ble_initialised, CEEPEW_ERR_BUSY);
+    if (s_ble_initialised) {
+        ESP_LOGI(TAG, "transport_ble_init: BLE already initialised — returning OK");
+        return CEEPEW_OK;
+    }
 
     memset(&g_ble_ctx, 0U, sizeof(BleContext_t));
 
@@ -871,6 +876,11 @@ CeePewErr_t transport_ble_init(void)
         }
         ESP_LOGI(TAG, "esp_bt_controller_enable: OK");
 
+        /* Settle delay: after esp_bt_controller_enable(), the BT radio may
+         * briefly disable the shared cache during calibration.  Wait for it
+         * to stabilise before starting Bluedroid tasks that access flash. */
+        vTaskDelay(pdMS_TO_TICKS(200));
+
         esp_bluedroid_config_t bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
         err = esp_bluedroid_init_with_cfg(&bluedroid_cfg);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -961,6 +971,7 @@ CeePewErr_t transport_ble_init(void)
         ESP_LOGI(TAG, "GATTS app already registered (continuing)");
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gatts_app_register failed: %d (%s)", err, esp_err_to_name(err));
+        s_ble_initialised = false;
         return CEEPEW_ERR_HW;
     }
 
@@ -1302,7 +1313,11 @@ static CeePewErr_t transport_ble_verify_pending_commitment_unlocked(void)
                        (uint32_t)sizeof(g_ble_ctx.pending_peer_commitment));
     if (err == CEEPEW_OK) {
         ESP_LOGI(TAG, "Beacon commitment verification PASSED — handoff ready");
-        g_ble_ctx.peer_ready_for_chat = true;
+        g_ble_ctx.commitment_verified  = true;
+        g_ble_ctx.handoff_ready        = true;
+        g_ble_ctx.ready_for_chat       = true;
+        g_ble_ctx.state                = BLE_DONE;
+        g_ble_ctx.peer_ready_for_chat  = true;
         return CEEPEW_OK;
     }
 
@@ -1354,7 +1369,10 @@ CeePewErr_t transport_ble_verify_pending_commitment(void)
 
 bool transport_ble_handoff_ready(void)
 {
-    return g_ble_ctx.handoff_ready && g_ble_ctx.commitment_verified;
+    ble_ctx_lock();
+    bool ready = g_ble_ctx.handoff_ready && g_ble_ctx.commitment_verified;
+    ble_ctx_unlock();
+    return ready;
 }
 
 static void transport_ble_set_ready_for_chat_unlocked(void)
@@ -1499,14 +1517,14 @@ CeePewErr_t transport_ble_deinit(void)
     }
 
     /* 6. Wait for the radio to fully release before WiFi claims it */
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(250));
 
     ESP_LOGI(TAG, "BLE deinit: stack torn down (memory retained for potential reinit)");
 #else
     ESP_LOGI(TAG, "BLE deinit (CONFIG_BT_ENABLED not set)");
 #endif
 
-    memset(&g_ble_ctx, 0U, sizeof(BleContext_t));
+    ceepew_secure_zero(&g_ble_ctx, sizeof(BleContext_t));
     g_ble_ctx.peer_name_len = 0U;
     g_ble_ctx.peer_rssi = 0;
     s_scan_requested = false;
@@ -1533,6 +1551,14 @@ CeePewErr_t transport_ble_teardown(void)
         ESP_LOGW(TAG, "teardown: BLE not initialised — no-op");
         return CEEPEW_OK;
     }
+
+    /* Clear initialised flag FIRST so retry_scan_if_needed() (called from
+     * the same task after this returns) sees BLE as logically down despite
+     * the physical bluedroid/controller deinit sequence below. Without this,
+     * the ~550ms of vTaskDelay in the teardown path creates a window where
+     * s_ble_initialised == true but esp_bluedroid_get_status() has already
+     * returned UNINITIALIZED, triggering a spurious retry_scan restart. */
+    s_ble_initialised = false;
 
     transport_ble_supervisor_stop();
     s_supervisor_recovering = 0U;
@@ -1601,7 +1627,7 @@ CeePewErr_t transport_ble_teardown(void)
     vTaskDelay(pdMS_TO_TICKS(150));
 #endif
 
-    memset(&g_ble_ctx, 0U, sizeof(BleContext_t));
+    ceepew_secure_zero(&g_ble_ctx, sizeof(BleContext_t));
     g_ble_ctx.peer_name_len = 0U;
     g_ble_ctx.peer_rssi = 0;
     s_scan_requested = false;
@@ -1616,7 +1642,7 @@ CeePewErr_t transport_ble_teardown(void)
     s_pending_scan_rsp_len = 0U;
     memset(s_pending_adv_buf, 0, sizeof(s_pending_adv_buf));
     memset(s_pending_scan_rsp_buf, 0, sizeof(s_pending_scan_rsp_buf));
-    s_ble_initialised = false;
+    /* s_ble_initialised was cleared at the top of this function */
     s_stack_needs_full_init = true;
     return CEEPEW_OK;
 }
@@ -1679,17 +1705,16 @@ CeePewErr_t transport_ble_set_scan_duty_cycle(uint16_t interval_ms, uint16_t win
  * ════════════════════════════════════════════════════════════════════════ */
 CeePewErr_t transport_ble_retry_scan_if_needed(void)
 {
-    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    if (!s_ble_initialised) { return CEEPEW_OK; }
     CEEPEW_ASSERT(g_ble_ctx.state <= BLE_DONE, CEEPEW_ERR_PARAM);
+
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
-    /* Dead-BLE detector: if Bluedroid is uninitialized despite our flag
-     * saying otherwise, force a full discovery restart to reinit the
-     * stack. This handles the case where repeated PAIR_FAIL cycles leave
-     * the BLE stack in an inconsistent state (bt_stat=0). */
     if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
-        ESP_LOGE(TAG, "retry_scan: Bluedroid UNINITIALIZED with s_ble_initialised=true — restarting discovery");
-        (void)transport_ble_restart_discovery_session();
+        if (g_ble_ctx.state == BLE_DONE || session_get_phase() >= 2U || session_is_active()) {
+            return CEEPEW_OK;
+        }
+        ESP_LOGW(TAG, "retry_scan: Bluedroid UNINITIALIZED with s_ble_initialised=true — will re-init on next discovery cycle");
         return CEEPEW_OK;
     }
 
@@ -2239,11 +2264,12 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         }
 
         /* Commitment beacon (subtype 0x50): buffer for later
-         * verification.  Gated on no pending commitment to avoid
-         * overwriting a buffered beacon before it is verified. */
+         * verification.  The outer gate allows flag-only updates
+         * (peer_gatt_ready) even when a commitment is already pending;
+         * only commitment-buffer overwrite is blocked by
+         * peer_commitment_pending inside the nonce-acceptance block. */
         if (is_ceepew_peer && (cur_phase == 1U || cur_phase == 2U) &&
-            (!g_ble_ctx.commitment_verified || !g_ble_ctx.peer_gatt_ready) &&
-            !g_ble_ctx.peer_commitment_pending)
+            (!g_ble_ctx.commitment_verified || !g_ble_ctx.peer_gatt_ready))
         {
             if (mfr_ptr != NULL &&
                 mfr_len == (uint8_t)(3U + CEEPEW_BEACON_PAYLOAD_BYTES) &&
@@ -2278,7 +2304,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                      * otherwise reject on counter. */
                     g_ble_ctx.peer_gatt_ready = peer_gatt_ready_now;
                 }
-                if (nonce_ok && !g_ble_ctx.commitment_verified) {
+                if (nonce_ok && !g_ble_ctx.commitment_verified && !g_ble_ctx.peer_commitment_pending) {
                     memcpy(g_ble_ctx.pending_peer_commitment,
                            &mfr_ptr[5],
                            CEEPEW_COMMITMENT_ADV_BYTES);
