@@ -8,16 +8,24 @@ contributes nothing to the final binary.
 
 ## How to run
 
-1. `idf.py menuconfig`
-2. `CEE-PEW Build Options` → `Diagnostic Mode` → `[*]`
-3. Save, exit.
-4. `idf.py build flash monitor -p COM5`
-5. Watch the serial log; the auto-runner prints a structured
-   `=== DIAGNOSTIC REPORT ===` block and then reboots after 5 s.
+### Automated Pipeline (Recommended for AI Agents & Developers)
 
-The companion script `diagnose.ps1` automates the menuconfig / build /
-flash / monitor / parse cycle and exits with a non-zero status if any
-subsystem reports `FAIL`.
+```powershell
+# Run native host unit tests (Ascon, ECDSA, HKDF, Huffman, SHA256, Hamming)
+python tools/ceepew_pipeline.py --mode host
+
+# Run on-device diagnostic tests (auto menuconfig toggle, build, flash, monitor, log ingest)
+python tools/ceepew_pipeline.py --mode diag
+
+# Run two-device pairing test
+python tools/ceepew_pipeline.py --mode pairing
+```
+
+### Manual ESP-IDF Command Line
+
+1. `idf.py menuconfig` -> `CEE-PEW Build Options` -> `Diagnostic Mode` -> `[*]`, Save.
+2. `idf.py build flash monitor -p COM5`
+3. Watch the serial log; the auto-runner prints a structured `=== DIAGNOSTIC REPORT ===` block and reboots after 5 s.
 
 ## Subsystem coverage
 

@@ -10,6 +10,7 @@ set(COMMON_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/crypto
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ecc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/mem
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/compress
 )
 
 # ── Source paths ─────────────────────────────────────────────────────
@@ -22,13 +23,23 @@ add_compile_definitions(
     CONFIG_CEEPEW_DEVELOPMENT_MODE=1
 )
 
+option(CEEPEW_HOST_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" ON)
+if(CEEPEW_HOST_SANITIZERS)
+    if(NOT MINGW)
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+endif()
+
 # ── Helper: portable component object library ────────────────────────
 # Sources that are portable aside from esp_log.h (which we stub)
 set(PORTABLE_SRCS
     ${COMPONENT_DIR}/components/ceepew_common/ceepew_security_utils.c
     ${COMPONENT_DIR}/components/crypto/crypto_ascon.c
     ${COMPONENT_DIR}/components/ecc/ecc_hamming.c
+    ${COMPONENT_DIR}/components/compress/compress_huffman.c
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs/ceepew_assert_stub.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/crypto_rng_stub.c
 )
 
 add_library(ceepew_portable OBJECT ${PORTABLE_SRCS})
@@ -38,7 +49,9 @@ target_include_directories(ceepew_portable PRIVATE ${COMMON_INCLUDES})
 # crypto_sha256.c and crypto_hkdf.c require mbedtls/md.h
 set(MBEDTLS_SRCS
     ${COMPONENT_DIR}/components/crypto/crypto_sha256.c
+    ${COMPONENT_DIR}/components/crypto/crypto_hmac.c
     ${COMPONENT_DIR}/components/crypto/crypto_hkdf.c
+    ${COMPONENT_DIR}/components/crypto/crypto_eddsa.c
 )
 
 add_library(ceepew_mbedtls OBJECT ${MBEDTLS_SRCS})
@@ -97,3 +110,31 @@ target_link_libraries(test_hkdf PRIVATE ceepew_mbedtls ceepew_portable)
 target_link_libraries(test_hkdf PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_hkdf PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_hkdf COMMAND test_hkdf)
+
+# test_eddsa — Ed25519 EdDSA sign/verify round-trip
+add_executable(test_eddsa
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_eddsa.c
+)
+target_link_libraries(test_eddsa PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_eddsa PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_eddsa PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_eddsa COMMAND test_eddsa)
+
+# test_huffman — static Huffman compress/decompress round-trip
+add_executable(test_huffman
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_huffman.c
+)
+target_link_libraries(test_huffman PRIVATE ceepew_portable)
+target_include_directories(test_huffman PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_huffman COMMAND test_huffman)
+
+# test_session_pairing — dual-session pairing, HKDF key convergence & AEAD messaging round-trip
+add_executable(test_session_pairing
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_session_pairing.c
+)
+target_link_libraries(test_session_pairing PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_session_pairing PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_session_pairing PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_session_pairing COMMAND test_session_pairing)
+
+
