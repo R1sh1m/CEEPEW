@@ -103,6 +103,9 @@ CeePewErr_t msg_store_add(const uint8_t *plaintext, uint16_t plaintext_len, uint
                sizeof(g_msg_store.messages[g_msg_store.tail].plaintext) - (plaintext_len + 1U));
     }
 
+    /* New messages start as unread (false = unread). Only RX messages (dir==0) are considered for unread count. */
+    g_msg_store.messages[g_msg_store.tail].read = false;
+
     g_msg_store.tail = (g_msg_store.tail + 1U) % CEEPEW_MAX_MESSAGES;
     g_msg_store.count++;
 
@@ -182,4 +185,33 @@ uint32_t session_get_last_wipe_ms(void)
     uint32_t wipe_s = g_msg_store.last_wipe_ts;
     portEXIT_CRITICAL(&s_msg_store_mux);
     return wipe_s * 1000U;
+}
+
+uint8_t msg_store_unread_count(void)
+{
+    portENTER_CRITICAL(&s_msg_store_mux);
+    uint8_t count = 0U;
+    for (uint8_t i = 0U; i < g_msg_store.count; i++) {
+        uint8_t msg_idx = (g_msg_store.head + i) % CEEPEW_MAX_MESSAGES;
+        const StoredMsg_t *msg = &g_msg_store.messages[msg_idx];
+        if (msg->meta.dir == 0U && !msg->read) {
+            count++;
+        }
+    }
+    portEXIT_CRITICAL(&s_msg_store_mux);
+    return count;
+}
+
+CeePewErr_t msg_store_mark_read(uint8_t index)
+{
+    portENTER_CRITICAL(&s_msg_store_mux);
+    CeePewErr_t err = CEEPEW_OK;
+    if (index >= g_msg_store.count) {
+        err = CEEPEW_ERR_BOUNDS;
+    } else {
+        uint8_t msg_idx = (g_msg_store.head + index) % CEEPEW_MAX_MESSAGES;
+        g_msg_store.messages[msg_idx].read = true;
+    }
+    portEXIT_CRITICAL(&s_msg_store_mux);
+    return err;
 }

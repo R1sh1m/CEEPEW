@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "ceepew_config.h"
+#include "ceepew_assert.h"
 
 #ifdef __cplusplus
 extern "C" {

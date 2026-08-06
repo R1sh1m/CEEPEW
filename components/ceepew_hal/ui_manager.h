@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "ceepew_config.h"
+#include "hal_ui_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +37,7 @@ typedef enum {
     UI_STATE_CHAT_SEND_CONFIRM = 17U, /* Phase 4: Confirm composed message before send */
     UI_STATE_CHAT_DETAIL = 18U,       /* Detail view of selected message */
     UI_STATE_PAIRING_DEGRADED = 19U,  /* Peer identity unverified — user must confirm to proceed */
+    UI_STATE_PEER_SELECT = 20U,   /* Multi-peer discovery: select peer */
 } UIState_t;
 
 typedef enum {
@@ -97,6 +99,11 @@ typedef struct {
     uint8_t       keyboard_row;         /* Current keyboard row (0-9 for 6x10 grid) */
     uint8_t       keyboard_col;         /* Current keyboard column (0-5) */
     uint8_t       chat_selected_idx;    /* Currently selected message index in thread */
+    /* Phase: Multi-peer discovery selection */
+    uint8_t       peer_select_idx;          /* Currently selected peer index in visible list */
+    uint8_t       peer_select_scroll_top;   /* Top index of visible window in cache */
+    bool          peer_select_blacklist_confirm; /* Blacklist confirm dialog active */
+    uint8_t       peer_select_blacklist_idx; /* Index of peer being blacklisted */
 } UIContext_t;
 
 extern UIContext_t g_ui_ctx;
@@ -195,5 +202,25 @@ void task_ui_update_visual_feedback(void);
 #ifdef __cplusplus
 }
 #endif
+
+/* Phase: Multi-peer discovery selection UI.
+ * Renders a scrollable list of cached CEE-PEW peers with MAC, name, RSSI,
+ * blacklist/failed indicators. Potentiometer scrolls, short press selects,
+ * long press shows blacklist confirm dialog.
+ * No dynamic allocation; static buffers.
+ */
+CeePewErr_t ui_peer_select_show(void);
+
+/* Handle input for peer select state.
+ * Potentiometer scrolls list, short press selects peer (calls transport_ble_set_selected_peer),
+ * long press on peer shows blacklist confirm dialog (Y/N).
+ */
+CeePewErr_t ui_peer_select_handle_input(uint8_t pot_value, bool button_pressed);
+
+/* Render blacklist confirmation dialog.
+ * Shows "Blacklist this peer?" with Y/N selection via potentiometer.
+ * Returns CEEPEW_OK on dismiss, calls transport_ble_peer_cache_blacklist on Y.
+ */
+CeePewErr_t ui_peer_select_blacklist_dialog(void);
 
 #endif /* UI_MANAGER_H */

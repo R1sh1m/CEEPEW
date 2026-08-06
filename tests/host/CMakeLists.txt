@@ -176,5 +176,59 @@ target_link_libraries(test_arq_fault_injection PRIVATE ceepew_portable ceepew_ar
 target_include_directories(test_arq_fault_injection PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_arq_fault_injection COMMAND test_arq_fault_injection)
 
+# ── Fuzz smoke targets ──────────────────────────────────────────────
+# Each harness exports LLVMFuzzerTestOneInput(). fuzz_driver.c provides
+# a deterministic main() that replays the seed corpus plus a PRNG
+# mutation stream, so the harnesses run natively under gcc + sanitizers
+# even when no clang/libFuzzer toolchain exists.
 
+file(GLOB FUZZ_ASCON_SEEDS ${COMPONENT_DIR}/fuzz/fuzz_ascon/corpus/*)
+add_executable(fuzz_smoke_ascon
+    ${COMPONENT_DIR}/fuzz/fuzz_ascon/fuzz_ascon.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz_driver.c
+)
+target_link_libraries(fuzz_smoke_ascon PRIVATE ceepew_portable)
+target_include_directories(fuzz_smoke_ascon PRIVATE ${COMMON_INCLUDES})
+add_test(NAME fuzz_smoke_ascon COMMAND fuzz_smoke_ascon ${FUZZ_ASCON_SEEDS})
+
+file(GLOB FUZZ_SHA256_SEEDS ${COMPONENT_DIR}/fuzz/fuzz_sha256/corpus/*)
+add_executable(fuzz_smoke_sha256
+    ${COMPONENT_DIR}/fuzz/fuzz_sha256/fuzz_sha256.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz_driver.c
+)
+target_link_libraries(fuzz_smoke_sha256 PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(fuzz_smoke_sha256 PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(fuzz_smoke_sha256 PRIVATE ${COMMON_INCLUDES})
+add_test(NAME fuzz_smoke_sha256 COMMAND fuzz_smoke_sha256 ${FUZZ_SHA256_SEEDS})
+
+file(GLOB FUZZ_HKDF_SEEDS ${COMPONENT_DIR}/fuzz/fuzz_hkdf/corpus/*)
+add_executable(fuzz_smoke_hkdf
+    ${COMPONENT_DIR}/fuzz/fuzz_hkdf/fuzz_hkdf.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz_driver.c
+)
+target_link_libraries(fuzz_smoke_hkdf PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(fuzz_smoke_hkdf PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(fuzz_smoke_hkdf PRIVATE ${COMMON_INCLUDES})
+add_test(NAME fuzz_smoke_hkdf COMMAND fuzz_smoke_hkdf ${FUZZ_HKDF_SEEDS})
+
+file(GLOB FUZZ_HAMMING_SEEDS ${COMPONENT_DIR}/fuzz/fuzz_hamming/corpus/*)
+add_executable(fuzz_smoke_hamming
+    ${COMPONENT_DIR}/fuzz/fuzz_hamming/fuzz_hamming.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz_driver.c
+)
+target_link_libraries(fuzz_smoke_hamming PRIVATE ceepew_portable)
+target_include_directories(fuzz_smoke_hamming PRIVATE ${COMMON_INCLUDES})
+add_test(NAME fuzz_smoke_hamming COMMAND fuzz_smoke_hamming ${FUZZ_HAMMING_SEEDS})
+
+# fuzz_arq supplies its own transport stubs, so use the dedicated stub
+# (without transport_* symbols) instead of arq_runtime_stub.c.
+add_executable(fuzz_smoke_arq
+    ${COMPONENT_DIR}/fuzz/fuzz_arq/fuzz_arq.c
+    ${COMPONENT_DIR}/components/ecc/ecc_arq.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/fuzz_arq_runtime_stub.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz_driver.c
+)
+target_link_libraries(fuzz_smoke_arq PRIVATE ceepew_portable)
+target_include_directories(fuzz_smoke_arq PRIVATE ${COMMON_INCLUDES})
+add_test(NAME fuzz_smoke_arq COMMAND fuzz_smoke_arq ${COMPONENT_DIR}/fuzz/fuzz_arq/corpus/*)
 

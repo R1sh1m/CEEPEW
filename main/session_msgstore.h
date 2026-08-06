@@ -29,6 +29,7 @@ typedef struct {
 typedef struct {
     MsgMeta_t meta;
     char      plaintext[CEEPEW_MAX_MSG_BYTES + 1U];  /* Null-terminated plaintext */
+    bool      read;                                  /* Message read status: true=read, false=unread */
 } StoredMsg_t;
 
 /* Message store context: circular buffer + expiration tracking */
@@ -64,6 +65,12 @@ CeePewErr_t msg_store_check_nonce_exhaustion(uint64_t nonce_counter);
 
 /* Get current message count */
 uint8_t msg_store_count(void);
+
+/* Get number of unread messages (dir == 0 && read == false) */
+uint8_t msg_store_unread_count(void);
+
+/* Mark a message at index as read. Returns CEEPEW_OK or CEEPEW_ERR_BOUNDS if index invalid. */
+CeePewErr_t msg_store_mark_read(uint8_t index);
 
 /* Diagnostic accessor: last secure-wipe time in milliseconds since epoch */
 uint32_t session_get_last_wipe_ms(void);

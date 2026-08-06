@@ -458,6 +458,183 @@ void transport_ble_clear_pending_commitment(void)
     ble_ctx_unlock();
 }
 
+/* ── Peer cache helpers ─────────────────────────────────────────────── */
+
+static int peer_cache_find_by_mac(const uint8_t mac[6])
+{
+    for (uint8_t i = 0U; i < g_ble_ctx.peer_cache_count; i++) {
+        if (ceepew_ct_equal(g_ble_ctx.peer_cache[i].record.peer_mac, mac, 6U)) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void peer_cache_upsert(const uint8_t mac[6], int8_t rssi, const uint8_t *name, uint8_t name_len,
+                               bool has_beacon, const uint8_t *commitment)
+{
+    int idx = peer_cache_find_by_mac(mac);
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+
+    if (idx >= 0) {
+        /* Update existing entry */
+        g_ble_ctx.peer_cache[idx].record.rssi = rssi;
+        g_ble_ctx.peer_cache[idx].record.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
+        if (name_len > 0U) {
+            memcpy(g_ble_ctx.peer_cache[idx].record.name, name, name_len);
+            g_ble_ctx.peer_cache[idx].record.name_len = name_len;
+            g_ble_ctx.peer_cache[idx].record.name[name_len] = '\0';
+        }
+        if (has_beacon && commitment) {
+            memcpy(g_ble_ctx.peer_cache[idx].peer_commitment, commitment, CEEPEW_COMMITMENT_ADV_BYTES);
+            g_ble_ctx.peer_cache[idx].has_commitment_beacon = true;
+        }
+        g_ble_ctx.peer_cache[idx].cached_at_ms = now_ms;
+        return;
+    }
+
+    /* New entry - check capacity */
+    if (g_ble_ctx.peer_cache_count >= CEEPEW_MAX_CACHED_PEERS) {
+        /* Evict LRU (oldest cached_at_ms) */
+        uint8_t lru_idx = 0U;
+        uint32_t oldest = g_ble_ctx.peer_cache[0].cached_at_ms;
+        for (uint8_t i = 1U; i < g_ble_ctx.peer_cache_count; i++) {
+            if (g_ble_ctx.peer_cache[i].cached_at_ms < oldest) {
+                oldest = g_ble_ctx.peer_cache[i].cached_at_ms;
+                lru_idx = i;
+            }
+        }
+        /* Shift entries to remove LRU */
+        for (uint8_t i = lru_idx; i < g_ble_ctx.peer_cache_count - 1U; i++) {
+            g_ble_ctx.peer_cache[i] = g_ble_ctx.peer_cache[i + 1U];
+        }
+        g_ble_ctx.peer_cache_count--;
+    }
+
+    /* Add new entry at tail */
+    uint8_t new_idx = g_ble_ctx.peer_cache_count;
+    memcpy(g_ble_ctx.peer_cache[new_idx].record.peer_mac, mac, 6U);
+    g_ble_ctx.peer_cache[new_idx].record.rssi = rssi;
+    g_ble_ctx.peer_cache[new_idx].record.seen_at = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    if (name_len > 0U) {
+        memcpy(g_ble_ctx.peer_cache[new_idx].record.name, name, name_len);
+        g_ble_ctx.peer_cache[new_idx].record.name_len = name_len;
+        g_ble_ctx.peer_cache[new_idx].record.name[name_len] = '\0';
+    } else {
+        g_ble_ctx.peer_cache[new_idx].record.name_len = 0U;
+    }
+    g_ble_ctx.peer_cache[new_idx].has_commitment_beacon = has_beacon;
+    if (has_beacon && commitment) {
+        memcpy(g_ble_ctx.peer_cache[new_idx].peer_commitment, commitment, CEEPEW_COMMITMENT_ADV_BYTES);
+    }
+    g_ble_ctx.peer_cache[new_idx].blacklisted = false;
+    g_ble_ctx.peer_cache[new_idx].recently_failed = false;
+    g_ble_ctx.peer_cache[new_idx].failed_at_ms = 0U;
+    g_ble_ctx.peer_cache[new_idx].cached_at_ms = now_ms;
+    g_ble_ctx.peer_cache_count++;
+}
+
+void transport_ble_peer_cache_clear(void)
+{
+    ble_ctx_lock();
+    memset(g_ble_ctx.peer_cache, 0U, sizeof(g_ble_ctx.peer_cache));
+    g_ble_ctx.peer_cache_count = 0U;
+    ble_ctx_unlock();
+}
+
+void transport_ble_peer_cache_expire_ttl(uint32_t now_ms)
+{
+    ble_ctx_lock();
+    uint8_t write_idx = 0U;
+    for (uint8_t i = 0U; i < g_ble_ctx.peer_cache_count; i++) {
+        if (now_ms - g_ble_ctx.peer_cache[i].cached_at_ms < (CEEPEW_PEER_CACHE_TTL_S * 1000U)) {
+            if (write_idx != i) {
+                g_ble_ctx.peer_cache[write_idx] = g_ble_ctx.peer_cache[i];
+            }
+            write_idx++;
+        }
+    }
+    g_ble_ctx.peer_cache_count = write_idx;
+    ble_ctx_unlock();
+}
+
+CeePewErr_t transport_ble_set_selected_peer(uint8_t cache_index)
+{
+    ble_ctx_lock();
+    if (cache_index >= g_ble_ctx.peer_cache_count) {
+        ble_ctx_unlock();
+        return CEEPEW_ERR_BOUNDS;
+    }
+    if (g_ble_ctx.peer_cache[cache_index].blacklisted) {
+        ble_ctx_unlock();
+        return CEEPEW_ERR_PARAM;
+    }
+    memcpy(g_ble_ctx.peer_mac, g_ble_ctx.peer_cache[cache_index].record.peer_mac, 6U);
+    g_ble_ctx.peer_addr_type = BLE_ADDR_TYPE_PUBLIC;
+    memcpy(g_ble_ctx.peer_name, g_ble_ctx.peer_cache[cache_index].record.name, 
+           g_ble_ctx.peer_cache[cache_index].record.name_len);
+    g_ble_ctx.peer_name_len = g_ble_ctx.peer_cache[cache_index].record.name_len;
+    g_ble_ctx.peer_rssi = g_ble_ctx.peer_cache[cache_index].record.rssi;
+    g_ble_ctx.discovered = true;
+    g_ble_ctx.discovery_start_ts = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    g_ble_ctx.scan_hit_count = 1U;
+    if (g_ble_ctx.peer_cache[cache_index].has_commitment_beacon) {
+        memcpy(g_ble_ctx.pending_peer_commitment, 
+               g_ble_ctx.peer_cache[cache_index].peer_commitment, 
+               CEEPEW_COMMITMENT_ADV_BYTES);
+        g_ble_ctx.pending_peer_commitment_len = CEEPEW_COMMITMENT_ADV_BYTES;
+        g_ble_ctx.peer_commitment_pending = true;
+        g_ble_ctx.peer_commitment_via_adv = true;
+    }
+    ble_ctx_unlock();
+    return CEEPEW_OK;
+}
+
+uint8_t transport_ble_get_peer_cache_count(void)
+{
+    ble_ctx_lock();
+    uint8_t count = 0U;
+    for (uint8_t i = 0U; i < g_ble_ctx.peer_cache_count; i++) {
+        if (!g_ble_ctx.peer_cache[i].blacklisted) {
+            count++;
+        }
+    }
+    ble_ctx_unlock();
+    return count;
+}
+
+const CachedPeer_t *transport_ble_get_peer_cache_entry(uint8_t index)
+{
+    ble_ctx_lock();
+    if (index >= g_ble_ctx.peer_cache_count) {
+        ble_ctx_unlock();
+        return NULL;
+    }
+    /* Skip blacklisted entries */
+    uint8_t visible_idx = 0U;
+    const CachedPeer_t *entry = NULL;
+    for (uint8_t i = 0U; i < g_ble_ctx.peer_cache_count; i++) {
+        if (!g_ble_ctx.peer_cache[i].blacklisted) {
+            if (visible_idx == index) {
+                entry = &g_ble_ctx.peer_cache[i];
+                break;
+            }
+            visible_idx++;
+        }
+    }
+    ble_ctx_unlock();
+    return entry;
+}
+
+void transport_ble_peer_cache_blacklist(uint8_t cache_index)
+{
+    ble_ctx_lock();
+    if (cache_index < g_ble_ctx.peer_cache_count) {
+        g_ble_ctx.peer_cache[cache_index].blacklisted = true;
+    }
+    ble_ctx_unlock();
+}
+
 #define CEEPEW_SCAN_PEER_DEDUPE_WINDOW_MS 300U
 
 static const char *transport_ble_state_name(BleState_t state)
@@ -2297,6 +2474,27 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
         int16_t new_rssi_x8 = (int16_t)((int16_t)param->scan_rst.rssi * 8);
 
+        /* Extract manufacturer-specific data for commitment beacon */
+        uint8_t mfr_len = 0U;
+        uint8_t *mfr_ptr = NULL;
+        if (is_ceepew_peer) {
+            mfr_ptr = esp_ble_resolve_adv_data_by_type(
+                raw_adv, total_adv_len, 0xFFU, &mfr_len);
+        }
+
+        /* Extract commitment beacon for peer cache */
+        bool has_beacon = false;
+        if (mfr_ptr != NULL && mfr_len == (uint8_t)(3U + CEEPEW_COMMITMENT_ADV_BYTES) &&
+            mfr_ptr[0] == 0xEEU && mfr_ptr[1] == 0xCEU && mfr_ptr[2] == 0x50U) {
+            has_beacon = true;
+        }
+
+        /* Upsert peer cache */
+        peer_cache_upsert(param->scan_rst.bda, param->scan_rst.rssi,
+                          (uint8_t *)found_name, found_name_len,
+                          has_beacon, has_beacon ? &mfr_ptr[5] : NULL);
+
+        /* Update primary peer for backward compatibility (first discovered or selected) */
         if (!g_ble_ctx.discovered) {
             ESP_LOGI(TAG, "CEEPEW peer first seen: %02X:%02X:%02X:%02X:%02X:%02X "
                      "RSSI=%d name=%s",
@@ -2350,14 +2548,6 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
          * readiness inside transport_ble_verify_pending_commitment_unlocked().
          */
         uint8_t cur_phase = session_get_phase();
-
-        /* Extract manufacturer-specific data once for both beacon types. */
-        uint8_t mfr_len = 0U;
-        uint8_t *mfr_ptr = NULL;
-        if (is_ceepew_peer) {
-            mfr_ptr = esp_ble_resolve_adv_data_by_type(
-                raw_adv, total_adv_len, 0xFFU, &mfr_len);
-        }
 
         /* Rejection beacon (subtype 0x51): peer rejected our commitment.
          * Always check, regardless of peer_commitment_pending, so the

@@ -59,3 +59,4 @@ digest.txt
 DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
 *log*.*
+**/build_fuzz/

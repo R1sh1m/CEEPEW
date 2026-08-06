@@ -88,6 +88,20 @@ typedef struct {
     uint8_t  name_len;
 } BlePeerRecord_t;
 
+/* Multi-peer discovery cache */
+#define CEEPEW_MAX_CACHED_PEERS     8U
+#define CEEPEW_PEER_CACHE_TTL_S     300U  // 5 minutes
+
+typedef struct {
+    BlePeerRecord_t record;
+    bool            has_commitment_beacon;
+    uint8_t         peer_commitment[CEEPEW_COMMITMENT_ADV_BYTES];
+    bool            blacklisted;
+    bool            recently_failed;
+    uint32_t        failed_at_ms;
+    uint32_t        cached_at_ms;
+} CachedPeer_t;
+
 /* BLE pairing session context */
 typedef struct {
     BleState_t     state;
@@ -161,6 +175,9 @@ typedef struct {
     uint8_t        sign_pk_write_attempts;      /* sign_pk write attempts (buffered) */
     uint8_t        last_disconnect_reason;      /* Last GATT disconnect HCI reason code */
     uint32_t       last_metrics_log_ms;         /* Last periodic metrics log timestamp */
+    /* ── Multi-peer discovery cache ── */
+    CachedPeer_t   peer_cache[CEEPEW_MAX_CACHED_PEERS];
+    uint8_t        peer_cache_count;
 } BleContext_t;
 
 extern BleContext_t g_ble_ctx;
@@ -208,6 +225,14 @@ void transport_ble_clear_discovery_peer_state(void);
  * pairing attempt to prevent stale beacons from a prior session from
  * poisoning the new attempt). */
 void transport_ble_clear_pending_commitment(void);
+
+/* Multi-peer cache API */
+CeePewErr_t transport_ble_set_selected_peer(uint8_t cache_index);
+uint8_t transport_ble_get_peer_cache_count(void);
+const CachedPeer_t *transport_ble_get_peer_cache_entry(uint8_t index);
+void transport_ble_peer_cache_blacklist(uint8_t cache_index);
+void transport_ble_peer_cache_clear(void);
+void transport_ble_peer_cache_expire_ttl(uint32_t now_ms);
 
 /*
  * Encode `len` bytes of `commitment` into the BLE scan-response payload as a

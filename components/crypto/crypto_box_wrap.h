@@ -5,6 +5,7 @@
 
 #include "crypto_ctx.h"
 #include "ceepew_config.h"
+#include "ceepew_assert.h"
 
 #include <stdint.h>
 

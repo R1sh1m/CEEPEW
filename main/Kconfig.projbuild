@@ -1,64 +1,15 @@
 menu "CEE-PEW Configuration"
 
-    menu "System & Security Options"
-
-        config CEEPEW_DEVELOPMENT_MODE
-            bool "Development Mode (enables tests, debug serial, headless mode)"
-            default n
-            help
-                Master toggle that enables the internal test suite under tests/
-                (auto-run on boot, prints === DIAGNOSTIC REPORT ===), enables
-                CEEPEW_DEBUG_SERIAL for operational-status logging (never key
-                material), and enables CEEPEW_HEADLESS_MODE for UI auto-advance
-                without OLED (uses hardcoded session code "ZZZZ"). Production
-                builds MUST leave this disabled (default).
-
-        config CEEPEW_EFUSE_HMAC_KEY
-            bool "Enable eFuse HMAC device identity key"
-            default n
-            help
-                Store a 32-byte device identity key in the ESP32 eFuse user
-                data block (EFUSE_BLK3) and use it to derive a device-bound
-                HKDF salt during session key derivation. Falls back to
-                software-only salt if eFuse block is unprovisioned.
-
-        config CEEPEW_WIFI_FULL_RESTART
-            bool "Full WiFi stop+start on BLE->WiFi transition"
-            default y
-            help
-                When enabled (default), performs full esp_wifi_stop()/esp_wifi_start()
-                to force coexistence hardware reset after BLE deinit.
-                When disabled, uses coex_schm_process_restart() as lighter alternative.
-
-    endmenu
-
-    menu "Display & Graphics Configuration"
-
-        config CEEPEW_OLED_FORCE_SH1106
-            bool "Force SH1106 mode (column offset +2)"
-            default n
-            help
-                Force the OLED driver to use SH1106 initialization and column
-                addressing (+2 column offset). Enable if your board hardware uses an
-                SH1106 controller instead of SSD1306.
-
-        config CEEPEW_OLED_FORCE_FAST_FALLBACK
-            bool "Force 800 kHz Fm+ OLED fallback at boot"
-            default n
-            help
-                Compile-time opt-in to use the 800 kHz Fast-mode-plus
-                fallback path in components/ceepew_oled at panel init
-                time, instead of probing for it reactively.
-
-        config CEEPEW_OLED_GRAPHICS_TEST
-            bool "OLED Graphics Test Mode (bypass normal firmware, cycle test patterns)"
-            default n
-            help
-                Standalone diagnostic mode that ports U8glib's GraphicsTest.pde
-                patterns to the in-house ceepew_oled / hal_ui stack.
-                Normal application tasks are NOT started.
-
-    endmenu
+    config CEEPEW_DEVELOPMENT_MODE
+        bool "Development Mode (enables tests, debug serial, headless mode)"
+        default n
+        help
+            Master toggle that enables the internal test suite under tests/
+            (auto-run on boot, prints === DIAGNOSTIC REPORT ===), enables
+            CEEPEW_DEBUG_SERIAL for operational-status logging (never key
+            material), and enables CEEPEW_HEADLESS_MODE for UI auto-advance
+            without OLED (uses hardcoded session code "ZZZZ"). Production
+            builds MUST leave this disabled (default).
 
     menu "Hardware Pin Configuration"
 
@@ -147,5 +98,33 @@ menu "CEE-PEW Configuration"
 
     endmenu
 
-endmenu
+    menu "Advanced Options"
 
+        config CEEPEW_EFUSE_HMAC_KEY
+            bool "Enable eFuse HMAC device identity key"
+            default n
+            help
+                Store a 32-byte device identity key in the ESP32 eFuse user
+                data block (EFUSE_BLK3) and use it to derive a device-bound
+                HKDF salt during session key derivation. Falls back to
+                software-only salt if eFuse block is unprovisioned.
+
+        config CEEPEW_WIFI_FULL_RESTART
+            bool "Full WiFi stop+start on BLE->WiFi transition"
+            default y
+            help
+                When enabled (default), performs full esp_wifi_stop()/esp_wifi_start()
+                to force coexistence hardware reset after BLE deinit.
+                When disabled, uses coex_schm_process_restart() as lighter alternative.
+
+        config CEEPEW_OLED_FORCE_SH1106
+            bool "Force SH1106 mode (column offset +2)"
+            default n
+            help
+                Force the OLED driver to use SH1106 initialization and column
+                addressing (+2 column offset). Enable if your board hardware uses an
+                SH1106 controller instead of SSD1306.
+
+    endmenu
+
+endmenu

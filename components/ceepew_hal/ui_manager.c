@@ -1798,6 +1798,252 @@ static CeePewErr_t render_pairing_degraded(void)
     return CEEPEW_OK;
 }
 
+/* ═════════════════════════════════════════════════════════════════════════════════
+ * SECTION: Multi-Peer Selection (UI_STATE_PEER_SELECT)
+ * ════════════════════════════════════════════════════════════════════════════════ */
+
+#define PEER_SELECT_VISIBLE_COUNT 3U
+#define PEER_SELECT_ITEM_HEIGHT  16U
+#define PEER_SELECT_LIST_TOP_Y   16U
+
+static CeePewErr_t render_peer_select_blacklist_dialog(void);
+
+static CeePewErr_t render_peer_select(void)
+{
+    if (g_ui_ctx.peer_select_blacklist_confirm) {
+        return render_peer_select_blacklist_dialog();
+    }
+
+    hal_ui_clear();
+
+    uint8_t count = transport_ble_get_peer_cache_count();
+    if (count == 0U) {
+        ui_draw_centered_text(28U, "No peers found");
+        ui_draw_centered_text(44U, "BTN=scan again");
+        return CEEPEW_OK;
+    }
+
+    /* Title */
+    ui_draw_centered_text(0U, "SELECT PEER");
+    draw_hline(0U, 10U, 128U);
+
+    /* Visible window */
+    uint8_t scroll_top = g_ui_ctx.peer_select_scroll_top;
+    if (scroll_top >= count) {
+        scroll_top = (count > PEER_SELECT_VISIBLE_COUNT) ? count - PEER_SELECT_VISIBLE_COUNT : 0U;
+        g_ui_ctx.peer_select_scroll_top = scroll_top;
+    }
+
+    uint8_t selected_idx = g_ui_ctx.peer_select_idx;
+    if (selected_idx >= count) {
+        selected_idx = count - 1U;
+        g_ui_ctx.peer_select_idx = selected_idx;
+    }
+
+    /* Ensure selected item is visible */
+    if (selected_idx < scroll_top) {
+        g_ui_ctx.peer_select_scroll_top = selected_idx;
+        scroll_top = selected_idx;
+    } else if (selected_idx >= scroll_top + PEER_SELECT_VISIBLE_COUNT) {
+        g_ui_ctx.peer_select_scroll_top = selected_idx - PEER_SELECT_VISIBLE_COUNT + 1U;
+        scroll_top = g_ui_ctx.peer_select_scroll_top;
+    }
+
+    for (uint8_t i = 0U; i < PEER_SELECT_VISIBLE_COUNT; i++) {
+        uint8_t cache_idx = scroll_top + i;
+        if (cache_idx >= count) { break; }
+
+        const CachedPeer_t *peer = transport_ble_get_peer_cache_entry(cache_idx);
+        if (peer == NULL) { continue; }
+
+        uint8_t y = PEER_SELECT_LIST_TOP_Y + i * PEER_SELECT_ITEM_HEIGHT;
+        bool is_selected = (cache_idx == selected_idx);
+        bool is_blacklisted = peer->blacklisted;
+        bool is_recently_failed = peer->recently_failed;
+
+        /* Highlight selected item */
+        if (is_selected) {
+            HalUIRect_t sel_rect = { .x = 0U, .y = y, .w = 128U, .h = PEER_SELECT_ITEM_HEIGHT };
+            hal_ui_rect_fill(&sel_rect, HAL_UI_WHITE);
+        }
+
+        /* MAC address (last 4 hex bytes) */
+        char mac_str[16];
+        (void)snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X",
+                       peer->record.peer_mac[2], peer->record.peer_mac[3],
+                       peer->record.peer_mac[4], peer->record.peer_mac[5]);
+
+        HalUIColor_t text_color = is_selected ? HAL_UI_BLACK : HAL_UI_WHITE;
+        hal_ui_text(4U, y, mac_str, text_color);
+
+        /* RSSI indicator */
+        char rssi_str[8];
+        (void)snprintf(rssi_str, sizeof(rssi_str), "%ddBm", (int)peer->record.rssi);
+        hal_ui_text(90U, y, rssi_str, text_color);
+
+        /* Status indicators */
+        uint8_t icon_x = 118U;
+        if (is_blacklisted) {
+            hal_ui_text(icon_x, y, "X", text_color);
+        } else if (is_recently_failed) {
+            hal_ui_text(icon_x, y, "!", text_color);
+        }
+    }
+
+    /* Scroll indicator */
+    if (count > PEER_SELECT_VISIBLE_COUNT) {
+        uint8_t scroll_bar_h = 48U / count;
+        uint8_t scroll_pos = (scroll_top * (48U - scroll_bar_h)) / (count - PEER_SELECT_VISIBLE_COUNT);
+        HalUIRect_t scroll_bar = { .x = 126U, .y = 16U + scroll_pos, .w = 2U, .h = scroll_bar_h };
+        hal_ui_rect_fill(&scroll_bar, HAL_UI_WHITE);
+    }
+
+    /* Hint */
+    hal_ui_text(4U, 56U, "BTN=select HOLD=blacklist", HAL_UI_WHITE);
+
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t render_peer_select_blacklist_dialog(void)
+{
+    hal_ui_clear();
+
+    uint8_t idx = g_ui_ctx.peer_select_blacklist_idx;
+    const CachedPeer_t *peer = transport_ble_get_peer_cache_entry(idx);
+    if (peer == NULL) {
+        return CEEPEW_ERR_PARAM;
+    }
+
+    ui_draw_centered_text(0U, "BLACKLIST PEER?");
+    draw_hline(0U, 10U, 128U);
+
+    char mac_str[16];
+    (void)snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X",
+                   peer->record.peer_mac[2], peer->record.peer_mac[3],
+                   peer->record.peer_mac[4], peer->record.peer_mac[5]);
+
+    ui_draw_centered_text(20U, mac_str);
+    ui_draw_centered_text(30U, "Blacklist this peer?");
+
+    /* Y/N options */
+    bool y_selected = !g_ui_ctx.peer_select_blacklist_confirm; /* 0=Yes, 1=No */
+    uint8_t opt_y = y_selected ? 0U : 1U;
+
+    draw_selected_option_row(16U, 36U, 48U, 16U, "YES", (opt_y == 0U));
+    draw_selected_option_row(64U, 36U, 48U, 16U, "NO",  (opt_y == 1U));
+
+    hal_ui_text(4U, 56U, "BTN=confirm", HAL_UI_WHITE);
+
+    return CEEPEW_OK;
+}
+
+/* Enter the multi-peer selection screen.
+ * Resets selection/scroll context and transitions the UI into
+ * UI_STATE_PEER_SELECT so the draw loop renders the peer list.
+ */
+CeePewErr_t ui_peer_select_show(void)
+{
+    g_ui_ctx.peer_select_idx = 0U;
+    g_ui_ctx.peer_select_scroll_top = 0U;
+    g_ui_ctx.peer_select_blacklist_confirm = false;
+    g_ui_ctx.peer_select_blacklist_idx = 0U;
+    (void)ui_manager_transition_to(UI_STATE_PEER_SELECT);
+    g_ui_ctx.transition_ready = true;
+    return CEEPEW_OK;
+}
+
+/* Handle input while in UI_STATE_PEER_SELECT.
+ *
+ * List mode (no dialog):
+ *   - Potentiometer maps directly to the selected cache index.
+ *   - Short press  (< 1500 ms) → select the highlighted peer via
+ *     transport_ble_set_selected_peer() and advance to CODE_ENTRY.
+ *   - Long press   (>= 1500 ms) → open the blacklist confirm dialog
+ *     for the highlighted peer.
+ *
+ * Dialog mode (blacklist confirm active):
+ *   - Potentiometer toggles YES/NO (left half = YES, right half = NO).
+ *   - Short press confirms: YES → peer_cache_blacklist() + close dialog,
+ *     NO → close dialog without blacklisting.
+ *   - Long press cancels the dialog.
+ */
+CeePewErr_t ui_peer_select_handle_input(uint8_t pot_value, bool button_pressed)
+{
+    g_ui_ctx.user_input = pot_value;
+    g_ui_ctx.button_pressed = button_pressed;
+
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    uint8_t count = transport_ble_get_peer_cache_count();
+
+    if (g_ui_ctx.peer_select_blacklist_confirm) {
+        /* Dialog mode: pot toggles YES (left) / NO (right) */
+        bool select_yes = (pot_value < 128U);
+        if (button_pressed && !g_ui_ctx.button_prev) {
+            g_ui_ctx.button_press_start_ms = now_ms;
+        } else if (!button_pressed && g_ui_ctx.button_prev) {
+            uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                         ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+            if (dur >= 1500U) {
+                /* Long press = cancel dialog */
+                ESP_LOGI("ui", "PEER_SELECT: long press — cancel blacklist dialog");
+            } else if (select_yes) {
+                ESP_LOGI("ui", "PEER_SELECT: blacklisting peer idx %u",
+                         (unsigned)g_ui_ctx.peer_select_blacklist_idx);
+                transport_ble_peer_cache_blacklist(g_ui_ctx.peer_select_blacklist_idx);
+            } else {
+                ESP_LOGI("ui", "PEER_SELECT: blacklist declined");
+            }
+            g_ui_ctx.peer_select_blacklist_confirm = false;
+        }
+        g_ui_ctx.button_prev = button_pressed;
+        return CEEPEW_OK;
+    }
+
+    /* List mode: pot → index */
+    if (count > 0U) {
+        uint8_t idx = (uint8_t)(((uint16_t)pot_value * (uint16_t)count) / 256U);
+        if (idx >= count) { idx = (uint8_t)(count - 1U); }
+        g_ui_ctx.peer_select_idx = idx;
+    }
+
+    if (button_pressed && !g_ui_ctx.button_prev) {
+        g_ui_ctx.button_press_start_ms = now_ms;
+    } else if (!button_pressed && g_ui_ctx.button_prev) {
+        uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                     ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+        if (dur >= 1500U) {
+            /* Long press → blacklist dialog for the selected peer */
+            ESP_LOGI("ui", "PEER_SELECT: long press (%u ms) — open blacklist dialog",
+                     (unsigned)dur);
+            g_ui_ctx.peer_select_blacklist_idx = g_ui_ctx.peer_select_idx;
+            g_ui_ctx.peer_select_blacklist_confirm = true;
+        } else if (count > 0U) {
+            /* Short press → select peer and advance */
+            CeePewErr_t err = transport_ble_set_selected_peer(g_ui_ctx.peer_select_idx);
+            if (err == CEEPEW_OK) {
+                ESP_LOGI("ui", "PEER_SELECT: peer %u selected — advancing to CODE_ENTRY",
+                         (unsigned)g_ui_ctx.peer_select_idx);
+                (void)ui_manager_transition_to(UI_STATE_CODE_ENTRY);
+                g_ui_ctx.transition_ready = true;
+            } else {
+                ESP_LOGW("ui", "PEER_SELECT: select peer %u failed (err %d)",
+                         (unsigned)g_ui_ctx.peer_select_idx, (int)err);
+            }
+        }
+    }
+
+    g_ui_ctx.button_prev = button_pressed;
+    return CEEPEW_OK;
+}
+
+/* Public render entry for the blacklist confirm dialog.
+ * Renders the Y/N dialog for the peer at peer_select_blacklist_idx.
+ */
+CeePewErr_t ui_peer_select_blacklist_dialog(void)
+{
+    return render_peer_select_blacklist_dialog();
+}
+
 static CeePewErr_t render_confirm(void)
 {
     hal_ui_clear();
@@ -1871,6 +2117,7 @@ static CeePewErr_t render_confirm(void)
 static CeePewErr_t render_info(void)
 {
     hal_ui_clear();
+
     /* Title */
     ui_draw_centered_text(2U, "DEVICE INFO (DIAG)");
     draw_hline(0U, 11U, 128U);
@@ -3591,6 +3838,7 @@ CeePewErr_t ui_manager_draw(void)
         case UI_STATE_CONFIRM:            err = render_confirm();             break;
         case UI_STATE_PAIRING_FAILED:     err = render_pairing_failed();      break;
         case UI_STATE_PAIRING_DEGRADED:   err = render_pairing_degraded();    break;
+        case UI_STATE_PEER_SELECT:        err = render_peer_select();         break;
         case UI_STATE_KEYDER:             err = render_keyder_anim();         break;
         case UI_STATE_CHAT:               err = render_chat_thread();         break;
         case UI_STATE_CHAT_DETAIL:        err = render_chat_detail();         break;
@@ -3624,7 +3872,7 @@ CeePewErr_t ui_manager_draw(void)
 
 CeePewErr_t ui_manager_transition_to(UIState_t next_state)
 {
-    CEEPEW_ASSERT(next_state <= UI_STATE_PAIRING_DEGRADED, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(next_state <= UI_STATE_PEER_SELECT, CEEPEW_ERR_PARAM);
     if (next_state == UI_STATE_PAIRING_FAILED) {
         ESP_LOGW("ui_transition", "-> PAIRING_FAILED (was %u)", g_ui_ctx.current_state);
     }
@@ -3643,6 +3891,11 @@ CeePewErr_t ui_manager_handle_input(uint8_t pot_value, bool button_pressed, bool
     g_ui_ctx.user_input = pot_value;
     g_ui_ctx.button_pressed = button_pressed;
     g_ui_ctx.diag_mode = diag_mode;
+
+    if (g_ui_ctx.current_state == UI_STATE_PEER_SELECT) {
+        return ui_peer_select_handle_input(pot_value, button_pressed);
+    }
+
     return CEEPEW_OK;
 }
 

@@ -19,6 +19,67 @@ FUZZ_DIR="${ROOT}/fuzz"
 # ESP-IDF path (set by Docker env or default)
 IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
 
+# Detect whether a native clang with libFuzzer is available. The
+# ESP-IDF cross-clang (riscv32/xtensa) lacks -fsanitize=fuzzer, so we
+# fall back to the deterministic CMake-based smoke driver (gcc + ASan).
+mkdir -p "${FUZZ_DIR}/build"
+HAVE_LIBFUZZER=1
+if ! command -v clang >/dev/null 2>&1; then
+    HAVE_LIBFUZZER=0
+elif ! echo 'int LLVMFuzzerTestOneInput(const unsigned char*d, size_t s){(void)d;(void)s;return 0;}' | clang -fsanitize=fuzzer -x c - -o "${FUZZ_DIR}/build/probe" >/dev/null 2>&1; then
+    HAVE_LIBFUZZER=0
+fi
+
+if [[ ${HAVE_LIBFUZZER} -eq 0 ]]; then
+    echo "============================================"
+    echo " CEE-PEW Fuzz Smoke Tests (native driver)"
+    echo "============================================"
+    echo "[!] clang + libFuzzer not available; using deterministic gcc smoke driver"
+    echo "    (fuzz_driver.c replays corpus seeds + PRNG mutations through"
+    echo "     each harness's LLVMFuzzerTestOneInput, compiled with ASan/UBSan)"
+
+    HOST_DIR="${ROOT}/tests/host"
+    BUILD_DIR="${HOST_DIR}/build_fuzz"
+
+    cmake -B "${BUILD_DIR}" -S "${HOST_DIR}" \
+        -DCEEPEW_HOST_SANITIZERS=ON >/dev/null
+    cmake --build "${BUILD_DIR}" --parallel >/dev/null
+
+    TOTAL=0
+    PASSED=0
+    FAILED=0
+    for HARNESS_DIR in fuzz_ascon fuzz_sha256 fuzz_hamming fuzz_hkdf fuzz_arq; do
+        TOTAL=$((TOTAL + 1))
+        SMOKE_BIN="${BUILD_DIR}/fuzz_smoke_${HARNESS_DIR#fuzz_}"
+        if [[ ! -f "${SMOKE_BIN}" ]]; then
+            echo "  [FAIL] ${HARNESS_DIR}: binary not built"
+            FAILED=$((FAILED + 1))
+            continue
+        fi
+        echo "--- ${HARNESS_DIR} ---"
+        set +e
+        "${SMOKE_BIN}" "${FUZZ_DIR}/${HARNESS_DIR}"/corpus/* >/dev/null 2>&1
+        EXIT_CODE=$?
+        set -e
+        if [[ ${EXIT_CODE} -eq 0 ]]; then
+            echo "  [PASS] ${HARNESS_DIR}"
+            PASSED=$((PASSED + 1))
+        else
+            echo "  [FAIL] ${HARNESS_DIR} (exit code ${EXIT_CODE})"
+            FAILED=$((FAILED + 1))
+        fi
+    done
+
+    echo ""
+    echo "============================================"
+    echo " Results: ${PASSED}/${TOTAL} passed, ${FAILED} failed"
+    echo "============================================"
+    if [[ ${FAILED} -ne 0 ]]; then
+        exit 1
+    fi
+    exit 0
+fi
+
 # Harness directory   → component source files needed
 declare -A HARNESSES
 HARNESSES[fuzz_ascon]="components/crypto/crypto_ascon.c"

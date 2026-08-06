@@ -8,9 +8,8 @@
 #include <mbedtls/md.h>
 
 CeePewErr_t crypto_sha256_compute(const uint8_t *in, uint32_t len, uint8_t out[32]) {
-    CEEPEW_ASSERT(in != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT((in != NULL) || (len == 0U), CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(len > 0U, CEEPEW_ERR_BOUNDS);
     const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     if (info == NULL) { return CEEPEW_ERR_CRYPTO; }
 
