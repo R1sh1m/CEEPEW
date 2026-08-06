@@ -1,0 +1,18 @@
+/* Stub esp_timer.h for host compilation. */
+
+#ifndef ESP_TIMER_H
+#define ESP_TIMER_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int64_t esp_timer_get_time(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ESP_TIMER_H */

@@ -185,6 +185,31 @@ static uint32_t s_last_scan_seen_change_ms     = 0U;
  * from BLE callback context and task contexts on different cores. */
 static SemaphoreHandle_t s_ble_ctx_mutex = NULL;
 
+/* Mutex serializing the full init/deinit lifecycle.  transport_ble_init() can
+ * be called concurrently from main.c (Core 0, dev mode) and from
+ * task_session (Core 1, via transport_ble_restart_discovery_session()).
+ * Without serialization both callers pass the s_ble_initialised guard (still
+ * false during the long controller+bluedroid init sequence) and drive the
+ * stack through a double init: "Bluedroid already initialised/enabled",
+ * "application already registered" and "GATTS register failed: 144". */
+static SemaphoreHandle_t s_ble_init_mutex = NULL;
+static portMUX_TYPE      s_ble_init_mutex_spinlock = portMUX_INITIALIZER_UNLOCKED;
+static bool              s_ble_init_mutex_created = false;
+
+static void ble_init_lock(void)
+{
+    if (s_ble_init_mutex == NULL) { return; }
+    if (xSemaphoreTake(s_ble_init_mutex, pdMS_TO_TICKS(5000U)) != pdTRUE) {
+        ESP_LOGE(TAG, "ble_init_lock: TIMEOUT acquiring init/deinit mutex");
+    }
+}
+
+static void ble_init_unlock(void)
+{
+    if (s_ble_init_mutex == NULL) { return; }
+    xSemaphoreGive(s_ble_init_mutex);
+}
+
 /* Deadlock diagnostics: track which task holds the lock and for how long. */
 static TaskHandle_t s_ble_ctx_lock_owner = NULL;
 static uint32_t     s_ble_ctx_lock_held_since_ms = 0U;
@@ -644,7 +669,13 @@ static CeePewErr_t transport_ble_set_commitment_beacon_unlocked(const uint8_t *c
 {
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(len > 0U && len <= CEEPEW_COMMITMENT_ADV_BYTES, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    /* BLE may be mid-teardown during a restart_discovery cycle; this is a
+     * legitimate runtime condition, not a programming error. Return BUSY so
+     * the FSM's beacon retry path (task_session step 4b) re-broadcasts once
+     * the stack is re-initialised. */
+    if (!s_ble_initialised) {
+        return CEEPEW_ERR_BUSY;
+    }
 
 #ifdef CONFIG_BT_ENABLED
     static uint8_t s_commitment_buf[64U];
@@ -715,7 +746,9 @@ CeePewErr_t transport_ble_set_commitment_beacon(const uint8_t *commitment, uint8
 {
     CEEPEW_ASSERT(commitment != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(len > 0U && len <= CEEPEW_COMMITMENT_ADV_BYTES, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    if (!s_ble_initialised) {
+        return CEEPEW_ERR_BUSY;
+    }
 
     ble_ctx_lock();
     CeePewErr_t err = transport_ble_set_commitment_beacon_unlocked(commitment, len);
@@ -758,7 +791,9 @@ static CeePewErr_t transport_ble_send_handoff_ready_beacon_unlocked(void)
 
 CeePewErr_t transport_ble_send_handoff_ready_beacon(void)
 {
-    CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
+    if (!s_ble_initialised) {
+        return CEEPEW_ERR_BUSY;
+    }
     ble_ctx_lock();
     CeePewErr_t err = transport_ble_send_handoff_ready_beacon_unlocked();
     ble_ctx_unlock();
@@ -767,8 +802,21 @@ CeePewErr_t transport_ble_send_handoff_ready_beacon(void)
 
 CeePewErr_t transport_ble_init(void)
 {
+    /* Create the init mutex once (thread-safe lazy init). */
+    if (!s_ble_init_mutex_created) {
+        portENTER_CRITICAL(&s_ble_init_mutex_spinlock);
+        if (!s_ble_init_mutex_created) {
+            s_ble_init_mutex = xSemaphoreCreateMutex();
+            s_ble_init_mutex_created = true;
+        }
+        portEXIT_CRITICAL(&s_ble_init_mutex_spinlock);
+    }
+
+    ble_init_lock();
+
     if (s_ble_initialised) {
         ESP_LOGI(TAG, "transport_ble_init: BLE already initialised — returning OK");
+        ble_init_unlock();
         return CEEPEW_OK;
     }
 
@@ -865,6 +913,7 @@ CeePewErr_t transport_ble_init(void)
         err = esp_bt_controller_init(&bt_cfg);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGE(TAG, "esp_bt_controller_init FAILED: %d (%s)", err, esp_err_to_name(err));
+            ble_init_unlock();
             return CEEPEW_ERR_HW;
         }
         ESP_LOGI(TAG, "esp_bt_controller_init: OK");
@@ -872,6 +921,7 @@ CeePewErr_t transport_ble_init(void)
         err = esp_bt_controller_enable(ESP_BT_MODE_BLE);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGE(TAG, "esp_bt_controller_enable FAILED: %d (%s)", err, esp_err_to_name(err));
+            ble_init_unlock();
             return CEEPEW_ERR_HW;
         }
         ESP_LOGI(TAG, "esp_bt_controller_enable: OK");
@@ -885,6 +935,7 @@ CeePewErr_t transport_ble_init(void)
         err = esp_bluedroid_init_with_cfg(&bluedroid_cfg);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGE(TAG, "esp_bluedroid_init_with_cfg FAILED: %d (%s)", err, esp_err_to_name(err));
+            ble_init_unlock();
             return CEEPEW_ERR_HW;
         }
         ESP_LOGI(TAG, "esp_bluedroid_init_with_cfg: OK");
@@ -892,6 +943,7 @@ CeePewErr_t transport_ble_init(void)
         err = esp_bluedroid_enable();
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGE(TAG, "esp_bluedroid_enable FAILED: %d (%s)", err, esp_err_to_name(err));
+            ble_init_unlock();
             return CEEPEW_ERR_HW;
         }
         ESP_LOGI(TAG, "esp_bluedroid_enable: OK");
@@ -938,6 +990,7 @@ CeePewErr_t transport_ble_init(void)
         if (t_err != ESP_OK) {
             ESP_LOGE(TAG, "sign_pk delay timer create failed: %d (%s)",
                      (int)t_err, esp_err_to_name(t_err));
+            ble_init_unlock();
             return CEEPEW_ERR_HW;
         }
     }
@@ -963,6 +1016,7 @@ CeePewErr_t transport_ble_init(void)
         ESP_LOGI(TAG, "GATTC app already registered (continuing)");
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gattc_app_register failed: %d (%s)", err, esp_err_to_name(err));
+        ble_init_unlock();
         return CEEPEW_ERR_HW;
     }
 
@@ -972,6 +1026,7 @@ CeePewErr_t transport_ble_init(void)
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gatts_app_register failed: %d (%s)", err, esp_err_to_name(err));
         s_ble_initialised = false;
+        ble_init_unlock();
         return CEEPEW_ERR_HW;
     }
 
@@ -984,6 +1039,7 @@ CeePewErr_t transport_ble_init(void)
     }
     transport_ble_enter_phase(PAIRING_PHASE_IDLE);
 
+    ble_init_unlock();
     return CEEPEW_OK;
 }
 
@@ -1456,6 +1512,17 @@ CeePewErr_t transport_ble_deinit(void)
 {
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
 
+    ble_init_lock();
+
+    /* Clear initialised flag FIRST, before the long controller/bluedroid
+     * deinit sequence below.  esp_bluedroid_deinit() makes
+     * esp_bluedroid_get_status() return UNINITIALIZED partway through this
+     * function (step 6); if s_ble_initialised were still true at that point,
+     * transport_ble_retry_scan_if_needed() (1 s task tick) would observe the
+     * desync and log "Bluedroid UNINITIALIZED with s_ble_initialised=true".
+     * See transport_ble_teardown() which already follows this pattern. */
+    s_ble_initialised = false;
+
     transport_ble_supervisor_stop();
     s_supervisor_recovering = 0U;
     transport_ble_enter_phase(PAIRING_PHASE_IDLE);
@@ -1488,26 +1555,43 @@ CeePewErr_t transport_ble_deinit(void)
     /* 3. Drain the BT event queue — give the stack time to settle */
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    /* 4. Disable and deinit Bluedroid */
+    /* 4. Disable the Bluedroid host stack. esp_bluedroid_disable() sends an
+     * HCI reset down to the controller and waits for it to complete, so the
+     * host is quiescent here, but the controller remains ENABLED and can keep
+     * posting HCI command-complete / ACL events up to the host. */
     err = esp_bluedroid_disable();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "bluedroid_disable: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "bluedroid_disabled");
     }
-    err = esp_bluedroid_deinit();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "bluedroid_deinit: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "bluedroid_deinitialized");
-    }
 
-    /* 5. Disable and deinit the BT controller */
+    /* 5. Disable the BT controller BEFORE deinitting the host. Closing the
+     * controller first silences the HCI event source so no further
+     * command-complete events can be delivered to the host while
+     * esp_bluedroid_deinit() tears down the BTC/config layer. Deinitting the
+     * host while the controller is still live races an in-flight HCI event
+     * (btu_hcif_hdl_command_complete -> btc_gatt_com_call_handler ->
+     * btc_in_fetch_bonded_devices -> config_*) against the freed config
+     * mutex/queue, producing an assert (xQueueSemaphoreTake NULL queue) and
+     * a watchdog/CPU reset. */
     err = esp_bt_controller_disable();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "bt_ctrl_disable: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "bt_controller_disabled");
+    }
+
+    /* Let any in-flight HCI event still draining out of the (now silent)
+     * controller complete before the host config is freed. */
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* 6. Deinit the host stack, then the controller */
+    err = esp_bluedroid_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bluedroid_deinit: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bluedroid_deinitialized");
     }
     err = esp_bt_controller_deinit();
     if (err != ESP_OK) {
@@ -1516,7 +1600,7 @@ CeePewErr_t transport_ble_deinit(void)
         ESP_LOGI(TAG, "bt_controller_deinitialized");
     }
 
-    /* 6. Wait for the radio to fully release before WiFi claims it */
+    /* 7. Wait for the radio to fully release before WiFi claims it */
     vTaskDelay(pdMS_TO_TICKS(250));
 
     ESP_LOGI(TAG, "BLE deinit: stack torn down (memory retained for potential reinit)");
@@ -1539,9 +1623,10 @@ CeePewErr_t transport_ble_deinit(void)
     s_pending_scan_rsp_len = 0U;
     memset(s_pending_adv_buf, 0, sizeof(s_pending_adv_buf));
     memset(s_pending_scan_rsp_buf, 0, sizeof(s_pending_scan_rsp_buf));
-    s_ble_initialised = false;
+    /* s_ble_initialised was cleared at the top of this function */
     s_stack_needs_full_init = true;
     s_last_restart_ms = 0U;  /* Clear debounce timer so restart_discovery_session() can re-init */
+    ble_init_unlock();
     return CEEPEW_OK;
 }
 
@@ -1551,6 +1636,8 @@ CeePewErr_t transport_ble_teardown(void)
         ESP_LOGW(TAG, "teardown: BLE not initialised — no-op");
         return CEEPEW_OK;
     }
+
+    ble_init_lock();
 
     /* Clear initialised flag FIRST so retry_scan_if_needed() (called from
      * the same task after this returns) sees BLE as logically down despite
@@ -1590,26 +1677,38 @@ CeePewErr_t transport_ble_teardown(void)
     /* 3. Drain the BT event queue — give the stack time to settle */
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    /* 4. De-register and disable Bluedroid stack fully using esp_bluedroid_disable() and esp_bluedroid_deinit() */
+    /* 4. Disable the Bluedroid host stack (sends HCI reset down to the
+     * controller and waits). The controller is still ENABLED at this point
+     * and can keep posting HCI events up to the host. */
     err = esp_bluedroid_disable();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "bluedroid_disable: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "bluedroid_disabled");
     }
-    err = esp_bluedroid_deinit();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "bluedroid_deinit: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "bluedroid_deinitialized");
-    }
 
-    /* 5. Disable and deinitialize the BT controller with esp_bt_controller_disable() and esp_bt_controller_deinit() */
+    /* 5. Disable the BT controller BEFORE deinitting the host so the HCI
+     * event source goes silent before the BTC/config layer is freed.
+     * Deinitting the host while the controller is still live lets an
+     * in-flight command-complete event race the freed config and assert
+     * (xQueueSemaphoreTake NULL queue) — see transport_ble_deinit(). */
     err = esp_bt_controller_disable();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "bt_ctrl_disable: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "bt_controller_disabled");
+    }
+
+    /* Let any in-flight HCI event still draining out of the (now silent)
+     * controller complete before the host config is freed. */
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* 6. Deinit the host stack, then the controller */
+    err = esp_bluedroid_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bluedroid_deinit: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "bluedroid_deinitialized");
     }
     err = esp_bt_controller_deinit();
     if (err != ESP_OK) {
@@ -1618,7 +1717,7 @@ CeePewErr_t transport_ble_teardown(void)
         ESP_LOGI(TAG, "bt_controller_deinitialized");
     }
 
-    /* 6. Mandatory blocking delay to let the shared 2.4GHz PHY radio fully settle into an idle state */
+    /* 7. Mandatory blocking delay to let the shared 2.4GHz PHY radio fully settle into an idle state */
     vTaskDelay(pdMS_TO_TICKS(150));
 
     ESP_LOGI(TAG, "BLE torn down (memory retained for potential reinit)");
@@ -1644,6 +1743,7 @@ CeePewErr_t transport_ble_teardown(void)
     memset(s_pending_scan_rsp_buf, 0, sizeof(s_pending_scan_rsp_buf));
     /* s_ble_initialised was cleared at the top of this function */
     s_stack_needs_full_init = true;
+    ble_init_unlock();
     return CEEPEW_OK;
 }
 
@@ -1714,7 +1814,25 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
         if (g_ble_ctx.state == BLE_DONE || session_get_phase() >= 2U || session_is_active()) {
             return CEEPEW_OK;
         }
-        ESP_LOGW(TAG, "retry_scan: Bluedroid UNINITIALIZED with s_ble_initialised=true — will re-init on next discovery cycle");
+        /* The stack is UNINITIALIZED but the flag says initialised: a genuine
+         * desync (e.g. the Bluedroid status read raced a concurrent deinit, or
+         * a deinit completed without this flag write pairing up).  If we keep
+         * s_ble_initialised == true here, restart_discovery_session() will skip
+         * its re-init (it only fires when !is_initialised()) and BLE stays dead
+         * forever.  Serialize against a concurrent init/deinit that may own the
+         * stack mid-transition, then clear the stale flag so the task's next
+         * discovery cycle performs a real re-init. */
+        ble_init_lock();
+        bool stack_still_uninit =
+            (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED);
+        if (stack_still_uninit) {
+            ESP_LOGW(TAG,
+                     "retry_scan: Bluedroid UNINITIALIZED with s_ble_initialised=true — "
+                     "clearing stale flag, re-init on next discovery cycle");
+            s_ble_initialised = false;
+            s_stack_needs_full_init = true;
+        }
+        ble_init_unlock();
         return CEEPEW_OK;
     }
 

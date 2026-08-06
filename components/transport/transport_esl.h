@@ -16,6 +16,14 @@
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 
+/* Minimum size of a valid ESL frame on the wire: 24-byte header + 4-byte CRC.
+ * Session frames additionally carry a 1-byte ARQ sequence prefix, so the
+ * minimum raw ESP-NOW frame that can be a legitimate session frame is
+ * CEEPEW_ESL_MIN_FRAME_BYTES + 1 (ARQ seq byte). Frames below that floor
+ * (e.g. non-ESL broadcast probes) MUST NOT be fed into ARQ decode, or they
+ * would consume/advance the ARQ receive window and desync it from the peer. */
+#define CEEPEW_ESL_MIN_FRAME_BYTES    28U  /* 24 header + 4 CRC */
+
 typedef CeePewErr_t (*EslMacCheckFn)(const uint8_t mac[6]);
 typedef CeePewErr_t (*EslNonceFn)(void);
 

@@ -3166,8 +3166,12 @@ CeePewErr_t ui_manager_update(void)
                     } else {
                         ESP_LOGW("ui", "session_send_message failed: %d", (int)send_err);
                         g_ui_ctx.reject_sequence_start_ms = 0U;
-                        g_ui_ctx.error_start_ms = now_ms;
-                        (void)ui_manager_transition_to(UI_STATE_ERROR);
+                        if (session_is_active()) {
+                            (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                        } else {
+                            g_ui_ctx.error_start_ms = now_ms;
+                            (void)ui_manager_transition_to(UI_STATE_ERROR);
+                        }
                         g_ui_ctx.transition_ready = true;
                     }
                 } else {

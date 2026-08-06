@@ -3,7 +3,7 @@
 #ifndef CRYPTO_CTX_H
 #define CRYPTO_CTX_H
 
-#include "ceepew_assert.h"
+#include "hal_ui_types.h"
 #include "ceepew_config.h"
 
 #include <stdbool.h>
@@ -29,6 +29,8 @@ typedef struct {
     bool     pfs_peer_pubkey_valid;    /* true once peer's PFS key received */
     uint8_t  pfs_shared_secret[32U];   /* Curve25519 shared secret */
     uint8_t  pfs_ascon_key[16U];       /* HKDF-derived Ascon key from PFS secret */
+    uint8_t  prev_ascon_key[16U];      /* Base session key retained for fallback decrypt during PFS transition */
+    bool     prev_ascon_key_valid;     /* true if prev_ascon_key is available for fallback decrypt */
     bool     pfs_active;               /* true once PFS key exchange complete */
 } CryptoCtx_t;
 

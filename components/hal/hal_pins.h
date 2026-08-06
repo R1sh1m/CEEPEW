@@ -22,6 +22,7 @@
 #include "esp_adc/adc_oneshot.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
+#include "hal_ui_types.h"
 
 /* ── OLED Display (SSD1306, I2C) ─────────────────────────────────── */
 #ifdef CONFIG_CEEPEW_PIN_I2C_SDA

@@ -18,7 +18,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "ceepew_assert.h"
 #include "ceepew_config.h"
 
 #ifdef __cplusplus
@@ -98,6 +97,25 @@ CeePewErr_t session_phase2_derive_key(void);
  *   CEEPEW_ERR_PARAM — Not in phase 3 or session not active
  */
 CeePewErr_t session_enforce_nonce_limit(void);
+
+/* Roll back the nonce counter by 2 after a TX pipeline failure.
+ *
+ * SECURITY INVARIANT: Call ONLY when session_enforce_nonce_limit() succeeded
+ * but the encrypted frame was NOT transmitted (pipeline failed before
+ * ecc_arq_send()). Rolling back after a frame has been sent — even if no
+ * ACK was received — would replay a nonce the peer's ESL replay window has
+ * already accepted, enabling a trivial replay attack. Do NOT call this on
+ * ARQ timeout (the frame may have been received by the peer).
+ *
+ * Preserves parity: decrements by 2, keeping the counter on the same
+ * even (initiator) or odd (responder) track.
+ *
+ * RETURNS:
+ *   CEEPEW_OK        — Counter decremented successfully
+ *   CEEPEW_ERR_PARAM — Not in phase 3, session inactive, or counter < 2
+ */
+CeePewErr_t session_rollback_nonce(void);
+
 
 /* Get current nonce for encryption (XSalsa20 format).
  * nonce[0:8] = session_id, nonce[8:16] = nonce_counter (LE), nonce[16:24] = 0

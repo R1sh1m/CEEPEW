@@ -21,13 +21,13 @@
 #include "hal_rng.h"
 #include "crypto_rng.h"
 #include "hal_pins.h"
-#include "hal_i2c_scanner.h"
 #include "hal_ui.h"
 #include "ui_manager.h"
 #include "task_arch.h"
 #include "esp_mac.h"
 #include "transport_ble.h"
 #include "hal_temp.h"
+#include "hal_i2c_scanner.h"
 
 static const char *TAG = "CEE-PEW-MAIN";
 

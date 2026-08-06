@@ -166,7 +166,10 @@ const char *layout_state_name(UIState_t state)
 CeePewErr_t layout_validate_state_entry(UIState_t state)
 {
     const LayoutState_t *ls = layout_for_state(state);
-    CEEPEW_ASSERT(ls != NULL, CEEPEW_ERR_PARAM);
+    if (ls == NULL) {
+        ESP_LOGW(TAG, "state-entry validate: unknown/unmapped state %d", (int)state);
+        return CEEPEW_ERR_PARAM;
+    }
 
     ESP_LOGI(TAG, "state-entry validate: %s zones=%u", ls->name, (unsigned)ls->zone_count);
 

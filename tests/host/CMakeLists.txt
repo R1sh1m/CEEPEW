@@ -11,6 +11,7 @@ set(COMMON_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ecc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/mem
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/compress
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/transport
 )
 
 # ── Source paths ─────────────────────────────────────────────────────
@@ -29,6 +30,12 @@ if(CEEPEW_HOST_SANITIZERS)
         add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address,undefined)
     endif()
+endif()
+
+option(CEEPEW_HOST_COVERAGE "Enable gcov code coverage generation" OFF)
+if(CEEPEW_HOST_COVERAGE)
+    add_compile_options(-fprofile-arcs -ftest-coverage)
+    add_link_options(-fprofile-arcs -ftest-coverage)
 endif()
 
 # ── Helper: portable component object library ────────────────────────
@@ -76,6 +83,14 @@ add_executable(test_security_utils
 target_link_libraries(test_security_utils PRIVATE ceepew_portable)
 target_include_directories(test_security_utils PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_security_utils COMMAND test_security_utils)
+
+# test_side_channel — empirical constant-time verification harness (dudect)
+add_executable(test_side_channel
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_side_channel.c
+)
+target_link_libraries(test_side_channel PRIVATE ceepew_portable)
+target_include_directories(test_side_channel PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_side_channel COMMAND test_side_channel)
 
 # test_ascon — tests crypto_ascon_aead encrypt/decrypt
 add_executable(test_ascon
@@ -136,5 +151,30 @@ target_link_libraries(test_session_pairing PRIVATE ceepew_mbedtls ceepew_portabl
 target_link_libraries(test_session_pairing PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_session_pairing PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_session_pairing COMMAND test_session_pairing)
+
+# ── ARQ library: compiles the REAL ecc_arq.c with host runtime stubs ──
+set(ARQ_SRCS
+    ${COMPONENT_DIR}/components/ecc/ecc_arq.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/arq_runtime_stub.c
+)
+add_library(ceepew_arq OBJECT ${ARQ_SRCS})
+target_include_directories(ceepew_arq PRIVATE ${COMMON_INCLUDES})
+
+# test_arq_sync — ARQ post-derive sync-exchange regression (floor-guard fix)
+add_executable(test_arq_sync
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_arq_sync.c
+)
+target_link_libraries(test_arq_sync PRIVATE ceepew_portable ceepew_arq)
+target_include_directories(test_arq_sync PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_arq_sync COMMAND test_arq_sync)
+
+# test_arq_fault_injection — ARQ transport fault injection under packet drop/corruption
+add_executable(test_arq_fault_injection
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_arq_fault_injection.c
+)
+target_link_libraries(test_arq_fault_injection PRIVATE ceepew_portable ceepew_arq)
+target_include_directories(test_arq_fault_injection PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_arq_fault_injection COMMAND test_arq_fault_injection)
+
 
 

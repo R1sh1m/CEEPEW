@@ -1987,8 +1987,13 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     goto rx_cleanup;
   }
 
-  /* Check if it is a PFS handshake message (unencrypted control frame wrapped in ESL) */
-  if (work_len >= 1U) {
+  /* Check if it is a PFS handshake message (unencrypted control frame wrapped in ESL).
+   * CRITICAL: gate on EXACT payload length (1 type byte + 32-byte PFS pubkey = 33 B),
+   * NOT just msg type. A session DATA frame carries its 2-byte LE box_ct_len as the
+   * first payload byte; when that length's low nibble equals 0x01 or 0x02 (e.g. a 65- or
+   * 66-byte ciphertext → 0x41/0x42), a type-only check would misclassify the encrypted
+   * chat frame as a PFS handshake and swallow it — breaking one-directional chat. */
+  if (work_len == (uint16_t)(1U + 32U)) {
     uint8_t msg_type = local_work_frame[0] & CEEPEW_ESL_MSG_TYPE_MASK;
     if (msg_type == CEEPEW_ESL_MSG_TYPE_PFS_INIT || msg_type == CEEPEW_ESL_MSG_TYPE_PFS_RESP) {
       ESP_LOGI("SESSION", "[PFS_RX] PFS handshake frame received (type=0x%02X)", msg_type);
@@ -2093,6 +2098,27 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     goto rx_cleanup;
   }
 
+  if (decoded_len == 1U && (decoded_out[0] == CEEPEW_KEY_SYNC_PING_BYTE ||
+                             decoded_out[0] == CEEPEW_KEY_SYNC_PONG_BYTE)) {
+    CeePewErr_t mac_check = session_verify_wifi_mac_matches_frame(frame->src_mac);
+    if (mac_check != CEEPEW_OK) {
+      ESP_LOGW("SESSION", "[KEEPALIVE] Keepalive frame WiFi MAC mismatch — discarding");
+      goto rx_cleanup;
+    }
+
+    if (decoded_out[0] == CEEPEW_KEY_SYNC_PING_BYTE) {
+      uint8_t pong_plain[1] = { CEEPEW_KEY_SYNC_PONG_BYTE };
+      uint8_t peer_mac[6] = {0U};
+      uint8_t peer_pk[32] = {0U};
+      if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK &&
+          session_get_peer_public_key(peer_pk) == CEEPEW_OK) {
+        (void)session_send_message(pong_plain, 1U, peer_mac, peer_pk);
+      }
+    }
+    (void)session_update_last_message_time();
+    goto rx_cleanup;
+  }
+
   err = msg_store_add(decoded_out, decoded_len, 0U);
   if (err != CEEPEW_OK) {
     ESP_LOGW("SESSION", "RX discard: msg_store_add failed (err=%d decoded=%u)",
@@ -2109,7 +2135,12 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
            CEEPEW_DEVICE_ID_BYTES);
     ui_event.payload.message_rx.msg_id = (uint16_t)(msg_store_count() - 1U);
 
-    xQueueOverwrite(g_ui_event_queue, &ui_event);
+    /* Depth-8 queue: xQueueOverwrite asserts (queue.c:938) on non-1 queues;
+     * use xQueueSend and drop the event if the UI is backlogged. */
+    BaseType_t q_rc = xQueueSend(g_ui_event_queue, &ui_event, 0U);
+    if (q_rc != pdPASS) {
+      ESP_LOGW("SESSION", "[SECURE_CHAT_RX] UI event queue full — dropped received-message event");
+    }
   }
 
   (void)session_update_last_message_time();
@@ -2290,6 +2321,24 @@ void task_session_run(void *pvParameters) {
                        (unsigned long)idle_seconds, (unsigned long)ttl_limit);
             session_wipe();
             continue;
+          }
+        }
+
+        /* Periodic background keepalive ping: if the active session is quiet
+         * for CEEPEW_KEEPALIVE_INTERVAL_S, send a keepalive ping to maintain
+         * link state and prevent premature idle timeout. */
+        static uint64_t s_last_keepalive_ping_ms = 0U;
+        uint64_t now_ms_keepalive = (uint64_t)(esp_timer_get_time() / 1000LL);
+        if (session_sync_barrier_cleared() && ttl_err == CEEPEW_OK &&
+            idle_seconds >= CEEPEW_KEEPALIVE_INTERVAL_S &&
+            (now_ms_keepalive - s_last_keepalive_ping_ms >= ((uint64_t)CEEPEW_KEEPALIVE_INTERVAL_S * 1000ULL))) {
+          s_last_keepalive_ping_ms = now_ms_keepalive;
+          uint8_t ping_plain[1] = { CEEPEW_KEY_SYNC_PING_BYTE };
+          uint8_t peer_mac[6] = {0U};
+          uint8_t peer_pk[32] = {0U};
+          if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK &&
+              session_get_peer_public_key(peer_pk) == CEEPEW_OK) {
+            (void)session_send_message(ping_plain, 1U, peer_mac, peer_pk);
           }
         }
 

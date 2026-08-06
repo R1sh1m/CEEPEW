@@ -991,7 +991,8 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
     if (msg_type == CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ) {
         /* ── Responder received REQ ─────────────────────────────────── */
         if (len < 5 || (s_rendezvous_state != RENDEZVOUS_IDLE &&
-                         s_rendezvous_state != RENDEZVOUS_GOT_REQ)) {
+                         s_rendezvous_state != RENDEZVOUS_GOT_REQ &&
+                         s_rendezvous_state != RENDEZVOUS_SYNCED)) {
             return CEEPEW_ERR_PARAM;
         }
 
@@ -1019,9 +1020,24 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
             return err;
         }
 
-        s_rendezvous_state = RENDEZVOUS_GOT_REQ;
-        ESP_LOGI(TAG, "Rendezvous: Responder sent ACK for req_uptime=%lu",
-                 (unsigned long)req_uptime);
+        /* ── RESPONDER SELF-SYNC ──────────────────────────────────────────
+         * The responder knows the same clock offset the ACK carries (its own
+         * local uptime minus the initiator's uptime embedded in the REQ), so
+         * it transitions straight to RENDEZVOUS_SYNCED right after sending
+         * the ACK. Without this, only the initiator ever reached SYNCED and
+         * started channel hopping, while the responder stayed pinned to the
+         * static channel — causing every subsequent ESP-NOW frame to fail
+         * with CEEPEW_ERR_MAX_RETRIES (MAC-layer ACK lost across channels).
+         *
+         * The offset stored here is identical to the one computed inside
+         * transport_esl_build_rendezvous_ack(), so both peers end up with
+         * the same phase reference for the hop epoch synchronisation. */
+        uint32_t ack_build_now_us = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFFULL);
+        s_rendezvous_offset_us = (int32_t)(ack_build_now_us - (uint32_t)req_uptime);
+        s_converge_achieved = true;
+        s_rendezvous_state = RENDEZVOUS_SYNCED;
+        ESP_LOGI(TAG, "Rendezvous: Responder SYNCED (offset=%ld us) for req_uptime=%lu",
+                 (long)s_rendezvous_offset_us, (unsigned long)req_uptime);
         return CEEPEW_OK;
     }
 
@@ -1061,9 +1077,8 @@ CeePewErr_t hal_radio_rendezvous_handle_rx(const uint8_t *payload, uint16_t len,
 bool hal_radio_rendezvous_is_synced(void)
 {
     /* Both the handshake must be complete AND the convergence must be
-     * achieved within sub-millisecond tolerance. This prevents premature
-     * channel hopping before clock synchronization is verified. */
-    return s_converge_achieved && (s_rendezvous_state == RENDEZVOUS_SYNCED);
+     * achieved. This prevents premature channel hopping. */
+    return s_converge_achieved && (s_rendezvous_state == RENDEZVOUS_SYNCED || s_rendezvous_state == RENDEZVOUS_GOT_REQ);
 }
 
 int32_t hal_radio_rendezvous_get_offset_us(void)

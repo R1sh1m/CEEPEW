@@ -46,6 +46,13 @@ static const char *TAG = "CEE-PEW-PAIRING-E2E";
 #define TEST_MSG        "CEEPEW-TEST-HELLO"
 #define TEST_MSG_LEN    16U
 
+/* Burst parameters: exercise repeated chat sends across channel hops to
+ * reproduce real-usage send failures (ARQ retries, nonce increments,
+ * PFS re-key, Huffman/Ascon/Ed25519 pipelines). */
+#define E2E_BURST_COUNT      24U
+#define E2E_BURST_DELAY_MS   500U
+#define E2E_BURST_MSG_LEN    32U
+
 /* Timeout budgets (ms) — generous for staggered boot + retries */
 #define TIMEOUT_TOTAL          180000UL
 #define TIMEOUT_PHASE2          60000UL
@@ -82,6 +89,10 @@ typedef struct {
     bool        is_initiator;
     bool        test_msg_sent;
     uint8_t     rx_count_before;
+    uint32_t    burst_sent;
+    uint32_t    burst_fail;
+    uint32_t    burst_idx;
+    bool        burst_done;
 } TestCtx_t;
 
 static TestCtx_t s_ctx;
@@ -193,13 +204,53 @@ static void pairing_e2e_monitor(void *arg)
             }
         }
 
+        /* Burst: send E2E_BURST_COUNT unique messages, paced across hops,
+         * exercising repeated chat sends. Runs after the single MSG_RX pass. */
+        if (s_ctx.test_msg_sent && !s_ctx.burst_done &&
+            s_ctx.passed[MILESTONE_MSG_RECEIVED] &&
+            now_us - s_ctx.ts[MILESTONE_MSG_RECEIVED] > 3000LL * 1000LL) {
+            uint8_t peer_mac[6];
+            if (session_get_peer_wifi_mac(peer_mac) != CEEPEW_OK) {
+                s_ctx.burst_done = true;
+            } else if (s_ctx.burst_idx >= E2E_BURST_COUNT) {
+                s_ctx.burst_done = true;
+                ESP_LOGI(TAG, "[BURST] complete: sent=%lu fail=%lu (%.0f%% success)",
+                         (unsigned long)s_ctx.burst_sent,
+                         (unsigned long)s_ctx.burst_fail,
+                         s_ctx.burst_sent + s_ctx.burst_fail > 0U ?
+                             (100.0f * (float)s_ctx.burst_sent /
+                              (float)(s_ctx.burst_sent + s_ctx.burst_fail)) : 0.0f);
+            } else {
+                uint8_t payload[E2E_BURST_MSG_LEN];
+                uint32_t idx = s_ctx.burst_idx++;
+                payload[0] = (uint8_t)('A' + (idx % 26U));
+                payload[1] = (uint8_t)('0' + (idx % 10U));
+                for (uint32_t k = 2U; k < E2E_BURST_MSG_LEN; k++) {
+                    payload[k] = (uint8_t)(0x41U + ((idx + k) % 26U));
+                }
+                ESP_LOGI(TAG, "[BURST] sending msg %lu/%u...",
+                         (unsigned long)(idx + 1U), (unsigned)E2E_BURST_COUNT);
+                CeePewErr_t err = session_send_message(
+                    payload, (uint16_t)E2E_BURST_MSG_LEN, peer_mac, NULL);
+                if (err == CEEPEW_OK) {
+                    s_ctx.burst_sent++;
+                } else {
+                    s_ctx.burst_fail++;
+                    ESP_LOGE(TAG, "[BURST] msg %lu FAILED err=%d",
+                             (unsigned long)(idx + 1U), (int)err);
+                }
+                vTaskDelay(pdMS_TO_TICKS(E2E_BURST_DELAY_MS));
+            }
+        }
+
         if (s_ctx.test_msg_sent && rx_new > 0U && !s_ctx.passed[MILESTONE_MSG_RECEIVED]) {
             mark(MILESTONE_MSG_RECEIVED);
             ESP_LOGI(TAG, "[PASS] received %u message(s)", rx_new);
         }
 
         if (ph2 && ph3 && sync &&
-            s_ctx.test_msg_sent && s_ctx.passed[MILESTONE_MSG_RECEIVED]) {
+            s_ctx.test_msg_sent && s_ctx.passed[MILESTONE_MSG_RECEIVED] &&
+            s_ctx.burst_done) {
             mark(MILESTONE_DONE);
             break;
         }
@@ -239,6 +290,23 @@ static void pairing_e2e_monitor(void *arg)
     if (msg_rx_pass) ESP_LOGI(TAG, "  [MSG-RX   ] PASS — %u msg(s) received",
                                msg_store_count() - s_ctx.rx_count_before);
     else { ESP_LOGE(TAG, "  [MSG-RX   ] FAIL — no incoming messages"); all_ok = false; }
+
+    /* Burst summary */
+    if (s_ctx.burst_sent + s_ctx.burst_fail > 0U) {
+        if (s_ctx.burst_fail == 0U) {
+            ESP_LOGI(TAG, "  [BURST    ] PASS — %lu/%lu sent OK, zero failures",
+                     (unsigned long)s_ctx.burst_sent,
+                     (unsigned long)(s_ctx.burst_sent + s_ctx.burst_fail));
+        } else {
+            ESP_LOGE(TAG, "  [BURST    ] FAIL — %lu/%lu sent, %lu failures",
+                     (unsigned long)s_ctx.burst_sent,
+                     (unsigned long)(s_ctx.burst_sent + s_ctx.burst_fail),
+                     (unsigned long)s_ctx.burst_fail);
+            all_ok = false;
+        }
+    } else {
+        ESP_LOGI(TAG, "  [BURST    ] SKIP — burst did not start");
+    }
 
     ESP_LOGI(TAG, "  Duration: %lld ms | Overall: %s", total_ms, all_ok ? "PASS" : "FAIL");
     ESP_LOGI(TAG, "=== PAIRING E2E REPORT ===");

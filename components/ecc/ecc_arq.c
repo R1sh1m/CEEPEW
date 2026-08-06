@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "../ceepew_hal/hal_radio.h"
 
 #define CEEPEW_ARQ_SEQ_BYTES 1U
@@ -25,6 +26,7 @@
 /* Hop synchronization state */
 static volatile bool s_arq_hop_paused = false;
 static uint32_t s_arq_pause_start_ms = 0U;
+static volatile uint32_t s_arq_hop_gen = 0U;  /* increments each pre_hop_cb */
 
 /* Calculate exponential backoff time with ±jitter_percent deviation.
  *
@@ -69,6 +71,7 @@ static uint16_t ecc_arq_compute_backoff_ms(uint8_t attempt) {
 static void ecc_arq_pre_hop_cb(void)
 {
     s_arq_hop_paused = true;
+    s_arq_hop_gen++;
     s_arq_pause_start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
@@ -113,7 +116,7 @@ CeePewErr_t ecc_arq_reset(void)
 {
     ceepew_secure_zero(&s_tx_seq, sizeof(s_tx_seq));
     ceepew_secure_zero(&s_expected_rx_seq, sizeof(s_expected_rx_seq));
-    ceepew_secure_zero(&s_rx_init, sizeof(s_rx_init));
+    s_rx_init = false;
     return CEEPEW_OK;
 }
 
@@ -128,6 +131,7 @@ CeePewErr_t ecc_arq_encode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
     CEEPEW_ASSERT((uint32_t)in_len + CEEPEW_ARQ_SEQ_BYTES <= max_out_len, CEEPEW_ERR_BOUNDS);
 
     out[0] = (uint8_t)(s_tx_seq++ & 0xFFU);
+    ESP_LOGI("ARQ", "[ARQ_TX] len=%u seq=0x%02X", (unsigned)in_len, out[0]);
     for (uint16_t i = 0U; i < in_len; i++){ out[1U + i] = in[i];}
     *out_len = (uint16_t)(in_len + CEEPEW_ARQ_SEQ_BYTES);
     return CEEPEW_OK;
@@ -144,6 +148,7 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
         /* First frame since reset: accept unconditionally. */
         s_rx_init = true;
         s_expected_rx_seq = (uint16_t)(seq + 1U);
+        ESP_LOGI("ARQ", "[ARQ_RX] first-frame accept seq=0x%02X -> expected=%u", seq, (unsigned)s_expected_rx_seq);
     } else {
         /* Reconstruct the full 16-bit seq from the 8-bit wire byte:
          * Using signed 8-bit difference correctly resolves wrap-around
@@ -151,12 +156,16 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
         int8_t diff = (int8_t)(seq - (uint8_t)(s_expected_rx_seq & 0xFFU));
 
         if (diff < 0) {
+            ESP_LOGW("ARQ", "[ARQ_RX] REPLAY reject seq=0x%02X expected_byte=0x%02X expected=%u diff=%d",
+                     seq, (unsigned)(s_expected_rx_seq & 0xFFU), (unsigned)s_expected_rx_seq, (int)diff);
             *corrected = false;
             return CEEPEW_ERR_REPLAY;
         }
 
         uint16_t seq_estimate = (uint16_t)((int32_t)s_expected_rx_seq + diff);
         s_expected_rx_seq = (uint16_t)(seq_estimate + 1U);
+        ESP_LOGI("ARQ", "[ARQ_RX] accept seq=0x%02X expected_byte=0x%02X diff=%d -> expected=%u",
+                 seq, (unsigned)((uint16_t)(seq_estimate) & 0xFFU), (int)diff, (unsigned)s_expected_rx_seq);
     }
 
     uint16_t payload_len = (uint16_t)(in_len - CEEPEW_ARQ_SEQ_BYTES);
@@ -172,7 +181,10 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
  * - Attempt 0: 100ms base ± 10% jitter
  * - Attempt 1: 200ms base ± 10% jitter
  * - Attempt 2: 400ms base ± 10% jitter
+ * Max retries: 5 to span channel hopping boundaries.
  */
+#define CEEPEW_ARQ_EFFECTIVE_MAX_RETRIES 5U
+
 CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint16_t payload_len){
     CEEPEW_ASSERT(peer_mac != NULL && payload != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(payload_len > 0U && payload_len <= CEEPEW_PACKET_MAX_BYTES, CEEPEW_ERR_PARAM);
@@ -186,7 +198,7 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
 
     uint16_t seq = s_tx_seq - 1;  /* Last sequence used by encode */
 
-    for (uint8_t attempt = 0U; attempt < CEEPEW_ARQ_MAX_RETRIES; attempt++){
+    for (uint8_t attempt = 0U; attempt < CEEPEW_ARQ_EFFECTIVE_MAX_RETRIES; attempt++){
         /* Wait if a channel hop is in progress (paused by pre_hop_cb).
          * This prevents transmitting during the ~20ms window when the radio
          * is switching channels, which would cause unnecessary retries. */
@@ -201,22 +213,40 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
         err = hal_radio_send(frame, frame_len);
         if (err != CEEPEW_OK){ return err; }
 
-        /* Wait for ACK (stubbed in platforms without ACK path) */
+        /* Wait for ACK */
         CeePewErr_t ack_err = transport_wait_ack(peer_mac, seq, CEEPEW_ARQ_TIMEOUT_MS);
         if (ack_err == CEEPEW_OK){
             return CEEPEW_OK; /* Success */
         }
         else if (ack_err == CEEPEW_ERR_TIMEOUT || ack_err == CEEPEW_ERR_HW){
-            /* Timeout: apply exponential backoff with jitter before retry.
-             * Skip delay on final attempt (all retries exhausted after this loop).
-             * Also respect hop pauses during backoff. */
-            if (attempt < CEEPEW_ARQ_MAX_RETRIES - 1U) {
-                uint16_t backoff_ms = ecc_arq_compute_backoff_ms(attempt);
+            /* A CEEPEW_ERR_HW result means the peer did not ACK at the link
+             * layer (ESP-EVERY failed unicast). In a channel-hopping session the
+             * peer is frequently on a different channel during the retry burst:
+             * all retries can elapse inside the same dead slot even though the
+             * frame is ultimately delivered.
+             *
+             * To avoid reporting a FALSE failure, realign the next attempt
+             * to a fresh channel boundary: wait until the hop generator toggles
+             * (a new pre_hop_cb fired) so this send lands on a newly-current
+             * channel where both peers may be aligned again. */
+            /* Realignment: wait for hop generator toggle so re-send lands on next channel slot if hopping.
+             * Cap wait time to 200 ms to avoid long blocking delays when channel hopping is inactive. */
+            if (attempt < CEEPEW_ARQ_EFFECTIVE_MAX_RETRIES - 1U) {
+                uint32_t gen_before = s_arq_hop_gen;
+                uint32_t realign_start = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                while (s_arq_hop_gen == gen_before) {
+                    if ((uint32_t)(esp_timer_get_time() / 1000ULL) - realign_start >= 200U) {
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                }
+
+                uint8_t backoff_shift = (attempt < 3U) ? attempt : 2U;
+                uint16_t backoff_ms = ecc_arq_compute_backoff_ms(backoff_shift);
                 uint32_t backoff_start = (uint32_t)(esp_timer_get_time() / 1000ULL);
                 while ((uint32_t)(esp_timer_get_time() / 1000ULL) - backoff_start < backoff_ms) {
                     if (s_arq_hop_paused) {
-                        /* Extend backoff by pause duration */
-                        backoff_start += 2;  /* Small adjustment */
+                        backoff_start += 2U;
                     }
                     vTaskDelay(pdMS_TO_TICKS(10));
                 }

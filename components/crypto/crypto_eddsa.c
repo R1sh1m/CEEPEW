@@ -332,7 +332,9 @@ CeePewErr_t crypto_eddsa_sign(const uint8_t priv[64], const uint8_t *msg, uint16
     CEEPEW_ASSERT(priv != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(sig != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(msg_len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
+    /* Callers sign ciphertext (compressed + Ascon tag + box tag), up to
+     * CEEPEW_SIGN_MAX_BYTES; the plaintext limit (60) is too tight. */
+    CEEPEW_ASSERT(msg_len <= CEEPEW_SIGN_MAX_BYTES, CEEPEW_ERR_BOUNDS);
 
     uint8_t keypair[64];
     uint8_t pub[32];
@@ -349,6 +351,6 @@ CeePewErr_t crypto_eddsa_verify(const uint8_t pub[32], const uint8_t *msg, uint1
     CEEPEW_ASSERT(pub != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(sig != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(msg_len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(msg_len <= CEEPEW_SIGN_MAX_BYTES, CEEPEW_ERR_BOUNDS);
     return (crypto_sign_verify_detached(sig, msg, (u64)msg_len, pub) == 0) ? CEEPEW_OK : CEEPEW_ERR_SIG_FAIL;
 }

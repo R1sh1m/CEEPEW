@@ -2,9 +2,6 @@
 #ifndef CEEPEW_CONFIG_H
 #define CEEPEW_CONFIG_H
 
-#include <stdint.h>
-#include <stdbool.h>
-#include "hal_ui_types.h"
 
 /* -------------------------------------------------------------------------- */
 /* Message Limits                                                             */
@@ -28,6 +25,10 @@
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_SESSION_KEY_BYTES         16U    /* Ascon-128 key = 128 bits   */
 #define CEEPEW_ASCON_TAG_BYTES           16U    /* Ascon auth tag             */
+#define CEEPEW_BOX_TAG_BYTES             16U    /* crypto_box Poly1305 tag    */
+/* Max ciphertext length handed to Ed25519 signing: plaintext(60) + Ascon
+ * tag(16) + box tag(16) = 92 B. See CEEPEW_PAYLOAD_MAX_BYTES derivation. */
+#define CEEPEW_SIGN_MAX_BYTES            (CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES + CEEPEW_BOX_TAG_BYTES)
 #define CEEPEW_SHA256_BYTES              32U
 #define CEEPEW_ED25519_PUBKEY_BYTES      32U
 #define CEEPEW_ED25519_PRIVKEY_BYTES     64U    /* seed (32) + pubkey (32)    */
@@ -108,6 +109,8 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
  * ASCII chat text typed by the user. */
 #define CEEPEW_KEY_SYNC_HELLO_BYTE       0xA5U   /* initiator → responder */
 #define CEEPEW_KEY_SYNC_ACK_BYTE         0x5AU   /* responder → initiator */
+#define CEEPEW_KEY_SYNC_PING_BYTE        0xA6U   /* active chat ping */
+#define CEEPEW_KEY_SYNC_PONG_BYTE        0x5BU   /* active chat pong */
 #define CEEPEW_KEY_SYNC_TIMEOUT_MS       30000U  /* Give up → PAIRING_FAILED */
 #define CEEPEW_KEY_SYNC_RETRY_MS         250U    /* Initiator retransmit cadence */
 #define CEEPEW_PFS_RETRY_INTERVAL_MS     3000U   /* PFS retransmit interval */
@@ -129,7 +132,8 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_CHAT_LONG_PRESS_MS        1500U  /* Long press to return to menu (ms) */
 #define CEEPEW_MESSAGE_TTL_S             3600U  /* Phase 4: Message auto-wipe, 1hr default */
 #define CEEPEW_MESSAGE_TTL_DIAG_S        300U   /* Phase 4: 5 min in DIAG mode */
-#define CEEPEW_ACTIVE_SILENT_TIMEOUT_S   30U    /* Phase 4: Return to discovery after 30s of silence in ACTIVE chat */
+#define CEEPEW_KEEPALIVE_INTERVAL_S     15U    /* Active chat ping interval (15s) */
+#define CEEPEW_ACTIVE_SILENT_TIMEOUT_S   600U   /* Phase 4: Return to discovery after 10 min of silence in ACTIVE chat */
 
 /* -------------------------------------------------------------------------- */
 /* Input / UI                                                                  */
@@ -318,10 +322,8 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 /* -------------------------------------------------------------------------- */
 /* Production Configuration Validation                                       */
 /* -------------------------------------------------------------------------- */
-#if defined(CONFIG_SECURE_BOOT_V2_ENABLED) && defined(CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED)
-#if !defined(CONFIG_CEEPEW_EFUSE_HMAC_KEY)
-#error "PRODUCTION BUILD ERROR: Secure Boot and Flash Encryption are enabled, but CONFIG_CEEPEW_EFUSE_HMAC_KEY is not set. Production builds must enable device-binding via eFuse HMAC key!"
-#endif
-#endif
+/* eFuse HMAC device binding was intentionally dropped by design decision.
+ * Secure Boot + Flash Encryption stand alone; no CEEPEW_EFUSE_HMAC_KEY
+ * requirement is enforced here anymore. */
 
 #endif /* CEEPEW_CONFIG_H */

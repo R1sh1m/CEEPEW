@@ -153,11 +153,12 @@ function Start-SdkconfigToggle {
     $alreadyEnabled = $sc -match '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y$'
     if (-not $alreadyEnabled) {
         Write-Host "[diagnose] Enabling CONFIG_CEEPEW_DEVELOPMENT_MODE=y in sdkconfig"
-        if ($sc -match '(?m)^# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set$') {
-            $sc = $sc -replace '(?m)^# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set$', 'CONFIG_CEEPEW_DEVELOPMENT_MODE=y'
-        } else {
-            $sc = $sc + "`nCONFIG_CEEPEW_DEVELOPMENT_MODE=y`n"
-        }
+        # Canonicalize: strip ALL occurrences (both "=y" and "is not set" forms,
+        # duplicates included) so kconfgen cannot resolve to the wrong value via
+        # last-occurrence semantics, then append exactly one enabled entry.
+        $sc = $sc -replace '(?m)^# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set\s*$\r?\n?', ''
+        $sc = $sc -replace '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y\s*$\r?\n?', ''
+        $sc = $sc.TrimEnd("`r", "`n") + "`nCONFIG_CEEPEW_DEVELOPMENT_MODE=y`n"
         Set-Content -LiteralPath $sdkconfig -Value $sc -NoNewline
     } else {
         Write-Host "[diagnose] CONFIG_CEEPEW_DEVELOPMENT_MODE already enabled"
@@ -175,7 +176,12 @@ function Stop-SdkconfigToggle {
     Write-Host "[diagnose] Restoring sdkconfig - disabling CEEPEW_DEVELOPMENT_MODE"
     $sc = Get-Content -LiteralPath $sdkconfig -Raw
     if ($sc -match '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y$') {
-        $sc = $sc -replace '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y$', '# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set'
+        # Canonicalize: strip ALL occurrences of the enabled form (and any stale
+        # "not set" lines), leaving exactly one disabled entry so the final state
+        # is deterministic regardless of how many duplicate lines existed.
+        $sc = $sc -replace '(?m)^# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set\s*$\r?\n?', ''
+        $sc = $sc -replace '(?m)^CONFIG_CEEPEW_DEVELOPMENT_MODE=y\s*$\r?\n?', ''
+        $sc = $sc.TrimEnd("`r", "`n") + "`n# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set`n"
         Set-Content -LiteralPath $sdkconfig -Value $sc -NoNewline
         Write-Host "[diagnose] sdkconfig restored"
     } else {

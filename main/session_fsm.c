@@ -20,7 +20,6 @@
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
 #include "crypto_ecdh.h"
-#include "crypto_hmac_efuse.h"
 #include "ecc_hamming.h"
 #include "session_fsm.h"
 #include "session_memory.h"  /* For g_ui_event_queue and UIEvent_t */
@@ -403,7 +402,8 @@ CeePewErr_t session_phase2_derive_key(void){
      * a rogue ESP-NOW peer and decrypt the session. */
     if (!s_session.device_id_peer_wifi_valid) {
         ESP_LOGE("session_fsm", "derive_key ABORT: peer WiFi MAC not verified via GATT");
-        ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+        /* NOTE: session_code is intentionally preserved so a later, successful
+         * GATT exchange can retry. Wiping it here made the failure one-shot. */
         s_session_fsm_locked = false;
         return CEEPEW_ERR_PARAM;
     }
@@ -411,7 +411,6 @@ CeePewErr_t session_phase2_derive_key(void){
         static const uint8_t zeros[6] = {0};
         if (ceepew_ct_equal(s_session.device_id_peer_wifi, zeros, 6U)) {
             ESP_LOGE("session_fsm", "derive_key ABORT: peer WiFi MAC is all-zeros");
-            ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
             s_session_fsm_locked = false;
             return CEEPEW_ERR_PARAM;
         }
@@ -421,7 +420,7 @@ CeePewErr_t session_phase2_derive_key(void){
      * This prohibits proceeding with unauthenticated pairings. */
     if (!s_session.peer_sign_pk_valid && !s_session.identity_degraded) {
         ESP_LOGE("session_fsm", "derive_key ABORT: peer sign_pk invalid and identity not degraded");
-        ceepew_secure_zero(&s_session.session_code, sizeof(s_session.session_code));
+        /* Preserve session_code so the GATT sign_pk retry can recover. */
         s_session_fsm_locked = false;
         return CEEPEW_ERR_AUTH_FAIL;
     }
@@ -620,6 +619,38 @@ CeePewErr_t session_enforce_nonce_limit(void){
     return CEEPEW_OK;
 }
 
+/* Undo the most-recent session_enforce_nonce_limit() increment.
+ *
+ * SECURITY INVARIANT: Call ONLY when session_enforce_nonce_limit() has been
+ * called but the encrypted frame was NOT transmitted — i.e. the TX pipeline
+ * failed before ecc_arq_send() was invoked. Rolling back after a frame has
+ * been sent (even if ACK was never received) would replay a nonce the peer's
+ * ESL replay window has already accepted, enabling a trivial replay attack.
+ *
+ * Preserves parity: decrements by 2, so the counter stays on the same
+ * even/odd track as the role assignment.
+ *
+ * RETURNS:
+ *   CEEPEW_OK          — Counter decremented
+ *   CEEPEW_ERR_PARAM   — Not in phase 3 or session not active
+ */
+CeePewErr_t session_rollback_nonce(void)
+{
+    CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
+    /* Underflow guard: counter must be >= 2 before rollback is safe.
+     * At session start initiator has 0, responder has 1 — after the
+     * first enforce_nonce_limit() call both are >=2. */
+    CEEPEW_ASSERT(s_session.nonce_counter >= 2U, CEEPEW_ERR_PARAM);
+
+    s_session.nonce_counter -= 2U;
+    s_nonce_counter_display = s_session.nonce_counter;
+    ESP_LOGW("session_fsm", "[NONCE_ROLLBACK] TX pipeline failed before send — "
+             "nonce rolled back to %llu (parity preserved)",
+             (unsigned long long)s_session.nonce_counter);
+    return CEEPEW_OK;
+}
+
 CeePewErr_t session_get_nonce(uint8_t nonce[24]){
     CEEPEW_ASSERT(s_session.phase == 3U, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT(nonce != NULL, CEEPEW_ERR_NULL_PTR);
@@ -656,7 +687,11 @@ CeePewErr_t session_sign_message(const uint8_t *msg, uint32_t msg_len, uint8_t s
     CEEPEW_ASSERT(msg != NULL || msg_len == 0U, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(sig != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(s_session.session_active, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(msg_len <= CEEPEW_MAX_MSG_BYTES, CEEPEW_ERR_BOUNDS);
+    /* The caller signs the crypto_box ciphertext (box_ct), not the
+     * plaintext: box_ct_len = compressed + Ascon tag + box tag, up to
+     * CEEPEW_SIGN_MAX_BYTES. The old plaintext bound (60) rejected any
+     * message whose ciphertext exceeded 60 B (plaintext > ~28 B). */
+    CEEPEW_ASSERT(msg_len <= CEEPEW_SIGN_MAX_BYTES, CEEPEW_ERR_BOUNDS);
     return crypto_eddsa_sign(s_session.sign_sk, msg, msg_len, sig);
 }
 
@@ -826,22 +861,24 @@ CeePewErr_t session_verify_wifi_mac_matches_frame(const uint8_t frame_src_mac[6]
 }
 
 /* ── Clean Slate Chat Evolution ────────────────────────────────────────
- * Thread-safe reset of the Stop-and-Wait ARQ engine context and flush
- * of the radio RX queue. Called the instant the sync barrier is verified
- * to ensure no stale sequence numbers, queued frames, or ARQ state from
- * the pairing exchange contaminates the active chat session.
+ * session_flush_rx_queue(): drain stale pairing-phase frames from the
+ * radio RX queue so they don't hit the ESL pipeline (too-short non-ESL
+ * frames trigger CEEPEW_ASSERT in transport_esl_process_incoming).
+ * This deliberately does NOT touch the ARQ engine: at post-derive-sync
+ * start the PFS handshake frames (PFS_INIT/PFS_RESP) are already in
+ * flight through ecc_arq_send on the initiator, so resetting the
+ * sequence counters here would make the initiator's next frame (HELLO)
+ * reuse seq 0 and be rejected by the responder as a replay
+ * (CEEPEW_ERR_REPLAY / err=17).
  *
+ * session_flush_arq_and_rx_queue(): thread-safe reset of the ARQ engine
+ * plus RX queue drain. Called only the instant the sync barrier is
+ * verified to ensure no stale sequence numbers, queued frames, or ARQ
+ * state from the pairing exchange contaminates the active chat session.
  * The ARQ engine (ecc_arq.c) maintains static sequence counters that
- * must be zeroed before the first chat message is sent. The RX queue
- * may contain stale pairing-phase frames that would corrupt the
- * decryption pipeline if processed after key derivation. */
-static void session_flush_arq_and_rx_queue(void)
+ * must be zeroed before the first chat message is sent. */
+static void session_flush_rx_queue(void)
 {
-    CeePewErr_t arq_err = ecc_arq_reset();
-    if (arq_err != CEEPEW_OK) {
-        ESP_LOGW("session_fsm", "ARQ reset failed: %d", (int)arq_err);
-    }
-
     QueueHandle_t rx_q = hal_radio_get_rx_queue();
     if (rx_q != NULL) {
         RadioFrame_t stale_frame;
@@ -856,6 +893,15 @@ static void session_flush_arq_and_rx_queue(void)
             ESP_LOGI("session_fsm", "Flushed %lu stale frames from RX queue", (unsigned long)flushed);
         }
     }
+}
+
+static void session_flush_arq_and_rx_queue(void)
+{
+    CeePewErr_t arq_err = ecc_arq_reset();
+    if (arq_err != CEEPEW_OK) {
+        ESP_LOGW("session_fsm", "ARQ reset failed: %d", (int)arq_err);
+    }
+    session_flush_rx_queue();
 }
 
 bool session_peer_sign_pk_valid(void)
@@ -938,12 +984,17 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
     }
 
     /* Initialise the timeout deadline on first call.
-     * Also drain any stale pairing-phase frames from the radio RX queue so
-     * they don't hit the ESL pipeline (too-short non-ESL frames trigger
-     * CEEPEW_ASSERT in transport_esl_process_incoming). */
+     * Drain stale pairing-phase frames from the radio RX queue so they
+     * don't hit the ESL pipeline. NOTE: do NOT reset the ARQ engine
+     * here — the initiator's PFS_INIT has already been transmitted
+     * through ecc_arq_send, and resetting would make the HELLO reuse
+     * seq 0 and be rejected by the responder as a replay (err=17).
+     * The deterministic ARQ baseline is established by ecc_arq_reset()
+     * at ESP-NOW setup (task_session.c) before PFS begins, and again at
+     * barrier-clear for a clean chat slate. */
     if (s_session.sync_started_ms == 0ULL) {
         s_session.sync_started_ms = now_ms;
-        session_flush_arq_and_rx_queue();
+        session_flush_rx_queue();
     }
 
     if ((now_ms - s_session.sync_started_ms) >= CEEPEW_KEY_SYNC_TIMEOUT_MS) {
@@ -1350,6 +1401,16 @@ CeePewErr_t session_reset_to_discovery(void)
      * sync barrier to time out on every subsequent pairing attempt. */
     transport_replay_reset();
 
+    /* Reset the ARQ engine sequence counters (s_tx_seq, s_expected_rx_seq).
+     * ecc_arq_reset() is normally called inside session_clear_sync_barrier_internal()
+     * once the encrypted HELLO/ACK round-trip succeeds. If pairing fails before
+     * the barrier clears (timeout, key mismatch, BLE disconnect), those counters
+     * are never zeroed and bleed into the next attempt — the peer's fresh ARQ
+     * engine expects seq=0 but sees the stale continuation, rejects it as a
+     * duplicate (err=17), and the post-derive HELLO is silently dropped,
+     * causing a pairing timeout on every retry. */
+    (void)ecc_arq_reset();
+
     (void)session_end();
 
     /* session_end() calls session_secure_zero_context() which zeroes s_session.
@@ -1716,10 +1777,12 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32])
 
 static void session_pfs_activate(void)
 {
-    if (g_crypto_ctx.pfs_peer_pubkey_valid) {
+    if (g_crypto_ctx.pfs_peer_pubkey_valid && !g_crypto_ctx.pfs_active) {
+        memcpy(g_crypto_ctx.prev_ascon_key, g_crypto_ctx.ascon_key, 16U);
+        g_crypto_ctx.prev_ascon_key_valid = true;
         memcpy(g_crypto_ctx.ascon_key, g_crypto_ctx.pfs_ascon_key, 16U);
         g_crypto_ctx.pfs_active = true;
-        ESP_LOGI("SESSION", "PFS handshake complete — session key rotated");
+        ESP_LOGI("SESSION", "PFS handshake complete — session key rotated (base key retained for fallback)");
     }
 }
 

@@ -174,10 +174,17 @@ SIGNATURES = [
     ),
     dict(
         id="secure_chat_rx_fail",
-        pattern=re.compile(r"\[SECURE_CHAT_RX\] (?:Discard|AEAD auth tag verification FAILED|signature verification FAILED|Inner CRC mismatch)"),
+        pattern=re.compile(r"\[SECURE_CHAT_RX\] (?:Discard:(?! frame too short)|AEAD auth tag verification FAILED|signature verification FAILED|Inner CRC mismatch)"),
         category="secure-chat",
         severity="High",
         description="Secure chat incoming frame decryption, CRC, or signature authentication failed.",
+    ),
+    dict(
+        id="secure_chat_rx_frame_too_short",
+        pattern=re.compile(r"\[SECURE_CHAT_RX\] Discard: frame too short for session traffic"),
+        category="secure-chat",
+        severity="Info",
+        description="Incoming frame shorter than the 66-byte minimum, discarded before crypto. Expected for non-session ESP-NOW traffic or stale frames; not a decryption failure.",
     ),
     dict(
         id="err_replay",
@@ -566,6 +573,17 @@ def unclassified_key(tag, msg):
 
 def ingest(log_path, session_name, store_path):
     store = load_store(store_path)
+    abs_path = os.path.abspath(log_path)
+
+    # Idempotency guard: each source log must be ingested exactly once.
+    # Re-ingesting the same file appends a second run entry and double-counts
+    # every signature hit against the aggregated store, inflating the
+    # findings report.  Skip files that are already present.
+    if any(r.get("file") == abs_path for r in store["runs"]):
+        print(f"skip: {log_path} already ingested (store has this file) — "
+              f"use a fresh store to re-triage with updated signatures")
+        return store
+
     devices = set()
     line_count = 0
     sig_hits = 0
@@ -630,7 +648,7 @@ def ingest(log_path, session_name, store_path):
 
     store["runs"].append({
         "session_name": session_name,
-        "file": os.path.abspath(log_path),
+        "file": abs_path,
         "ingested_at": now_iso(),
         "devices": sorted(devices),
         "line_count": line_count,

@@ -2,7 +2,6 @@
 #define HAL_RGB_H
 
 #include <stdint.h>
-#include "ceepew_config.h"
 #include "hal_ui_types.h"
 
 typedef enum {

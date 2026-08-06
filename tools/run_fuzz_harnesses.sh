@@ -90,13 +90,16 @@ for HARNESS_DIR in "${!HARNESSES[@]}"; do
             -o "${HARNESS_BIN}"
     fi
 
-    # Smoke test: run for 60 seconds, generate a small corpus on the fly
-    echo "  Running:   ${HARNESS_DIR} (60s smoke test)"
+    # Smoke test: run for 60 seconds using initial seed corpus
+    CORPUS_DIR="${FUZZ_DIR}/${HARNESS_DIR}/corpus"
+    mkdir -p "${CORPUS_DIR}"
+    echo "  Running:   ${HARNESS_DIR} (60s smoke test with corpus)"
     set +e
-    "${HARNESS_BIN}" -max_total_time=60 -max_len=512 -runs=1000000 \
+    "${HARNESS_BIN}" "${CORPUS_DIR}" -max_total_time=60 -max_len=512 -runs=1000000 \
         -artifact_prefix="${BUILD_DIR}/" 2>&1 | tail -5
     EXIT_CODE=$?
     set -e
+
 
     if [[ ${EXIT_CODE} -eq 0 ]]; then
         echo "  [PASS] ${HARNESS_DIR}"

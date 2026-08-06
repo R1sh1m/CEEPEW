@@ -335,31 +335,53 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
                                     &final_frame, &final_len);
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "[SECURE_CHAT_TX] Pipeline execution failed: err=%d", (int)err);
+        /* Roll back the nonce that session_enforce_nonce_limit() pre-incremented
+         * inside stage_tx_encrypt. The frame was NEVER sent (we haven't reached
+         * ecc_arq_send yet), so rolling back is safe — the peer hasn't seen this
+         * nonce value and the counter remains synchronized. Without this rollback,
+         * every TX pipeline failure permanently advances the nonce counter by 2,
+         * eventually desynchronizing INIT's and RESP's nonce sequences and causing
+         * all subsequent INIT→RESP messages to fail Ascon AEAD verification. */
+        if (session_is_active()) {
+            (void)session_rollback_nonce();
+        }
+        region_reset(&g_region);
         return err;
     }
+
+
+    /* Update last message activity timestamp on send attempt */
+    (void)session_update_last_message_time();
 
     /* Wrap frame with ARQ and send with retry/backoff */
     ESP_LOGI(TAG, "[SECURE_CHAT_TX] Submitting %u B ESL frame to Stop-and-Wait ARQ...", (unsigned)final_len);
     err = ecc_arq_send(peer_mac, final_frame, final_len);
     if (err != CEEPEW_OK) {
         ESP_LOGE(TAG, "[SECURE_CHAT_TX] ARQ transmission failed: err=%d (peer offline or packet dropped)", (int)err);
+        region_reset(&g_region);
         return err;
     }
 
     ESP_LOGI(TAG, "[SECURE_CHAT_TX] Message successfully delivered & ACKed via ARQ!");
 
-    /* Do not store handshake sync messages (HELLO/ACK) in the message store */
+    /* Do not store handshake/control sync messages (HELLO/ACK/PING/PONG) in the message store */
     bool is_handshake = (len == 1U && (plaintext[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
-                                       plaintext[0] == CEEPEW_KEY_SYNC_ACK_BYTE));
+                                       plaintext[0] == CEEPEW_KEY_SYNC_ACK_BYTE ||
+                                       plaintext[0] == CEEPEW_KEY_SYNC_PING_BYTE ||
+                                       plaintext[0] == CEEPEW_KEY_SYNC_PONG_BYTE));
     if (!is_handshake) {
         err = msg_store_add(plaintext, len, 1U);
-        if (err != CEEPEW_OK) { return err; }
+        if (err != CEEPEW_OK) {
+            region_reset(&g_region);
+            return err;
+        }
     }
 
     err = session_update_last_message_time();
-    if (err != CEEPEW_OK) { return err; }
 
-    return CEEPEW_OK;
+    /* Free transient pipeline allocations from the region pool */
+    region_reset(&g_region);
+    return err;
 }
 
 /* Send a message and wait for an echo response (round-trip test).

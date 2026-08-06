@@ -236,7 +236,9 @@ _Static_assert(sizeof(UIEventPayload) == 16, "UIEventPayload must be exactly 16 
  * with headroom — UI drains at 5ms interval, radio max ~3 msg/sec
  *
  * Overflow strategy:
- * - If queue is full, session task MUST drop the oldest event (xQueueOverwrite)
+ * - If queue is full, session task MUST drop the newest event and log a
+ *   warning. NOTE: xQueueOverwrite is only valid on length-1 queues and
+ *   asserts (queue.c:938) on a depth-8 queue — always use xQueueSend.
  * - UI task never blocks on queue receive (timeout: 30ms)
  * - This ensures UI responsiveness even under event flood
  */

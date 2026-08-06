@@ -90,18 +90,11 @@ jobs:
           sudo apt-get install -y cmake gcc libmbedtls-dev
       - name: Configure and build host tests
         run: |
-          cmake -S tests/host -B tests/host/build
+          cmake -S tests/host -B tests/host/build -DCEEPEW_HOST_SANITIZERS=ON
           cmake --build tests/host/build
-      - name: Run host tests
+      - name: Run host tests (CTest)
         run: |
-          set -e
-          for test in tests/host/build/test_*; do
-            if [ -x "$test" ]; then
-              echo "Running: $test"
-              "$test"
-            fi
-          done
-
+          ctest --test-dir tests/host/build --output-on-failure
   # ── Static analysis (cppcheck + clang-tidy) ────────────────────────
   static-analysis:
     runs-on: ubuntu-latest
@@ -129,10 +122,11 @@ jobs:
             -i managed_components \
             -i .agents \
             .
-      - name: clang-tidy (filtered)
+      - name: clang-tidy
         run: |
           find components/ -name '*.c' \
             -not -path '*/build/*' \
             -print0 | xargs -0 -P$(nproc) clang-tidy \
             --quiet \
-            -p . 2>/dev/null || true
+            -p .
+

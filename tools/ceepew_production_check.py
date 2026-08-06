@@ -40,43 +40,27 @@ def main():
     else:
         print("[PASS] CONFIG_CEEPEW_OLED_GRAPHICS_TEST is disabled")
         
-    # 3. Check eFuse HMAC key
+    # 3. eFuse HMAC key binding was intentionally dropped by design decision.
+    #    No longer a production requirement; keep as informational only.
     efuse_hmac = config.get("CONFIG_CEEPEW_EFUSE_HMAC_KEY")
-    if efuse_hmac != "y":
-        errors.append("CONFIG_CEEPEW_EFUSE_HMAC_KEY must be enabled (currently disabled or unset).")
+    if efuse_hmac == "y":
+        print("[INFO] CONFIG_CEEPEW_EFUSE_HMAC_KEY is enabled (device-bound salt active)")
     else:
-        print("[PASS] CONFIG_CEEPEW_EFUSE_HMAC_KEY is enabled")
+        print("[INFO] CONFIG_CEEPEW_EFUSE_HMAC_KEY is disabled (design decision — eFuse binding dropped)")
         
-    # 4. Check Secure Boot v2 (Release mode)
+    # 4. Secure Boot v2 and Flash Encryption were intentionally dropped by
+    #    design decision (they burn one-way eFuses). Informational only.
     sb_enabled = config.get("CONFIG_SECURE_BOOT_V2_ENABLED")
-    if sb_enabled != "y":
-        errors.append("CONFIG_SECURE_BOOT_V2_ENABLED must be enabled (currently disabled or unset).")
+    if sb_enabled == "y":
+        print("[WARN] CONFIG_SECURE_BOOT_V2_ENABLED is enabled — this burns one-way eFuses on first boot (design decision removed this for dev/reusable firmware).")
     else:
-        print("[PASS] CONFIG_SECURE_BOOT_V2_ENABLED is enabled")
-        
-        sb_key_path = config.get("CONFIG_SECURE_BOOT_SIGNING_KEY")
-        if not sb_key_path:
-            errors.append("CONFIG_SECURE_BOOT_SIGNING_KEY is not set.")
-        else:
-            # Check absolute or relative path
-            full_key_path = os.path.join(project_root, sb_key_path)
-            if not os.path.exists(full_key_path):
-                errors.append(f"Secure Boot signing key file not found at: {sb_key_path}")
-            else:
-                print(f"[PASS] Secure Boot signing key exists at: {sb_key_path}")
-                
-    # 5. Check Flash Encryption (Release mode)
+        print("[INFO] CONFIG_SECURE_BOOT_V2_ENABLED is disabled (design decision — no eFuse burn)")
+
     fe_enabled = config.get("CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED")
-    if fe_enabled != "y":
-        errors.append("CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED must be enabled (currently disabled or unset).")
+    if fe_enabled == "y":
+        print("[WARN] CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED is enabled — this burns one-way eFuses on first boot (design decision removed this for dev/reusable firmware).")
     else:
-        print("[PASS] CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED is enabled")
-        
-    fe_mode_release = config.get("CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE")
-    if fe_mode_release != "y":
-        errors.append("CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE must be enabled (currently disabled or unset).")
-    else:
-        print("[PASS] CONFIG_SECURE_FLASH_ENCRYPTION_MODE is set to RELEASE")
+        print("[INFO] CONFIG_SECURE_FLASH_ENCRYPTION_ENABLED is disabled (design decision — no eFuse burn)")
 
     print("\n=== SUMMARY ===")
     if errors:

@@ -91,7 +91,7 @@ def find_host_gcc():
     return None
 
 
-def run_host_tests():
+def run_host_tests(enable_coverage=False):
     """Compile and execute native host C unit tests via CMake."""
     print("\n============================================")
     print(" CEE-PEW Host C Unit Test Suite")
@@ -109,6 +109,9 @@ def run_host_tests():
         return False
 
     cmake_config_cmd = [cmake_bin, "-B", build_dir, "-S", host_dir]
+    if enable_coverage:
+        cmake_config_cmd.append("-DCEEPEW_HOST_COVERAGE=ON")
+
     host_gcc = find_host_gcc()
     if host_gcc:
         cmake_config_cmd.extend([f"-DCMAKE_C_COMPILER={host_gcc}", "-G", "MinGW Makefiles"])
@@ -129,13 +132,16 @@ def run_host_tests():
     print("--> Running Host Tests...")
     test_binaries = [
         "test_security_utils",
+        "test_side_channel",
         "test_ascon",
         "test_hamming",
         "test_sha256",
         "test_hkdf",
         "test_eddsa",
         "test_huffman",
-        "test_session_pairing"
+        "test_session_pairing",
+        "test_arq_sync",
+        "test_arq_fault_injection"
     ]
 
     passed = 0
@@ -166,10 +172,23 @@ def run_host_tests():
 
     print("\n--- HOST TEST RESULTS ---")
     print(f"  Passed: {passed} / {passed + failed}")
+
+    if enable_coverage:
+        print("\n--> Analyzing Code Coverage (gcov)...")
+        try:
+            gcov_res = subprocess.run(["gcov", "-o", build_dir, "ceepew_security_utils.c"], capture_output=True, text=True, cwd=build_dir)
+            if gcov_res.returncode == 0:
+                print(gcov_res.stdout)
+            else:
+                print("[!] gcov execution returned non-zero code or gcov not available.")
+        except FileNotFoundError:
+            print("[!] 'gcov' utility not found in PATH.")
+
     if failed > 0:
         print(f"  Failed: {failed}")
         return False
     return True
+
 
 
 def run_production_check():
@@ -318,6 +337,7 @@ def main():
     parser.add_argument("--port1", help="Device A serial port for pairing mode (e.g. COM5)")
     parser.add_argument("--port2", help="Device B serial port for pairing mode (e.g. COM6)")
     parser.add_argument("--duration", type=int, default=60, help="Test monitoring duration in seconds (default: 60)")
+    parser.add_argument("--coverage", action="store_true", help="Enable gcov code coverage collection during host unit tests")
     parser.add_argument("--full-clean", action="store_true", help="Force full build directory clean before diagnostic build")
     parser.add_argument("--skip-flash", action="store_true", help="Skip flashing step during pairing test")
     parser.add_argument("--list-ports", action="store_true", help="List all connected serial ports and exit")
@@ -340,7 +360,8 @@ def main():
     success = True
 
     if args.mode == "host":
-        success = run_host_tests()
+        success = run_host_tests(enable_coverage=args.coverage)
+
     elif args.mode == "diag":
         success = run_diagnostics(port=args.port, duration=args.duration, full_clean=args.full_clean)
     elif args.mode == "pairing":

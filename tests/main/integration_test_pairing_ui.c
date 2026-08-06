@@ -8,7 +8,6 @@
 #include "session_fsm.h"
 #include "ui_manager.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdbool.h>
@@ -115,51 +114,74 @@ static bool pairing_ui_validate_layout(void)
 
 static bool pairing_ui_validate_transitions(void)
 {
+    bool saved_diag = g_ui_ctx.diag_mode;
+    g_ui_ctx.diag_mode = false;
+
     ui_manager_reset_to_discovery();
     if (!pairing_ui_check(ui_manager_transition_to(UI_STATE_PAIRING) == CEEPEW_OK, "transition to pairing")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     g_ui_ctx.transition_ready = true;
     if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "enter pairing")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     if (!pairing_ui_check(g_ui_ctx.current_state == UI_STATE_PAIRING, "pairing state active")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render pairing")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
 
     /* Transition from pairing directly to keyder (PAIRING_SUCCESS removed) */
     if (!pairing_ui_check(ui_manager_transition_to(UI_STATE_KEYDER) == CEEPEW_OK, "transition to keyder")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     g_ui_ctx.transition_ready = true;
     if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "enter keyder")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     if (!pairing_ui_check(g_ui_ctx.current_state == UI_STATE_KEYDER, "keyder state active")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render keyder")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
 
     /* Transition to cryptogram (keys verified) */
     if (!pairing_ui_check(ui_manager_transition_to(UI_STATE_CRYPTOGRAM) == CEEPEW_OK, "transition to cryptogram")) {
+        g_ui_ctx.diag_mode = saved_diag;
         return false;
     }
     g_ui_ctx.transition_ready = true;
+    if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "enter cryptogram")) {
+        g_ui_ctx.diag_mode = saved_diag;
+        return false;
+    }
+    if (!pairing_ui_check(g_ui_ctx.current_state == UI_STATE_CRYPTOGRAM, "cryptogram state active")) {
+        g_ui_ctx.diag_mode = saved_diag;
+        return false;
+    }
 
     for (uint8_t frame = 0U; frame < 8U; frame++) {
         if (!pairing_ui_check(ui_manager_draw() == CEEPEW_OK, "render cryptogram")) {
+            g_ui_ctx.diag_mode = saved_diag;
             return false;
         }
         if (!pairing_ui_check(ui_manager_update() == CEEPEW_OK, "advance cryptogram")) {
+            g_ui_ctx.diag_mode = saved_diag;
             return false;
         }
     }
 
+    g_ui_ctx.diag_mode = saved_diag;
     return true;
 }
 
