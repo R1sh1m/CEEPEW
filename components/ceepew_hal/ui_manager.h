@@ -99,6 +99,13 @@ typedef struct {
     uint8_t       keyboard_row;         /* Current keyboard row (0-9 for 6x10 grid) */
     uint8_t       keyboard_col;         /* Current keyboard column (0-5) */
     uint8_t       chat_selected_idx;    /* Currently selected message index in thread */
+    /* Tactical Telemetry & Modern Messenger Features */
+    bool          peer_typing;          /* True when peer is actively typing */
+    uint32_t      peer_typing_start_ms; /* Timestamp when typing beacon received */
+    uint8_t       macro_selected;       /* Currently selected quick-reply macro index */
+    bool          macro_active;         /* True when macro selection overlay is active */
+    int8_t        rssi_dbm;             /* Current link RSSI (-128 to 0 dBm) */
+    uint8_t       current_channel;      /* Active ESP-NOW hop channel */
     /* Phase: Multi-peer discovery selection */
     uint8_t       peer_select_idx;          /* Currently selected peer index in visible list */
     uint8_t       peer_select_scroll_top;   /* Top index of visible window in cache */

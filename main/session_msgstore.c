@@ -92,7 +92,8 @@ CeePewErr_t msg_store_add(const uint8_t *plaintext, uint16_t plaintext_len, uint
     g_msg_store.messages[g_msg_store.tail].meta.created_at = now_s;
     g_msg_store.messages[g_msg_store.tail].meta.payload_len = plaintext_len;
     g_msg_store.messages[g_msg_store.tail].meta.dir = direction;
-    g_msg_store.messages[g_msg_store.tail].meta.reserved = 0U;
+    g_msg_store.messages[g_msg_store.tail].meta.delivery_status = (direction == 1U) ? (uint8_t)MSG_STATUS_SENT : (uint8_t)MSG_STATUS_DELIVERED;
+    g_msg_store.messages[g_msg_store.tail].meta.ttl_seconds = 0U;
 
     memcpy(g_msg_store.messages[g_msg_store.tail].plaintext, plaintext, plaintext_len);
     g_msg_store.messages[g_msg_store.tail].plaintext[plaintext_len] = '\0';
@@ -214,4 +215,23 @@ CeePewErr_t msg_store_mark_read(uint8_t index)
     }
     portEXIT_CRITICAL(&s_msg_store_mux);
     return err;
+}
+
+CeePewErr_t msg_store_update_delivery_status(uint8_t index, MsgDeliveryStatus_t status)
+{
+    portENTER_CRITICAL(&s_msg_store_mux);
+    CeePewErr_t err = CEEPEW_OK;
+    if (index >= g_msg_store.count) {
+        err = CEEPEW_ERR_BOUNDS;
+    } else {
+        uint8_t msg_idx = (g_msg_store.head + index) % CEEPEW_MAX_MESSAGES;
+        g_msg_store.messages[msg_idx].meta.delivery_status = (uint8_t)status;
+    }
+    portEXIT_CRITICAL(&s_msg_store_mux);
+    return err;
+}
+
+CeePewErr_t msg_store_burn_all(void)
+{
+    return msg_store_wipe_all();
 }

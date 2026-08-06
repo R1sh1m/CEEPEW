@@ -17,12 +17,20 @@
 #include <stdbool.h>
 #include <time.h>
 
+typedef enum {
+    MSG_STATUS_PENDING = 0U,
+    MSG_STATUS_SENT = 1U,
+    MSG_STATUS_DELIVERED = 2U,
+    MSG_STATUS_READ = 3U
+} MsgDeliveryStatus_t;
+
 /* Message metadata: timestamp, length, flags */
 typedef struct {
     uint32_t created_at;          /* Unix timestamp (seconds) */
     uint16_t payload_len;         /* Plaintext size before encryption */
     uint8_t  dir;                 /* 0=RX, 1=TX */
-    uint8_t  reserved;
+    uint8_t  delivery_status;     /* MsgDeliveryStatus_t (0=pending, 1=sent, 2=delivered, 3=read) */
+    uint8_t  ttl_seconds;         /* Self-destruct timer, 0 = default CEEPEW_MSG_TTL_S */
 } MsgMeta_t;
 
 /* In-store message: metadata + plaintext payload */
@@ -71,6 +79,12 @@ uint8_t msg_store_unread_count(void);
 
 /* Mark a message at index as read. Returns CEEPEW_OK or CEEPEW_ERR_BOUNDS if index invalid. */
 CeePewErr_t msg_store_mark_read(uint8_t index);
+
+/* Update delivery status (pending, sent, delivered, read) for a message. */
+CeePewErr_t msg_store_update_delivery_status(uint8_t index, MsgDeliveryStatus_t status);
+
+/* Securely burn/wipe all stored messages immediately (alias for link drop / burn feature). */
+CeePewErr_t msg_store_burn_all(void);
 
 /* Diagnostic accessor: last secure-wipe time in milliseconds since epoch */
 uint32_t session_get_last_wipe_ms(void);

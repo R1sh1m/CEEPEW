@@ -3510,6 +3510,22 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
+    /* ── Emergency Stealth Wipe Gesture ──────────────────────────────────
+     * Hold input button 3s while turning potentiometer full right (>=240)
+     * triggers immediate secure zeroing of chat store and resets to BOOT state. */
+    if (g_ui_ctx.button_pressed && g_ui_ctx.button_press_start_ms != 0U) {
+        uint32_t press_dur = (now_ms >= g_ui_ctx.button_press_start_ms)
+                           ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
+        if (press_dur >= 3000U && g_ui_ctx.user_input >= 240U) {
+            ESP_LOGW("ui", "STEALTH EMERGENCY WIPE TRIGGERED");
+            (void)msg_store_burn_all();
+            ceepew_secure_zero(&g_ui_ctx, sizeof(UIContext_t));
+            (void)ui_manager_transition_to(UI_STATE_BOOT);
+            g_ui_ctx.transition_ready = true;
+            return CEEPEW_OK;
+        }
+    }
+
     /* Remember previous button state for edge detection */
     g_ui_ctx.button_prev = g_ui_ctx.button_pressed;
 
