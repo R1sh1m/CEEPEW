@@ -1,6 +1,6 @@
 /* main/main.c — CEE-PEW entry point with dual task launch */
 
-#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
@@ -252,8 +252,11 @@ void app_main(void){
     /* Resume session task after tests complete and production state is set. */
     if (session_handle != NULL) { vTaskResume(session_handle); }
 
+    /* integration_test_pairing_e2e_run() is only linked when tests are enabled */
+#if 0
     extern void integration_test_pairing_e2e_run(void);
     integration_test_pairing_e2e_run();
+#endif
 #endif
 
     ESP_LOGI(TAG, "=== CEE-PEW Ready ===");

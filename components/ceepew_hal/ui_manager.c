@@ -4,6 +4,7 @@
 
 #include "ui_manager.h"
 #include "hal_ui.h"
+#include "hal_radio.h"
 #include "hal_rgb.h"
 #include "layout.h"
 #include "../transport/transport_ble.h"
@@ -896,7 +897,6 @@ static const char MATRIX_CHARS[17U] = "0123456789ABCDEF";
 
 /* 10 column x-positions for matrix rain (character left edge) */
 static const uint8_t MATRIX_COL_X[10U] = { 1,14,27,40,53,66,79,92,105,118 };
-
 /* ────────────────────────────────────────────────────────────────────────── */
 /* HELPER: draw a 1-pixel rectangle outline                                  */
 /*                                                                            */
@@ -2055,16 +2055,18 @@ static CeePewErr_t render_confirm(void)
     ui_draw_centered_text(2U, "CHECKING CODE");
     draw_hline(0U, 11U, 128U);
 
-    /* code_display zone (12-31): 4-digit code in boxes */
-    const uint8_t code_x[4U] = { 12U, 42U, 72U, 102U };
-    const uint8_t code_y = 14U;
-    const uint8_t code_w = 14U;
-    const uint8_t code_h = 12U;
+    /* code_display zone (12-44): 4 code digits in a 2×2 PIN matrix —
+     * larger cells than the legacy single row for readability. */
+    const uint8_t cell_x[4U] = { 12U, 72U, 12U, 72U };
+    const uint8_t cell_y[4U] = { 13U, 13U, 25U, 25U };
+    const uint8_t cell_w = 46U;
+    const uint8_t cell_h = 11U;
     for (uint8_t i = 0U; i < 4U; i++) {
-        HalUIRect_t box = { .x = code_x[i], .y = code_y, .w = code_w, .h = code_h };
+        HalUIRect_t box = { .x = cell_x[i], .y = cell_y[i], .w = cell_w, .h = cell_h };
         hal_ui_rect(&box, HAL_UI_WHITE);
         char digit[2U] = { (char)g_ui_ctx.code_digits[i], '\0' };
-        hal_ui_text((uint8_t)(code_x[i] + 4U), (uint8_t)(code_y + 2U), digit, HAL_UI_WHITE);
+        hal_ui_text((uint8_t)(cell_x[i] + (cell_w - 6U) / 2U),
+                    (uint8_t)(cell_y[i] + 2U), digit, HAL_UI_WHITE);
     }
 
     /* status zone (32-47): full peer MAC */
@@ -2285,8 +2287,8 @@ static CeePewErr_t render_keyder_anim(void)
             if (row == head_row) {
                 /* Head character: draw with small box (bright) */
                 hal_ui_text(MATRIX_COL_X[col], ROW_Y[row], ch, HAL_UI_WHITE);
-                HalUIRect_t hd = { .x = MATRIX_COL_X[col] - 1U,
-                                   .y = ROW_Y[row] - 1U,
+                HalUIRect_t hd = { .x = (uint8_t)(MATRIX_COL_X[col] - 1U),
+                                   .y = (uint8_t)(ROW_Y[row] - 1U),
                                    .w = 8U, .h = 10U };
                 hal_ui_rect(&hd, HAL_UI_WHITE);
             } else {
@@ -2299,7 +2301,7 @@ static CeePewErr_t render_keyder_anim(void)
     /* Color-inverting progress bar with text inside.
      *
      * Progress stages tied to real backend state:
-     *   0–95%: linear ramp over keyder_frames (~9 s).  This matches the
+     *   0-95%: linear ramp over keyder_frames (~9 s).  This matches the
      *          actual post-derive sync window; the bar sweeps smoothly from
      *          left to right across the full timeout.
      *  100%:   sync_barrier_cleared() — encrypted HELLO/ACK round-trip
@@ -2395,18 +2397,59 @@ CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir, boo
     uint32_t age_s = (now_s > msg->meta.created_at) ? (now_s - msg->meta.created_at) : 0U;
     uint32_t ttl_remaining = (age_s < CEEPEW_MSG_TTL_S) ? (CEEPEW_MSG_TTL_S - age_s) : 0U;
 
-    /* Draw TTL indicator: black if selected, white if not */
-    if (ttl_remaining > 0U) {
-        uint8_t status_x = (bubble_dir == 0U) ? 96U : 120U;
-        hal_ui_circle(status_x, y_pos, 1U, selected ? HAL_UI_BLACK : HAL_UI_WHITE);
+    /* Status indicators, direction-dependent:
+     *  - TX bubble: delivery ticks. PENDING draws nothing, SENT draws a
+     *    single right-arrow tick, DELIVERED/READ draw a double tick (peer
+     *    ARQ ACK received). Colors invert when the bubble is selected
+     *    (the bubble is white-filled).
+     *  - RX bubble: TTL countdown dot at the right edge plus a filled
+     *    unread dot at the left edge while msg->read == false. */
+    if (bubble_dir == 1U) {
+        uint8_t tick_color = selected ? HAL_UI_BLACK : HAL_UI_WHITE;
+        uint8_t status = msg->meta.delivery_status;
+        if (status == MSG_STATUS_DELIVERED || status == MSG_STATUS_READ) {
+            hal_ui_text(108U, (uint8_t)(y_pos + 2U), "\x7e\x7e", tick_color);
+        } else if (status == MSG_STATUS_SENT) {
+            hal_ui_text(118U, (uint8_t)(y_pos + 2U), "\x7e", tick_color);
+        }
+    } else {
+        if (ttl_remaining > 0U) {
+            hal_ui_circle(96U, y_pos, 1U, selected ? HAL_UI_BLACK : HAL_UI_WHITE);
+        }
+        if (!msg->read) {
+            HalUIRect_t unread_dot = { .x = 2U, .y = (uint8_t)(y_pos + 5U), .w = 2U, .h = 2U };
+            hal_ui_rect_fill(&unread_dot, selected ? HAL_UI_BLACK : HAL_UI_WHITE);
+        }
     }
 
     return CEEPEW_OK;
 }
 
+static void render_new_msg_banner(uint8_t x, uint8_t y)
+{
+    if (g_ui_ctx.new_msg_count == 0U) { return; }
+    char banner[12U];
+    if (g_ui_ctx.new_msg_count > 9U) {
+        (void)snprintf(banner, sizeof(banner), "[!9+]");
+    } else {
+        (void)snprintf(banner, sizeof(banner), "[!%u]", (unsigned)g_ui_ctx.new_msg_count);
+    }
+    uint8_t len = (uint8_t)strlen(banner);
+    /* Clamp to display bounds: the "[!9+]" banner is 5 glyphs = 32 px wide,
+     * and callers may pass x=100, so an unclamped w would exceed the
+     * 128 px frame and trip the rect_fill bounds assert. */
+    uint8_t w = (uint8_t)(len * 6U + 2U);
+    if ((uint16_t)x + w > HAL_UI_WIDTH_PX) { w = (uint8_t)(HAL_UI_WIDTH_PX - x); }
+    HalUIRect_t bg = { .x = x, .y = y, .w = w, .h = 9U };
+    hal_ui_rect_fill(&bg, HAL_UI_WHITE);
+    hal_ui_text((uint8_t)(x + 1U), (uint8_t)(y + 1U), banner, HAL_UI_BLACK);
+}
+
 static CeePewErr_t render_chat_thread(void)
 {
     hal_ui_clear();
+    g_ui_ctx.new_msg_count = 0U;
+    g_ui_ctx.new_msg_first_ts_ms = 0U;
     bool degraded = session_is_identity_degraded();
     /* When the identity banner is present, all content Y offsets shift
      * down by 8 pixels to accommodate the warning line. */
@@ -2427,6 +2470,12 @@ static CeePewErr_t render_chat_thread(void)
     char badge[16U];
     (void)snprintf(badge, sizeof(badge), "M%u", (unsigned)count);
     hal_ui_text(102U, (uint8_t)(1U + banner_shift), badge, HAL_UI_WHITE);
+
+    /* Unread badge: count of received messages not yet opened */
+    uint8_t unread = msg_store_unread_count();
+    char unread_str[8U];
+    (void)snprintf(unread_str, sizeof(unread_str), "U%u", (unsigned)unread);
+    hal_ui_text(0U, (uint8_t)(1U + banner_shift), unread_str, HAL_UI_WHITE);
 
     if (count == 0U) {
         ui_draw_centered_text((uint8_t)(28U + banner_shift), "No messages yet");
@@ -2479,7 +2528,20 @@ static CeePewErr_t render_chat_thread(void)
         hal_ui_rect_fill(&thumb, HAL_UI_WHITE);
     }
 
-    ui_draw_centered_text((uint8_t)(54U + banner_shift), "BTN=menu");
+    /* Tactical status bar: live ESP-NOW hop channel + last-seen link RSSI.
+     * RSSI is refreshed on every received frame (g_ui_ctx.rssi_dbm). */
+    {
+        char status_str[14U];
+        if (g_ui_ctx.rssi_dbm == 0) {
+            (void)snprintf(status_str, sizeof(status_str), "CH%u --dBm",
+                           (unsigned)hal_radio_get_current_channel());
+        } else {
+            (void)snprintf(status_str, sizeof(status_str), "CH%u %ddBm",
+                           (unsigned)hal_radio_get_current_channel(), (int)g_ui_ctx.rssi_dbm);
+        }
+        hal_ui_text(0U, (uint8_t)(54U + banner_shift), status_str, HAL_UI_WHITE);
+    }
+    hal_ui_text(80U, (uint8_t)(54U + banner_shift), "BTN=menu", HAL_UI_WHITE);
 
     return CEEPEW_OK;
 }
@@ -2501,6 +2563,10 @@ static CeePewErr_t render_chat_detail(void)
         g_ui_ctx.transition_ready = true;
         return CEEPEW_OK;
     }
+
+    /* Mark-as-read: opening a message clears its unread flag so the
+     * unread badge and per-bubble unread dots update on the next frame. */
+    (void)msg_store_mark_read(g_ui_ctx.chat_selected_idx);
 
     ui_draw_centered_text(1U, "MESSAGE DETAIL");
     draw_hline(0U, 11U, 128U);
@@ -2533,6 +2599,7 @@ static CeePewErr_t render_chat_detail(void)
 
     /* Footer */
     draw_hline(0U, 62U, 128U);
+    render_new_msg_banner(100U, 1U);
 
     return CEEPEW_OK;
 }
@@ -2691,19 +2758,21 @@ static CeePewErr_t render_cryptogram(void)
     ui_draw_centered_text(2U, "KEYS VERIFIED");
     draw_hline(0U, 11U, 128U);
 
-    /* Show both commitments side-by-side */
-    hal_ui_text(4U, 14U, "Local:", HAL_UI_WHITE);
-    ui_draw_hex_rows(g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES, 4U, 22U);
+    /* Body: Display verified fingerprint header and grouped hex rows.
+     * Uses 16-byte formatted fingerprint displayed cleanly centered
+     * with zero pixel overlap. */
+    ui_draw_centered_text(15U, "VERIFIED FINGERPRINT");
 
-    hal_ui_text(4U, 40U, "Peer:", HAL_UI_WHITE);
-    ui_draw_hex_rows(g_ui_ctx.peer_commitment, CEEPEW_COMMITMENT_BYTES, 4U, 48U);
+    /* Draw two 8-byte hex rows centered horizontally.
+     * 8-byte row in 2-byte groups is 19 chars = 114px wide -> X = 7U. */
+    ui_draw_hex_rows(g_ui_ctx.commitment, 16U, 7U, 26U);
 
-    /* Large tick mark animation */
+    /* Animated status banner in footer zone (Y=54..62) */
     uint8_t tick_phase = (uint8_t)((f / 6U) % 2U);
     if (tick_phase == 0U) {
-        ui_draw_centered_text(56U, "\x7e KEYS MATCH \x7e");
+        ui_draw_centered_text(54U, "> MATCHED <");
     } else {
-        ui_draw_centered_text(56U, "  KEYS MATCH  ");
+        ui_draw_centered_text(54U, "  MATCHED  ");
     }
 
     /* Auto-advance after CEEPEW_KEYS_VERIFIED_HOLD_MS */
@@ -2761,6 +2830,7 @@ static CeePewErr_t render_chat_menu(void)
     }
 
     hal_ui_text(66U, (uint8_t)(54U + banner_shift), "BTN=select", HAL_UI_WHITE);
+    render_new_msg_banner(100U, 1U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2827,6 +2897,7 @@ static CeePewErr_t render_chat_compose(void)
     draw_hline(0U, 47U, 128U);
     ui_draw_centered_text(48U, "TAP=sel");
     ui_draw_centered_text(56U, "HLD=menu");
+    render_new_msg_banner(100U, 0U);
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -2846,12 +2917,22 @@ static CeePewErr_t render_chat_send_confirm(void)
     (void)hal_ui_fit_text(g_ui_ctx.compose_buffer, 120U, preview, sizeof(preview));
     hal_ui_text(4U, 22U, preview, HAL_UI_WHITE);
 
+    if (g_ui_ctx.send_pending) {
+        /* Send is in flight on Core 1 — lock the screen until the result
+         * event arrives (UI_EVENT_SEND_RESULT). Input is ignored while
+         * pending, so the user cannot double-send or navigate away. */
+        hal_ui_text(4U, 38U, "sending...", HAL_UI_WHITE);
+        render_new_msg_banner(100U, 1U);
+        return CEEPEW_OK;
+    }
+
     draw_selected_option_row(4U, 38U, 54U, 16U, "SEND", (g_ui_ctx.chat_send_confirm_selected == 0U));
     hal_ui_text(8U, 42U, "\xFB", HAL_UI_BLACK);
     draw_selected_option_row(70U, 38U, 54U, 16U, "GO BACK", (g_ui_ctx.chat_send_confirm_selected != 0U));
     hal_ui_text(74U, 42U, "X", HAL_UI_BLACK);
 
     hal_ui_text(14U, 56U, "tap choice", HAL_UI_WHITE);
+    render_new_msg_banner(100U, 1U);
 
     return CEEPEW_OK;
 }
@@ -2941,11 +3022,19 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_prev = false;
         } else if (g_ui_ctx.current_state == UI_STATE_CRYPTOGRAM) {
             /* Initialize cryptogram confirmation context */
-            memset(g_ui_ctx.commitment, 0U, CEEPEW_COMMITMENT_BYTES);
-            memset(g_ui_ctx.peer_commitment, 0U, CEEPEW_COMMITMENT_BYTES);
-            /* FIX: seed peer commitment from BLE context so renderer can compare */
-            memcpy(g_ui_ctx.peer_commitment, g_ble_ctx.commitment_digest, CEEPEW_COMMITMENT_BYTES);
-            g_ui_ctx.commitment_verified   = g_ble_ctx.commitment_verified;
+            (void)session_get_commitment(g_ui_ctx.commitment);
+            g_ui_ctx.commitment_verified = g_ble_ctx.commitment_verified;
+            if (g_ui_ctx.commitment_verified) {
+                memcpy(g_ui_ctx.peer_commitment, g_ui_ctx.commitment, CEEPEW_COMMITMENT_BYTES);
+            } else {
+                uint8_t peer_zero = 0U;
+                for (size_t i = 0U; i < CEEPEW_COMMITMENT_BYTES; i++) {
+                    peer_zero |= g_ui_ctx.peer_commitment[i];
+                }
+                if (peer_zero == 0U) {
+                    memcpy(g_ui_ctx.peer_commitment, g_ble_ctx.adv_commitment, CEEPEW_COMMITMENT_ADV_BYTES);
+                }
+            }
             g_ui_ctx.crypto_confirm_start_ms = now_ms;
 
             /* Signal readiness after commitment verified, enabling sync handshake with peer */
@@ -3272,7 +3361,8 @@ CeePewErr_t ui_manager_update(void)
         }
     } else if (g_ui_ctx.current_state == UI_STATE_CONFIRM ||
                g_ui_ctx.current_state == UI_STATE_PAIRING ||
-               g_ui_ctx.current_state == UI_STATE_COUNTDOWN) {
+               g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
+               g_ui_ctx.current_state == UI_STATE_KEYDER) {
         /* Long press (>= 600ms) during waiting / verification cancels pairing */
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
@@ -3371,63 +3461,58 @@ CeePewErr_t ui_manager_update(void)
             }
         }
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
+        if (g_ui_ctx.send_pending) {
+            /* A send is in flight on Core 1 — freeze input until the
+             * UI_EVENT_SEND_RESULT arrives. Prevents double-sends and
+             * mid-send navigation (both would race the Core-1 TX pipeline
+             * and corrupt the nonce/ARQ sequence, observed in the field
+             * as nonce reuse + peer decrypt failures). */
+            goto send_confirm_done;
+        }
         g_ui_ctx.chat_send_confirm_selected = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             if (g_ui_ctx.chat_send_confirm_selected == 0U) {
-                /* Obtain the peer MAC from the session FSM (phase-locked, survives
-                 * BLE teardown). Using g_ble_ctx.peer_mac was unreliable because
-                 * transport_ble_deinit() can zero it after key derivation, causing
-                 * hal_radio_set_peer() to fail with CEEPEW_ERR_PARAM (mac_is_zero). */
-                uint8_t session_peer_mac[6] = {0U};
-                if (session_get_peer_wifi_mac(session_peer_mac) != CEEPEW_OK) {
-                    ESP_LOGW("ui", "send: session peer WiFi MAC not locked — aborting send");
+                /* Async send: copy the composed plaintext into a
+                 * SessionCmd_t and hand it to the session task (Core 1)
+                 * via g_session_cmd_queue. session_send_message() must
+                 * NEVER be called from Core 0 — the TX pipeline (region
+                 * pool, nonce counter, ARQ seq) is shared with Core-1 RX
+                 * processing and races across cores. */
+                if (g_session_cmd_queue == NULL) {
+                    ESP_LOGW("ui", "send: session command queue not initialised — aborting send");
                     g_ui_ctx.reject_sequence_start_ms = 0U;
                     g_ui_ctx.error_start_ms = now_ms;
                     (void)ui_manager_transition_to(UI_STATE_ERROR);
                     g_ui_ctx.transition_ready = true;
-                    /* break out of the else-if chain */
                     goto send_confirm_done;
                 }
-                uint8_t peer_pk[32U];
-                CeePewErr_t peer_err = session_get_peer_public_key(peer_pk);
-                if (peer_err == CEEPEW_OK) {
-                    CeePewErr_t send_err = session_send_message(
-                        (const uint8_t *)g_ui_ctx.compose_buffer,
-                        (uint16_t)g_ui_ctx.compose_length,
-                        session_peer_mac,
-                        peer_pk);
-                    ceepew_secure_zero(peer_pk, sizeof(peer_pk));
-
-                    if (send_err == CEEPEW_OK) {
-                        ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
-                        for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
-                            g_ui_ctx.compose_buffer[ci] = 0U;
-                        }
-                        g_ui_ctx.compose_length = 0U;
-                        g_ui_ctx.compose_cursor = 0U;
-                        compose_terminate_buffer();
-                        (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
-                        g_ui_ctx.transition_ready = true;
-                    } else {
-                        ESP_LOGW("ui", "session_send_message failed: %d", (int)send_err);
-                        g_ui_ctx.reject_sequence_start_ms = 0U;
-                        if (session_is_active()) {
-                            (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
-                        } else {
-                            g_ui_ctx.error_start_ms = now_ms;
-                            (void)ui_manager_transition_to(UI_STATE_ERROR);
-                        }
-                        g_ui_ctx.transition_ready = true;
-                    }
-                } else {
-                    ESP_LOGW("ui", "session_get_peer_public_key failed: %d", (int)peer_err);
+                SessionCmd_t cmd = {0U};
+                cmd.cmd = (uint8_t)SESSION_CMD_SEND_MESSAGE;
+                cmd.len = g_ui_ctx.compose_length;
+                if (cmd.len > CEEPEW_MAX_MSG_BYTES) { cmd.len = CEEPEW_MAX_MSG_BYTES; }
+                memcpy(cmd.payload, g_ui_ctx.compose_buffer, cmd.len);
+                ESP_LOGI("ui", "SEND queued: '%.*s' (len=%u)", (int)cmd.len, cmd.payload, (unsigned)cmd.len);
+                BaseType_t q_rc = xQueueSend(g_session_cmd_queue, &cmd, portMAX_DELAY);
+                ceepew_secure_zero(cmd.payload, sizeof(cmd.payload));
+                if (q_rc != pdTRUE) {
+                    ESP_LOGW("ui", "send: session command queue full — aborting send");
                     g_ui_ctx.reject_sequence_start_ms = 0U;
                     g_ui_ctx.error_start_ms = now_ms;
                     (void)ui_manager_transition_to(UI_STATE_ERROR);
                     g_ui_ctx.transition_ready = true;
+                    goto send_confirm_done;
                 }
+                for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
+                    g_ui_ctx.compose_buffer[ci] = 0U;
+                }
+                g_ui_ctx.compose_length = 0U;
+                g_ui_ctx.compose_cursor = 0U;
+                compose_terminate_buffer();
+                /* Stay in SEND_CONFIRM showing "sending..." until the
+                 * result event arrives from Core 1. */
+                g_ui_ctx.send_pending = true;
             } else {
                 (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
                 g_ui_ctx.transition_ready = true;
@@ -3898,6 +3983,10 @@ CeePewErr_t ui_manager_transition_to(UIState_t next_state)
     if (next_state == UI_STATE_PAIRING) {
         ESP_LOGI("ui_transition", "-> PAIRING (was %u)", g_ui_ctx.current_state);
     }
+    if (next_state == UI_STATE_CHAT) {
+        g_ui_ctx.new_msg_count = 0U;
+        g_ui_ctx.new_msg_first_ts_ms = 0U;
+    }
     g_ui_ctx.next_state = next_state;
     return CEEPEW_OK;
 }
@@ -4015,37 +4104,65 @@ void ui_manager_reset_to_discovery(void)
     }
 }
 
+/* Handle the asynchronous send result posted by the session task (Core 1)
+ * via UI_EVENT_SEND_RESULT. Called from the UI task (Core 0) event loop. */
+void ui_manager_on_send_result(CeePewErr_t err)
+{
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+
+    if (!g_ui_ctx.send_pending) {
+        /* Result for a send we no longer track (e.g. session wiped
+         * mid-send). Nothing to transition — the reset already moved
+         * the UI to discovery. */
+        ESP_LOGW("ui", "send result (%d) with no pending send — ignored", (int)err);
+        return;
+    }
+    g_ui_ctx.send_pending = false;
+
+    if (err == CEEPEW_OK) {
+        ESP_LOGI("ui", "SEND OK (from Core 1)");
+        if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
+            (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+            g_ui_ctx.transition_ready = true;
+        }
+    } else {
+        ESP_LOGW("ui", "session_send_message failed on Core 1: %d", (int)err);
+        g_ui_ctx.reject_sequence_start_ms = 0U;
+        if (session_is_active()) {
+            if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
+                (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                g_ui_ctx.transition_ready = true;
+            }
+        } else {
+            g_ui_ctx.error_start_ms = now_ms;
+            (void)ui_manager_transition_to(UI_STATE_ERROR);
+            g_ui_ctx.transition_ready = true;
+        }
+    }
+}
+
 /* ── Sprint 10 public render helpers ──────────────────────────────────── */
 
 CeePewErr_t ui_keygen_show_progress(uint8_t frame_index)
 {
     hal_ui_clear();
 
-    /* "DERIVING KEY..." label */
-    ui_draw_centered_text(2U, "DERIVING KEY...");
-    draw_hline(0U, 12U, 128U);
+    /* Title Header */
+    ui_draw_centered_text(2U, "KEY DERIVATION");
+    draw_hline(0U, 11U, 128U);
 
-    /* Matrix rain — 10 columns, 6 rows, same charset as render_keyder_anim */
-    const uint8_t ROW_Y[6U] = { 16U, 24U, 32U, 40U, 48U, 56U };
-    const uint8_t NUM_ROWS  = 6U;
+    /* Details */
+    hal_ui_text(4U, 14U, "Crypto: Ed25519+X25519", HAL_UI_WHITE);
+    hal_ui_text(4U, 24U, "Suite:  Ascon-128 AEAD", HAL_UI_WHITE);
 
-    for (uint8_t col = 0U; col < 10U; col++) {
-        uint32_t head_f = (uint32_t)frame_index + (uint32_t)col * 6U;
-        uint8_t  head_row = (uint8_t)((head_f / 4U) % (NUM_ROWS + 4U));
-
-        for (uint8_t row = 0U; row < NUM_ROWS; row++) {
-            if (row > head_row) { continue; }
-            uint8_t char_idx = (uint8_t)(
-                ((uint32_t)(col * 17U) + (head_f / 2U) + (uint32_t)(row * 13U))
-                % MATRIX_CHARSET_LEN);
-            char ch[2U] = { MATRIX_CHARS[char_idx], '\0' };
-            hal_ui_text(MATRIX_COL_X[col], ROW_Y[row], ch, HAL_UI_WHITE);
-        }
-    }
+    uint8_t prog_pct = (uint8_t)((frame_index < 100U) ? frame_index : 100U);
+    const char *step_str = (prog_pct < 50U) ? "1/2 HKDF Key Deriv" : "2/2 Verifying Sync";
+    hal_ui_text(4U, 34U, step_str, HAL_UI_WHITE);
 
     /* Color-inverting progress bar with text inside */
-    uint8_t prog_pct = (uint8_t)((frame_index < 100U) ? frame_index : 100U);
-    draw_progress_bar_inverted_text(4U, 46U, 120U, 10U, prog_pct, "KEYGEN...");
+    char prog_label[20U];
+    (void)snprintf(prog_label, sizeof(prog_label), "KEYGEN %u%%", (unsigned)prog_pct);
+    draw_progress_bar_inverted_text(4U, 48U, 120U, 12U, prog_pct, prog_label);
 
     return CEEPEW_OK;
 }

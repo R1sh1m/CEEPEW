@@ -5,8 +5,7 @@
 #include "ceepew_security_utils.h"
 #include <stdbool.h>
 #include <stdint.h>
-
-#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/task.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -150,22 +149,29 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
         s_expected_rx_seq = (uint16_t)(seq + 1U);
         ESP_LOGI("ARQ", "[ARQ_RX] first-frame accept seq=0x%02X -> expected=%u", seq, (unsigned)s_expected_rx_seq);
     } else {
-        /* Reconstruct the full 16-bit seq from the 8-bit wire byte:
-         * Using signed 8-bit difference correctly resolves wrap-around
-         * and centers a 256-frame sliding window around expected_rx_seq. */
-        int8_t diff = (int8_t)(seq - (uint8_t)(s_expected_rx_seq & 0xFFU));
+        /* Reconstruct the full 16-bit seq from the 8-bit wire byte.
+         * Find the 16-bit value whose low 8 bits match the wire byte
+         * and is closest to the current expected 16-bit sequence.
+         * This correctly handles wrap-around at 256 boundaries. */
+        uint16_t seq_estimate = (uint16_t)((s_expected_rx_seq & 0xFF00U) | seq);
+        int16_t diff16 = (int16_t)(seq_estimate - s_expected_rx_seq);
+        if (diff16 < -128) {
+            seq_estimate = (uint16_t)(seq_estimate + 256U);
+        } else if (diff16 > 127) {
+            seq_estimate = (uint16_t)(seq_estimate - 256U);
+        }
+        diff16 = (int16_t)(seq_estimate - s_expected_rx_seq);
 
-        if (diff < 0) {
+        if (diff16 < 0) {
             ESP_LOGW("ARQ", "[ARQ_RX] REPLAY reject seq=0x%02X expected_byte=0x%02X expected=%u diff=%d",
-                     seq, (unsigned)(s_expected_rx_seq & 0xFFU), (unsigned)s_expected_rx_seq, (int)diff);
+                     seq, (unsigned)(s_expected_rx_seq & 0xFFU), (unsigned)s_expected_rx_seq, (int)diff16);
             *corrected = false;
             return CEEPEW_ERR_REPLAY;
         }
 
-        uint16_t seq_estimate = (uint16_t)((int32_t)s_expected_rx_seq + diff);
         s_expected_rx_seq = (uint16_t)(seq_estimate + 1U);
         ESP_LOGI("ARQ", "[ARQ_RX] accept seq=0x%02X expected_byte=0x%02X diff=%d -> expected=%u",
-                 seq, (unsigned)((uint16_t)(seq_estimate) & 0xFFU), (int)diff, (unsigned)s_expected_rx_seq);
+                 seq, (unsigned)(seq_estimate & 0xFFU), (int)diff16, (unsigned)s_expected_rx_seq);
     }
 
     uint16_t payload_len = (uint16_t)(in_len - CEEPEW_ARQ_SEQ_BYTES);

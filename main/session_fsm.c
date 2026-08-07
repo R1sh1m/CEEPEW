@@ -549,6 +549,11 @@ CeePewErr_t session_phase2_derive_key(void){
     s_session.phase = 3U;
     s_session.session_active = true;
 
+    /* Reset ARQ engine NOW (before ESL callbacks and before PFS frames)
+     * so that PFS_INIT/PFS_RESP frames use sequence numbers starting from 0.
+     * This prevents sequence divergence when sync barrier clears later. */
+    (void)ecc_arq_reset();
+
     err = esl_register_callbacks(session_mac_lock_check, session_enforce_nonce_limit);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 
@@ -897,10 +902,9 @@ static void session_flush_rx_queue(void)
 
 static void session_flush_arq_and_rx_queue(void)
 {
-    CeePewErr_t arq_err = ecc_arq_reset();
-    if (arq_err != CEEPEW_OK) {
-        ESP_LOGW("session_fsm", "ARQ reset failed: %d", (int)arq_err);
-    }
+    /* ARQ is now reset earlier in session_phase2_derive_key() before PFS frames.
+     * We only flush the RX queue here to drain stale pairing-phase frames.
+     * Resetting ARQ again would cause sequence divergence. */
     session_flush_rx_queue();
 }
 
@@ -1115,7 +1119,7 @@ static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx)
 
     /* Post UI_EVENT_SESSION_ESTABLISHED to notify UI task (Core 0) that
      * the encrypted HELLO/ACK round-trip completed and session is ready.
-     * This triggers transition from UI_STATE_KEYDER to UI_STATE_CHAT_MENU.
+     * This triggers transition to UI_STATE_CRYPTOGRAM (KEYS VERIFIED screen).
      * Retry with a short timeout — silently dropping this event would leave
      * the UI stuck in KEYDER while the session is actually active. */
     if (g_ui_event_queue != NULL) {
