@@ -111,6 +111,13 @@ typedef struct {
     uint8_t       peer_select_scroll_top;   /* Top index of visible window in cache */
     bool          peer_select_blacklist_confirm; /* Blacklist confirm dialog active */
     uint8_t       peer_select_blacklist_idx; /* Index of peer being blacklisted */
+    /* Modern messenger: new message tracking */
+    uint8_t       new_msg_count;            /* Unread count for banner */
+    uint32_t      new_msg_first_ts_ms;      /* Timestamp of first unread */
+    /* Send pipeline coordination */
+    bool          send_pending;             /* True while send in flight on Core 1 */
+    /* Reboot gesture (hold 3 s + left→right pot sweep) */
+    bool          reboot_gesture_saw_left;  /* saw pot in left zone during hold */
 } UIContext_t;
 
 extern UIContext_t g_ui_ctx;

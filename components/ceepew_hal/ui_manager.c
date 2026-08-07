@@ -80,6 +80,7 @@ CeePewErr_t ui_manager_init(void){
     g_ui_ctx.diag_mode = false;
     g_ui_ctx.transition_ready = false;
     g_ui_ctx.code_entry_start_ms = 0U;
+    g_ui_ctx.reboot_gesture_saw_left = false;
     s_ui_manager_initialised = true;
 
     CeePewErr_t err = layout_validate_state_regions();
@@ -3480,45 +3481,57 @@ CeePewErr_t ui_manager_update(void)
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             if (g_ui_ctx.chat_send_confirm_selected == 0U) {
-                /* Async send: copy the composed plaintext into a
-                 * SessionCmd_t and hand it to the session task (Core 1)
-                 * via g_session_cmd_queue. session_send_message() must
-                 * NEVER be called from Core 0 — the TX pipeline (region
-                 * pool, nonce counter, ARQ seq) is shared with Core-1 RX
-                 * processing and races across cores. */
-                if (g_session_cmd_queue == NULL) {
-                    ESP_LOGW("ui", "send: session command queue not initialised — aborting send");
+                /* Obtain the peer MAC from the session FSM (phase-locked, survives
+                 * BLE teardown). Using g_ble_ctx.peer_mac was unreliable because
+                 * transport_ble_deinit() can zero it after key derivation, causing
+                 * hal_radio_set_peer() to fail with CEEPEW_ERR_PARAM (mac_is_zero). */
+                uint8_t session_peer_mac[6] = {0U};
+                if (session_get_peer_wifi_mac(session_peer_mac) != CEEPEW_OK) {
+                    ESP_LOGW("ui", "send: session peer WiFi MAC not locked — aborting send");
                     g_ui_ctx.reject_sequence_start_ms = 0U;
                     g_ui_ctx.error_start_ms = now_ms;
                     (void)ui_manager_transition_to(UI_STATE_ERROR);
                     g_ui_ctx.transition_ready = true;
                     goto send_confirm_done;
                 }
-                SessionCmd_t cmd = {0U};
-                cmd.cmd = (uint8_t)SESSION_CMD_SEND_MESSAGE;
-                cmd.len = g_ui_ctx.compose_length;
-                if (cmd.len > CEEPEW_MAX_MSG_BYTES) { cmd.len = CEEPEW_MAX_MSG_BYTES; }
-                memcpy(cmd.payload, g_ui_ctx.compose_buffer, cmd.len);
-                ESP_LOGI("ui", "SEND queued: '%.*s' (len=%u)", (int)cmd.len, cmd.payload, (unsigned)cmd.len);
-                BaseType_t q_rc = xQueueSend(g_session_cmd_queue, &cmd, portMAX_DELAY);
-                ceepew_secure_zero(cmd.payload, sizeof(cmd.payload));
-                if (q_rc != pdTRUE) {
-                    ESP_LOGW("ui", "send: session command queue full — aborting send");
+                uint8_t peer_pk[32U];
+                CeePewErr_t peer_err = session_get_peer_public_key(peer_pk);
+                if (peer_err == CEEPEW_OK) {
+                    CeePewErr_t send_err = session_send_message(
+                        (const uint8_t *)g_ui_ctx.compose_buffer,
+                        (uint16_t)g_ui_ctx.compose_length,
+                        session_peer_mac,
+                        peer_pk);
+                    ceepew_secure_zero(peer_pk, sizeof(peer_pk));
+
+                    if (send_err == CEEPEW_OK) {
+                        ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
+                        for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
+                            g_ui_ctx.compose_buffer[ci] = 0U;
+                        }
+                        g_ui_ctx.compose_length = 0U;
+                        g_ui_ctx.compose_cursor = 0U;
+                        compose_terminate_buffer();
+                        (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                        g_ui_ctx.transition_ready = true;
+                    } else {
+                        ESP_LOGW("ui", "session_send_message failed: %d", (int)send_err);
+                        g_ui_ctx.reject_sequence_start_ms = 0U;
+                        if (session_is_active()) {
+                            (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
+                        } else {
+                            g_ui_ctx.error_start_ms = now_ms;
+                            (void)ui_manager_transition_to(UI_STATE_ERROR);
+                        }
+                        g_ui_ctx.transition_ready = true;
+                    }
+                } else {
+                    ESP_LOGW("ui", "session_get_peer_public_key failed: %d", (int)peer_err);
                     g_ui_ctx.reject_sequence_start_ms = 0U;
                     g_ui_ctx.error_start_ms = now_ms;
                     (void)ui_manager_transition_to(UI_STATE_ERROR);
                     g_ui_ctx.transition_ready = true;
-                    goto send_confirm_done;
                 }
-                for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
-                    g_ui_ctx.compose_buffer[ci] = 0U;
-                }
-                g_ui_ctx.compose_length = 0U;
-                g_ui_ctx.compose_cursor = 0U;
-                compose_terminate_buffer();
-                /* Stay in SEND_CONFIRM showing "sending..." until the
-                 * result event arrives from Core 1. */
-                g_ui_ctx.send_pending = true;
             } else {
                 (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);
                 g_ui_ctx.transition_ready = true;
@@ -3601,17 +3614,33 @@ CeePewErr_t ui_manager_update(void)
         }
     }
 
-    /* ── Emergency Stealth Wipe Gesture ──────────────────────────────────
-     * Hold input button 3s while turning potentiometer full right (>=240)
-     * triggers immediate secure zeroing of chat store and resets to BOOT state. */
+    /* ── Emergency Reboot Gesture ──────────────────────────────────────────────
+     * Hold button 3 s while sweeping potentiometer from left to right:
+     * - Button must be held >= 3 s
+     * - Pot must have visited left zone (<= 40) at some point during hold
+     * - Pot must be in right zone (>= 240) at the 3 s mark
+     * Triggers complete device reboot (esp_restart). */
     if (g_ui_ctx.button_pressed && g_ui_ctx.button_press_start_ms != 0U) {
         uint32_t press_dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-        if (press_dur >= 3000U && g_ui_ctx.user_input >= 240U) {
-            ESP_LOGW("ui", "STEALTH EMERGENCY WIPE TRIGGERED");
+
+        /* Edge: button just pressed — reset sweep tracker */
+        if (!g_ui_ctx.button_prev) {
+            g_ui_ctx.reboot_gesture_saw_left = false;
+        }
+
+        /* Track left-zone visit while held */
+        if (g_ui_ctx.user_input <= 40U) {
+            g_ui_ctx.reboot_gesture_saw_left = true;
+        }
+
+        /* Trigger: 3 s hold + saw left + now at right */
+        if (press_dur >= 3000U && g_ui_ctx.reboot_gesture_saw_left && g_ui_ctx.user_input >= 240U) {
+            ESP_LOGW("ui", "REBOOT GESTURE TRIGGERED — FULL DEVICE REBOOT");
             (void)msg_store_burn_all();
             ceepew_secure_zero(&g_ui_ctx, sizeof(UIContext_t));
-            (void)ui_manager_transition_to(UI_STATE_BOOT);
+            esp_restart();
+            (void)ui_manager_transition_to(UI_STATE_BOOT);  /* fallback if restart queued */
             g_ui_ctx.transition_ready = true;
             return CEEPEW_OK;
         }
