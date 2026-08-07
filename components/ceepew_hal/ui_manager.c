@@ -4,7 +4,6 @@
 
 #include "ui_manager.h"
 #include "hal_ui.h"
-#include "hal_radio.h"
 #include "hal_rgb.h"
 #include "layout.h"
 #include "../transport/transport_ble.h"
@@ -140,6 +139,14 @@ static void draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1)
         if (e2 > -dy) { err -= dy; x0 += sx; }
         if (e2 <  dx) { err += dx; y0 += sy; }
     }
+}
+
+/* Draw a checkmark (✓) with two line segments in a ~7×7 cell.
+ * x,y = top-left of the cell; color = HAL_UI_WHITE or HAL_UI_BLACK. */
+static void draw_tick(uint8_t x, uint8_t y, HalUIColor_t color)
+{
+    hal_ui_line(x, (uint8_t)(y + 5U), (uint8_t)(x + 2U), (uint8_t)(y + 7U), color);
+    hal_ui_line((uint8_t)(x + 3U), (uint8_t)(y + 7U), (uint8_t)(x + 7U), (uint8_t)(y + 2U), color);
 }
 
 /* Midpoint circle — outline only */
@@ -2532,12 +2539,11 @@ static CeePewErr_t render_chat_thread(void)
      * RSSI is refreshed on every received frame (g_ui_ctx.rssi_dbm). */
     {
         char status_str[14U];
+        uint8_t ch = (g_ui_ctx.current_channel != 0U) ? g_ui_ctx.current_channel : 1U;
         if (g_ui_ctx.rssi_dbm == 0) {
-            (void)snprintf(status_str, sizeof(status_str), "CH%u --dBm",
-                           (unsigned)hal_radio_get_current_channel());
+            (void)snprintf(status_str, sizeof(status_str), "CH%u --dBm", (unsigned)ch);
         } else {
-            (void)snprintf(status_str, sizeof(status_str), "CH%u %ddBm",
-                           (unsigned)hal_radio_get_current_channel(), (int)g_ui_ctx.rssi_dbm);
+            (void)snprintf(status_str, sizeof(status_str), "CH%u %ddBm", (unsigned)ch, (int)g_ui_ctx.rssi_dbm);
         }
         hal_ui_text(0U, (uint8_t)(54U + banner_shift), status_str, HAL_UI_WHITE);
     }
@@ -2711,7 +2717,7 @@ CeePewErr_t ui_crypto_show_status(uint8_t status)
         hal_ui_text(14U, y_pos, "Waiting for peer...", HAL_UI_WHITE);
     } else if (status == 1U) {
         /* Match - display checkmark and "MATCH" */
-        hal_ui_char(8U, y_pos, (char)251, HAL_UI_WHITE);  /* checkmark symbol */
+        draw_tick(8U, y_pos, HAL_UI_WHITE);
         hal_ui_text(20U, y_pos, "MATCH", HAL_UI_WHITE);
     } else {
         /* Mismatch - display X and "MISMATCH" */
@@ -2927,8 +2933,8 @@ static CeePewErr_t render_chat_send_confirm(void)
     }
 
     draw_selected_option_row(4U, 38U, 54U, 16U, "SEND", (g_ui_ctx.chat_send_confirm_selected == 0U));
-    hal_ui_text(8U, 42U, "\xFB", HAL_UI_BLACK);
-    draw_selected_option_row(70U, 38U, 54U, 16U, "GO BACK", (g_ui_ctx.chat_send_confirm_selected != 0U));
+    draw_tick(8U, 42U, HAL_UI_BLACK);
+    draw_selected_option_row(70U, 38U, 54U, 16U, "BACK", (g_ui_ctx.chat_send_confirm_selected != 0U));
     hal_ui_text(74U, 42U, "X", HAL_UI_BLACK);
 
     hal_ui_text(14U, 56U, "tap choice", HAL_UI_WHITE);
