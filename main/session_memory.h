@@ -18,8 +18,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "ceepew_config.h"
-#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "../components/ceepew_hal/ui_manager.h" /* for UIState_t */

@@ -141,7 +141,8 @@ def run_host_tests(enable_coverage=False):
         "test_huffman",
         "test_session_pairing",
         "test_arq_sync",
-        "test_arq_fault_injection"
+        "test_arq_fault_injection",
+        "test_ui_navigator"
     ]
 
     passed = 0

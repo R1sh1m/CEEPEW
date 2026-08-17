@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include "ceepew_config.h"
 #include "hal_ui_types.h"
+#include "ui_navigator.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -118,6 +119,9 @@ typedef struct {
     bool          send_pending;             /* True while send in flight on Core 1 */
     /* Reboot gesture (hold 3 s + left→right pot sweep) */
     bool          reboot_gesture_saw_left;  /* saw pot in left zone during hold */
+
+    /* Navigator context for relative pot selection (all selectable screens) */
+    NavCtx_t      nav;
 } UIContext_t;
 
 extern UIContext_t g_ui_ctx;

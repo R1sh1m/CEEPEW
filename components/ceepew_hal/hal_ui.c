@@ -117,6 +117,14 @@ static inline void hal_ui_mark_tiles_in_rect(uint8_t x, uint8_t y, uint8_t w, ui
 
 static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
 {
+    static bool s_first_probe_done = false;
+    if (!s_first_probe_done) {
+        /* Small settle delay for the I2C peripheral on the very first probe.
+         * The hal_ui_init already has a 500ms delay, but the OLED panel may
+         * need a brief additional settling period after the bus is created. */
+        vTaskDelay(pdMS_TO_TICKS(50U));
+        s_first_probe_done = true;
+    }
     /* Force digital IOMUX on SDA/SCL to clear any RTC domain mux conflict
      * (GPIO 26/27 are RTC-domain on ESP32 — the RTC peripheral may hold
      * them in analog mode after WiFi/BT init). */
@@ -159,6 +167,11 @@ static CeePewErr_t try_bringup_config(gpio_num_t sda, gpio_num_t scl, uint32_t f
 
 static CeePewErr_t try_bringup_config_sh1106(gpio_num_t sda, gpio_num_t scl, uint32_t freq, uint8_t addr)
 {
+    static bool s_first_probe_done_sh1106 = false;
+    if (!s_first_probe_done_sh1106) {
+        vTaskDelay(pdMS_TO_TICKS(50U));
+        s_first_probe_done_sh1106 = true;
+    }
     gpio_reset_pin(sda);
     gpio_reset_pin(scl);
     i2c_master_bus_handle_t bus = NULL;
@@ -333,12 +346,12 @@ CeePewErr_t hal_ui_init(void)
      * peripheral cannot clock out data bytes — every i2c_master_transmit()
      * returns ESP_ERR_INVALID_RESPONSE (264) because the device NACKs.
      *
-     * This 500 ms delay guarantees the peripheral has exited its reset sequence
-     * and the OLED display has completed its power-on settling before the first
-     * OLED init command is sent. In production builds where the scanner is gated
-     * behind CONFIG_CEEPEW_DEVELOPMENT_MODE, this delay provides a safe power-up
+     * 100 ms covers the peripheral reset with margin. The OLED panel itself
+     * powers up with the board; its internal reset is handled by the init
+     * sequence. In production builds where the scanner is gated behind
+     * CONFIG_CEEPEW_DEVELOPMENT_MODE, this delay provides a brief power-up
      * margin for the OLED controller. */
-    vTaskDelay(pdMS_TO_TICKS(500U));
+    vTaskDelay(pdMS_TO_TICKS(100U));
 
     ESP_LOGI(TAG, "[BOARD %02X] hal_ui_init (in-house ceepew_oled, I2C only)", get_board_tag());
     s_sh1106_mode        = false;

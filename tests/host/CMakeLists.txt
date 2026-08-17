@@ -12,6 +12,7 @@ set(COMMON_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/mem
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/compress
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/transport
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ceepew_hal
 )
 
 # ── Source paths ─────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ set(PORTABLE_SRCS
     ${COMPONENT_DIR}/components/crypto/crypto_ascon.c
     ${COMPONENT_DIR}/components/ecc/ecc_hamming.c
     ${COMPONENT_DIR}/components/compress/compress_huffman.c
+    ${COMPONENT_DIR}/components/ceepew_hal/ui_navigator.c
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs/ceepew_assert_stub.c
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs/crypto_rng_stub.c
 )
@@ -175,6 +177,14 @@ add_executable(test_arq_fault_injection
 target_link_libraries(test_arq_fault_injection PRIVATE ceepew_portable ceepew_arq)
 target_include_directories(test_arq_fault_injection PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_arq_fault_injection COMMAND test_arq_fault_injection)
+
+# test_ui_navigator — relative navigator hysteresis, velocity ramp, edge dwell, clamp
+add_executable(test_ui_navigator
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ui_navigator.c
+)
+target_link_libraries(test_ui_navigator PRIVATE ceepew_portable)
+target_include_directories(test_ui_navigator PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_ui_navigator COMMAND test_ui_navigator)
 
 # ── Fuzz smoke targets ──────────────────────────────────────────────
 # Each harness exports LLVMFuzzerTestOneInput(). fuzz_driver.c provides

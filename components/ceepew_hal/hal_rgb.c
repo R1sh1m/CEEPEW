@@ -1,6 +1,7 @@
 #include "hal_rgb.h"
 
 #include "hal_pins.h"
+#include "ceepew_assert.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"

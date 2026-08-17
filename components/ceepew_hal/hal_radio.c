@@ -265,8 +265,11 @@ static void __attribute__((noinline, used)) radio_recv_cb(const esp_now_recv_inf
     if (esp_now_info->des_addr != NULL) {
         memcpy(frame.dst_mac, esp_now_info->des_addr, CEEPEW_DEVICE_ID_BYTES);
     }
-    frame.channel      = 0U;
-    frame.rssi         = 0;
+    /* Capture real radio metadata from the ESP-NOW RX control block:
+     * rx_ctrl->rssi is the signed dBm reading and rx_ctrl->channel is the
+     * primary channel the frame arrived on. No longer hardcoded to 0. */
+    frame.channel      = (esp_now_info->rx_ctrl != NULL) ? esp_now_info->rx_ctrl->channel : 0U;
+    frame.rssi         = (esp_now_info->rx_ctrl != NULL) ? (int8_t)esp_now_info->rx_ctrl->rssi : 0;
     frame.timestamp_us = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFFULL);
     memcpy(frame.payload, data, (uint32_t)data_len);
     frame.payload_len  = (uint16_t)data_len;

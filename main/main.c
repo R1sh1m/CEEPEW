@@ -27,7 +27,6 @@
 #include "esp_mac.h"
 #include "transport_ble.h"
 #include "hal_temp.h"
-#include "hal_i2c_scanner.h"
 
 static const char *TAG = "CEE-PEW-MAIN";
 

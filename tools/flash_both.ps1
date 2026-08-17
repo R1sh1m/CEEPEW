@@ -101,10 +101,10 @@ $LogDir        = Join-Path $ProjectRoot "logs"
 # Tool & environment (matching ceepew_diagnose.ps1 conventions)
 $IdfProfile    = $env:CEEPEW_IDF_PROFILE
 if (-not $IdfProfile) {
-    if (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
-        $IdfProfile = "C:\esp\v6.0.2\esp-idf\export.ps1"
-    } elseif (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
+    if (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
         $IdfProfile = "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1"
+    } elseif (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
+        $IdfProfile = "C:\esp\v6.0.2\esp-idf\export.ps1"
     } else {
         $IdfProfile = "C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1"
     }

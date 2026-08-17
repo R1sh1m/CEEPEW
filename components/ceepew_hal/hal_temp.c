@@ -11,7 +11,6 @@
 #include <stdint.h>
 
 #include "esp_log.h"
-#include "esp_rom_sys.h"
 
 #define HAL_TEMP_SAMPLES_PER_READ 4U
 #define HAL_TEMP_TAG              "hal_temp"

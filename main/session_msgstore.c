@@ -8,7 +8,7 @@
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include <string.h>
 
 /* Circular buffer with opportunistic expiration — no background maintenance task. */

@@ -53,6 +53,7 @@ static const char *const s_diag_page_names[] = {
     "TASKS",
     "STORAGE",
     "RUNTIME",
+    "CRYPTO & MAC",
 };
 static const uint8_t s_diag_page_count =
     (uint8_t)(sizeof(s_diag_page_names) / sizeof(s_diag_page_names[0]));
@@ -266,9 +267,12 @@ static void compose_reset_cursor_if_needed(void)
 
 static CeePewErr_t compose_insert_char(char ch)
 {
-    CEEPEW_ASSERT(g_ui_ctx.compose_length < 255U, CEEPEW_ERR_BOUNDS);
+    /* Guard against the actual protocol limit, not uint8_t max.
+     * compose_buffer is only CEEPEW_MAX_MSG_CHARS + 4 bytes;
+     * writing past CEEPEW_MAX_MSG_CHARS corrupts adjacent struct fields. */
+    CEEPEW_ASSERT(g_ui_ctx.compose_length < CEEPEW_MAX_MSG_CHARS, CEEPEW_ERR_BOUNDS);
 
-    if (g_ui_ctx.compose_length >= 255U) {
+    if (g_ui_ctx.compose_length >= CEEPEW_MAX_MSG_CHARS) {
         return CEEPEW_ERR_BOUNDS;
     }
 
@@ -370,19 +374,22 @@ static void render_compose_preview_line(void)
 
     char preview[24U];
     uint8_t out = 0U;
-    uint8_t blink = (uint8_t)((g_ui_ctx.anim.frame_count / 6U) % 2U);
     for (uint8_t i = start; i < end && out < (uint8_t)(sizeof(preview) - 1U); i++) {
-        if (i == g_ui_ctx.compose_cursor && blink == 0U) {
-            preview[out++] = '_';
-        }
         char ch = g_ui_ctx.compose_buffer[i];
         preview[out++] = (ch >= 32 && ch < 127) ? ch : '?';
     }
-    if (g_ui_ctx.compose_cursor == g_ui_ctx.compose_length && blink == 0U && out < (uint8_t)(sizeof(preview) - 1U)) {
-        preview[out++] = '_';
-    }
     preview[out] = '\0';
     hal_ui_text(4U, 39U, preview, HAL_UI_WHITE);
+
+    /* Draw stable non-shifting cursor indicator underline */
+    uint8_t blink = (uint8_t)((g_ui_ctx.anim.frame_count / 6U) % 2U);
+    if (blink == 0U && g_ui_ctx.compose_cursor >= start && g_ui_ctx.compose_cursor <= end) {
+        uint8_t cursor_screen_col = (uint8_t)(g_ui_ctx.compose_cursor - start);
+        uint8_t cursor_x = (uint8_t)(4U + (cursor_screen_col * 6U));
+        if ((uint16_t)cursor_x + 5U <= 128U) {
+            draw_hline(cursor_x, 46U, 5U);
+        }
+    }
 }
 
 static CeePewErr_t compose_commit_selection(uint8_t choice_idx)
@@ -1695,7 +1702,10 @@ static CeePewErr_t render_countdown(void)
     for (uint8_t i = 0U; i < 4U; i++) {
         HalUIRect_t box = { .x = code_x[i], .y = code_y, .w = code_w, .h = code_h };
         hal_ui_rect(&box, HAL_UI_WHITE);
-        char digit[2U] = { (char)g_ui_ctx.code_digits[i], '\0' };
+        char ch = (g_ui_ctx.code_digits[i] >= 32U)
+                ? (char)g_ui_ctx.code_digits[i]
+                : (char)('0' + (g_ui_ctx.code_digits[i] % 10U));
+        char digit[2U] = { ch, '\0' };
         hal_ui_text((uint8_t)(code_x[i] + 4U), (uint8_t)(code_y + 2U), digit, HAL_UI_WHITE);
     }
 
@@ -2072,7 +2082,10 @@ static CeePewErr_t render_confirm(void)
     for (uint8_t i = 0U; i < 4U; i++) {
         HalUIRect_t box = { .x = cell_x[i], .y = cell_y[i], .w = cell_w, .h = cell_h };
         hal_ui_rect(&box, HAL_UI_WHITE);
-        char digit[2U] = { (char)g_ui_ctx.code_digits[i], '\0' };
+        char ch = (g_ui_ctx.code_digits[i] >= 32U)
+                ? (char)g_ui_ctx.code_digits[i]
+                : (char)('0' + (g_ui_ctx.code_digits[i] % 10U));
+        char digit[2U] = { ch, '\0' };
         hal_ui_text((uint8_t)(cell_x[i] + (cell_w - 6U) / 2U),
                     (uint8_t)(cell_y[i] + 2U), digit, HAL_UI_WHITE);
     }
@@ -2847,21 +2860,21 @@ static CeePewErr_t render_chat_menu(void)
 static CeePewErr_t render_chat_compose(void)
 {
     CEEPEW_ASSERT(s_ui_manager_initialised, CEEPEW_ERR_PARAM);
-    CEEPEW_ASSERT(g_ui_ctx.compose_length <= 255U, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(g_ui_ctx.compose_length <= CEEPEW_MAX_MSG_CHARS, CEEPEW_ERR_BOUNDS);
 
     hal_ui_clear();
     compose_terminate_buffer();
 
-    /* Flat pot-to-choice mapping across all 66 options (62 chars + DEL/<-/->/SEND) */
-    uint8_t choice_idx = (uint8_t)(((uint16_t)g_ui_ctx.user_input * COMPOSE_TOTAL_CHOICES) / 256U);
-    if (choice_idx >= COMPOSE_TOTAL_CHOICES) {
-        choice_idx = (uint8_t)(COMPOSE_TOTAL_CHOICES - 1U);
-    }
+    /* Relative navigator mapping with hysteresis, dynamic velocity & edge dwell.
+     * ui_nav_update() runs exactly once per frame in ui_manager_update()'s
+     * CHAT_COMPOSE branch (before draw); here we only read the resulting
+     * index so the cursor is never advanced twice per frame. */
+    uint8_t choice_idx = ui_nav_get_index(&g_ui_ctx.nav);
     g_ui_ctx.keyboard_col = choice_idx;
 
     /* ── Status bar ───────────────────────────────────────────────── */
     char hdr[24U];
-    (void)snprintf(hdr, sizeof(hdr), "WRITE [%u/255]", (unsigned)g_ui_ctx.compose_length);
+    (void)snprintf(hdr, sizeof(hdr), "WRITE [%u/%u]", (unsigned)g_ui_ctx.compose_length, (unsigned)CEEPEW_MAX_MSG_CHARS);
     hal_ui_text(0U, 0U, hdr, HAL_UI_WHITE);
     draw_hline(0U, 9U, 128U);
 
@@ -3061,6 +3074,8 @@ CeePewErr_t ui_manager_update(void)
             compose_terminate_buffer();
             g_ui_ctx.button_prev = false;
             g_ui_ctx.button_press_start_ms = 0U;
+            (void)ui_nav_init(&g_ui_ctx.nav, COMPOSE_TOTAL_CHOICES, 0U);
+            (void)ui_nav_reset(&g_ui_ctx.nav, g_ui_ctx.user_input);
         } else if (g_ui_ctx.current_state == UI_STATE_CHAT_SEND_CONFIRM) {
             g_ui_ctx.chat_send_confirm_selected = 0U;
             g_ui_ctx.button_prev = false;
@@ -3445,17 +3460,16 @@ CeePewErr_t ui_manager_update(void)
             }
         }
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
-        /* Flat compose: pot maps across all 66 options, long press → menu */
-        g_ui_ctx.keyboard_col = (uint8_t)(((uint16_t)g_ui_ctx.user_input * COMPOSE_TOTAL_CHOICES) / 256U);
-        if (g_ui_ctx.keyboard_col >= COMPOSE_TOTAL_CHOICES) {
-            g_ui_ctx.keyboard_col = (uint8_t)(COMPOSE_TOTAL_CHOICES - 1U);
-        }
+        /* Flat compose: navigator provides hysteresis, dynamic velocity ramp & edge dwell */
+        (void)ui_nav_set_count(&g_ui_ctx.nav, COMPOSE_TOTAL_CHOICES);
+        (void)ui_nav_update(&g_ui_ctx.nav, g_ui_ctx.user_input, now_ms);
+        g_ui_ctx.keyboard_col = ui_nav_get_index(&g_ui_ctx.nav);
 
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
         } else if (!g_ui_ctx.button_pressed && g_ui_ctx.button_prev) {
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms) ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
-            if (dur >= 1800U) {
+            if (dur >= CEEPEW_CHAT_LONG_PRESS_MS) {
                 /* Long press: return to chat menu */
                 (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
                 g_ui_ctx.transition_ready = true;
@@ -3464,6 +3478,9 @@ CeePewErr_t ui_manager_update(void)
                 CeePewErr_t edit_err = compose_commit_selection(g_ui_ctx.keyboard_col);
                 if (edit_err != CEEPEW_OK) {
                     ESP_LOGW("ui", "compose selection failed: %d", (int)edit_err);
+                } else {
+                    /* Hold position post-selection to absorb button mechanical recoil / hand jitter */
+                    (void)ui_nav_hold(&g_ui_ctx.nav, g_ui_ctx.user_input, CEEPEW_NAV_SELECTION_HOLD_MS, now_ms);
                 }
             }
         }
@@ -3779,7 +3796,9 @@ static CeePewErr_t render_diag_page(void)
     DiagMetrics_t metrics;
     diag_collect_metrics(&metrics);
 
-    uint8_t page = ui_map_pot_to_index(g_ui_ctx.user_input, s_diag_page_count);
+    (void)ui_nav_set_count(&g_ui_ctx.nav, s_diag_page_count);
+    (void)ui_nav_update(&g_ui_ctx.nav, g_ui_ctx.user_input, (uint32_t)(esp_timer_get_time() / 1000LL));
+    uint8_t page = ui_nav_get_index(&g_ui_ctx.nav);
     char ln[48U];
     diag_draw_header(s_diag_page_names[page], page);
 
@@ -3939,6 +3958,63 @@ static CeePewErr_t render_diag_page(void)
             hal_ui_text(0U, 46U, ln, HAL_UI_WHITE);
         } break;
 
+        case 4U: {
+            /* Page 5: Cryptographic & MAC address info */
+            uint8_t local_mac[6] = {0};
+            if (esp_wifi_get_mac(WIFI_IF_STA, local_mac) == ESP_OK) {
+                (void)snprintf(ln, sizeof(ln), "STA MAC:%02X%02X%02X%02X%02X%02X",
+                               local_mac[0], local_mac[1], local_mac[2],
+                               local_mac[3], local_mac[4], local_mac[5]);
+            } else {
+                (void)snprintf(ln, sizeof(ln), "STA MAC:<err>");
+            }
+            hal_ui_text(0U, 14U, ln, HAL_UI_WHITE);
+
+            const BlePeerRecord_t *peer = transport_ble_get_peer();
+            if (peer != NULL) {
+                (void)snprintf(ln, sizeof(ln), "PEER:%02X%02X%02X%02X%02X%02X",
+                               peer->peer_mac[0], peer->peer_mac[1], peer->peer_mac[2],
+                               peer->peer_mac[3], peer->peer_mac[4], peer->peer_mac[5]);
+            } else if (g_ui_ctx.peer_mac[0] != 0 || g_ui_ctx.peer_mac[1] != 0) {
+                (void)snprintf(ln, sizeof(ln), "PEER:%02X%02X%02X%02X%02X%02X",
+                               g_ui_ctx.peer_mac[0], g_ui_ctx.peer_mac[1], g_ui_ctx.peer_mac[2],
+                               g_ui_ctx.peer_mac[3], g_ui_ctx.peer_mac[4], g_ui_ctx.peer_mac[5]);
+            } else {
+                (void)snprintf(ln, sizeof(ln), "PEER:none");
+            }
+            hal_ui_text(0U, 22U, ln, HAL_UI_WHITE);
+
+            bool verified = g_ble_ctx.commitment_verified || session_is_active();
+            bool degraded = session_is_identity_degraded();
+            const char *vstat = verified ? (degraded ? "DEGRADED" : "YES") : "NO";
+            uint8_t phase = session_get_phase();
+            (void)snprintf(ln, sizeof(ln), "VERIFIED:%s  PHASE:%u", vstat, (unsigned)phase);
+            hal_ui_text(0U, 30U, ln, HAL_UI_WHITE);
+
+            uint64_t sid = session_get_id();
+            uint64_t nc = session_get_nonce_counter_display();
+            (void)snprintf(ln, sizeof(ln), "SESS:0x%08lX N:%lu",
+                           (unsigned long)(sid & 0xFFFFFFFFUL), (unsigned long)nc);
+            hal_ui_text(0U, 38U, ln, HAL_UI_WHITE);
+
+            uint8_t commit[CEEPEW_COMMITMENT_BYTES];
+            if (session_get_commitment(commit) == CEEPEW_OK) {
+                char chex[17U];
+                for (uint8_t i = 0U; i < 8U; i++) {
+                    uint8_t b = commit[i];
+                    chex[i * 2U]     = (char)((b >> 4U) < 10U ? '0' + (b >> 4U) : 'A' + (b >> 4U) - 10U);
+                    chex[i * 2U + 1U] = (char)((b & 0x0FU) < 10U ? '0' + (b & 0x0FU) : 'A' + (b & 0x0FU) - 10U);
+                }
+                chex[16U] = '\0';
+                (void)snprintf(ln, sizeof(ln), "COMMIT:%s", chex);
+            } else {
+                (void)snprintf(ln, sizeof(ln), "COMMIT:pending");
+            }
+            hal_ui_text(0U, 46U, ln, HAL_UI_WHITE);
+
+            hal_ui_text(0U, 54U, "SUITE:Ascon-128a/Ed25519", HAL_UI_WHITE);
+        } break;
+
         default:
             break;
     }
@@ -4026,11 +4102,49 @@ CeePewErr_t ui_manager_transition_to(UIState_t next_state)
     return CEEPEW_OK;
 }
 
+static void ui_nav_reinit_for_current_state(void)
+{
+    switch (g_ui_ctx.current_state) {
+        case UI_STATE_CHAT: {
+            uint8_t count = msg_store_count();
+            (void)ui_nav_init(&g_ui_ctx.nav, (count > 0U) ? count : 1U, 0U);
+        } break;
+        case UI_STATE_CHAT_MENU:
+        case UI_STATE_CHAT_SEND_CONFIRM:
+            (void)ui_nav_init(&g_ui_ctx.nav, 2U, 0U);
+            break;
+        case UI_STATE_CHAT_COMPOSE:
+            (void)ui_nav_init(&g_ui_ctx.nav, COMPOSE_TOTAL_CHOICES, 0U);
+            break;
+        case UI_STATE_PEER_SELECT: {
+            uint8_t count = transport_ble_get_peer_cache_count();
+            (void)ui_nav_init(&g_ui_ctx.nav, (count > 0U) ? count : 1U, 0U);
+        } break;
+        case UI_STATE_INFO:
+            (void)ui_nav_init(&g_ui_ctx.nav, s_diag_page_count, 0U);
+            break;
+        default:
+            (void)ui_nav_init(&g_ui_ctx.nav, 1U, 0U);
+            break;
+    }
+    (void)ui_nav_reset(&g_ui_ctx.nav, g_ui_ctx.user_input);
+}
+
 CeePewErr_t ui_manager_handle_input(uint8_t pot_value, bool button_pressed, bool diag_mode)
 {
+    bool entering_diag = (diag_mode && !g_ui_ctx.diag_mode);
+    bool exiting_diag  = (!diag_mode && g_ui_ctx.diag_mode);
+
     g_ui_ctx.user_input = pot_value;
     g_ui_ctx.button_pressed = button_pressed;
     g_ui_ctx.diag_mode = diag_mode;
+
+    if (entering_diag) {
+        (void)ui_nav_init(&g_ui_ctx.nav, s_diag_page_count, 0U);
+        (void)ui_nav_reset(&g_ui_ctx.nav, pot_value);
+    } else if (exiting_diag) {
+        ui_nav_reinit_for_current_state();
+    }
 
     if (g_ui_ctx.current_state == UI_STATE_PEER_SELECT) {
         return ui_peer_select_handle_input(pot_value, button_pressed);

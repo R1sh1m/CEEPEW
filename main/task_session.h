@@ -17,6 +17,7 @@
 #include "ceepew_assert.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "hal_rgb.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +50,11 @@ void task_session_run(void *pvParameters);
 
 /* Refresh session lifecycle logging and RGB pattern selection. */
 CeePewErr_t task_session_sync_visual_state(void);
+
+/* Trigger a transient RGB blink overlay (e.g., on message TX/RX).
+ * pattern: the blink pattern to display (e.g., RGB_GREEN_BLINK for TX, RGB_BLUE_BLINK for RX)
+ * duration_ms: how long to show the blink before reverting to base state pattern */
+void task_session_trigger_rgb_blink(RgbPattern_t pattern, uint32_t duration_ms);
 
 #ifdef __cplusplus
 }

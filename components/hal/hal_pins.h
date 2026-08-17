@@ -18,10 +18,9 @@
 #ifndef HAL_PINS_H
 #define HAL_PINS_H
 
-#include "driver/gpio.h"
-#include "esp_adc/adc_oneshot.h"
-#include "ceepew_config.h"
-#include "ceepew_assert.h"
+#include "hal/gpio_types.h" /* IWYU pragma: keep */
+#include "hal/adc_types.h"  /* IWYU pragma: keep */
+#include "ceepew_config.h" /* IWYU pragma: keep */
 #include "hal_ui_types.h"
 
 /* ── OLED Display (SSD1306, I2C) ─────────────────────────────────── */

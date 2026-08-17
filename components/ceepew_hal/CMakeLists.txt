@@ -17,6 +17,7 @@ idf_component_register(
         "hal_ui_helpers.c"
         "layout.c"
 
+        "ui_navigator.c"
         "ui_manager.c"
         "task_arch.c"
         "hal_power.c"

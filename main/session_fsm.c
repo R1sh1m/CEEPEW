@@ -1497,7 +1497,7 @@ CeePewErr_t session_get_commitment(uint8_t commitment[CEEPEW_COMMITMENT_BYTES])
         memcpy(commitment, s_test_commitment, CEEPEW_COMMITMENT_BYTES);
         return CEEPEW_OK;
     }
-    if (s_session.phase < 2U || s_session.phase > 3U) {
+    if (s_session.phase < 2U || s_session.phase > 4U) {
         return CEEPEW_ERR_PARAM;
     }
 

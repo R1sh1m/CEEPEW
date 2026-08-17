@@ -39,10 +39,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <time.h>
-#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/queue.h"
-#include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include "transport_ble_gatt_crypto.h"
 #ifdef CONFIG_BT_ENABLED
@@ -321,7 +319,9 @@ typedef enum {
     PAIRING_EVENT_PHASE_TIMEOUT,        /* Supervisor detected a stall */
     PAIRING_EVENT_RADIO_RESTART,        /* Supervisor forcing radio restart */
     PAIRING_EVENT_HANDOFF_READY,        /* Peer's HANDOFF_READY beacon received */
-    PAIRING_EVENT_GATT_METRICS          /* Periodic GATT metrics dump (diagnostics) */
+    PAIRING_EVENT_GATT_METRICS,         /* Periodic GATT metrics dump (diagnostics) */
+    PAIRING_EVENT_UI_RESTART,           /* UI requested discovery restart (async via queue) */
+    PAIRING_EVENT_SIGN_PK_WRITE         /* Delayed sign_pk write dispatch from supervisor task */
 } PairingEventType_t;
 
 typedef struct {
@@ -350,6 +350,11 @@ extern QueueHandle_t g_pairing_event_queue;
 void transport_ble_post_event(PairingEventType_t type,
                               const uint8_t *payload,
                               uint8_t payload_len);
+
+/* Non-blocking UI-style request to fully restart the BLE discovery stack.
+ * The actual teardown/init runs on the PairingSupervisor task (Core 1),
+ * NOT on the caller's stack — safe to call from the UI task (Core 0). */
+CeePewErr_t transport_ble_ui_request_restart(void);
 
 /* Get the current pairing phase (read-only snapshot, thread-safe).
  * Used by the UI task to drive RGB feedback and on-screen status. */

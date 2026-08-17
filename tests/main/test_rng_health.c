@@ -6,8 +6,6 @@
  */
 
 #include "crypto_rng.h"
-#include "ceepew_assert.h"
-#include "ceepew_config.h"
 #include <esp_log.h>
 #include <string.h>
 

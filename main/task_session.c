@@ -178,6 +178,7 @@ static uint32_t s_m2_gate_wait_start_ms = 0U;
 
 /* Initiator jitter state to avoid cross-connection race */
 static bool s_initiator_jittered = false;
+static uint32_t s_last_gattc_open_ms = 0U;  /* minimum gap between GATTC opens */
 static bool s_hopping_started = false;
 static uint32_t s_handoff_sync_start_ms = 0U;
 static uint32_t s_rev_gattc_backoff_stage = 0U;
@@ -186,6 +187,21 @@ static const uint32_t s_rev_gattc_backoff_ms[] = {
     CEEPEW_RESPONDER_REV_GATTC_BACKOFF_BASE_MS * 2U,
     CEEPEW_RESPONDER_REV_GATTC_BACKOFF_BASE_MS * 4U
 };
+
+/* TX/RX LED blink overlay: transient pattern that overrides the base state
+ * pattern for a short duration to indicate message activity. */
+static RgbPattern_t s_rgb_blink_overlay = RGB_OFF;
+static uint32_t s_rgb_blink_expiry_ms = 0U;
+
+/* Trigger a transient RGB blink overlay (e.g., on message TX/RX).
+ * pattern: the blink pattern to display (e.g., RGB_GREEN_BLINK for TX, RGB_BLUE_BLINK for RX)
+ * duration_ms: how long to show the blink before reverting to base state pattern */
+inline void task_session_trigger_rgb_blink(RgbPattern_t pattern, uint32_t duration_ms)
+{
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    s_rgb_blink_overlay = pattern;
+    s_rgb_blink_expiry_ms = now_ms + duration_ms;
+}
 #define CEEPEW_REV_GATTC_BACKOFF_STAGES \
     (sizeof(s_rev_gattc_backoff_ms) / sizeof(s_rev_gattc_backoff_ms[0]))
 
@@ -459,6 +475,14 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
   /* Initialize pairing flow on first entry to phase 1 */
   if (phase == 1U && peer != NULL &&
       s_pairing_flow_state == PAIRING_FLOW_IDLE) {
+    /* Determine and set role BEFORE first PAIRING_STEP log */
+    uint8_t self_mac[CEEPEW_DEVICE_ID_BYTES] = {0U};
+    if (session_get_device_id(self_mac) == CEEPEW_OK) {
+      bool is_initiator = (ceepew_ct_less(self_mac, peer->peer_mac,
+                                           CEEPEW_DEVICE_ID_BYTES) != 0U);
+      (void)session_set_role(is_initiator);
+    }
+    ceepew_secure_zero(self_mac, sizeof(self_mac));
     task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
   }
 
@@ -470,7 +494,8 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
         (peer != NULL && ceepew_ct_equal(current_fsm_peer, peer->peer_mac, 6U) == 0);
   }
 
-  if (phase == 1U && peer != NULL && (!s_ble_peer_latched || peer_mismatch)) {
+  if (phase == 1U && peer != NULL && (!s_ble_peer_latched || peer_mismatch ||
+                                        !g_ble_ctx.commitment_beacon_active)) {
     char peer_mac[18];
     task_session_format_mac(peer->peer_mac, peer_mac);
     ESP_LOGI(TAG, "Discovery peer latched: mac=%s rssi=%d hits=%u name_len=%u",
@@ -679,19 +704,27 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
           vTaskDelay(pdMS_TO_TICKS(jitter_ms));
           s_initiator_jittered = true;
         }
-        ESP_LOGI(TAG, "Beacon match — opening brief GATT for sign_pk exchange");
-        CeePewErr_t conn_err = transport_ble_connect_to_peer(peer->peer_mac);
-        if (conn_err == CEEPEW_OK) {
-          /* Allow initiator's GATTC write (sign_pk+box_pk) to complete before
-           * responder attempts reverse GATTC. Increased from 100ms to
-           * CEEPEW_INITIATOR_RESPONDER_DELAY_MS (300ms) for more reliable
-           * sequencing. */
-          vTaskDelay(pdMS_TO_TICKS(CEEPEW_INITIATOR_RESPONDER_DELAY_MS));
-        } else if (conn_err != CEEPEW_ERR_BUSY) {
-          ESP_LOGW(TAG, "sign_pk GATT connect failed: %d (will retry)",
-                   (int)conn_err);
-          g_ble_ctx.reconnect_attempts++;
-          s_initiator_jittered = false;  /* retry jitter on next attempt */
+        /* Enforce minimum 300 ms gap between GATTC open attempts to avoid
+         * hammering the BLE stack and causing status=133/attp races. */
+        uint32_t now_ms_gattc = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if (s_last_gattc_open_ms != 0U && (now_ms_gattc - s_last_gattc_open_ms) < 300U) {
+            ESP_LOGI(TAG, "M2 gate: min 300 ms gap not elapsed since last GATTC open — deferring");
+        } else {
+            ESP_LOGI(TAG, "Beacon match — opening brief GATT for sign_pk exchange");
+            CeePewErr_t conn_err = transport_ble_connect_to_peer(peer->peer_mac);
+            if (conn_err == CEEPEW_OK) {
+                s_last_gattc_open_ms = now_ms_gattc;
+                /* Allow initiator's GATTC write (sign_pk+box_pk) to complete before
+                 * responder attempts reverse GATTC. Increased from 100ms to
+                 * CEEPEW_INITIATOR_RESPONDER_DELAY_MS (300ms) for more reliable
+                 * sequencing. */
+                vTaskDelay(pdMS_TO_TICKS(CEEPEW_INITIATOR_RESPONDER_DELAY_MS));
+            } else if (conn_err != CEEPEW_ERR_BUSY) {
+                ESP_LOGW(TAG, "sign_pk GATT connect failed: %d (will retry)",
+                         (int)conn_err);
+                g_ble_ctx.reconnect_attempts++;
+                s_initiator_jittered = false;  /* retry jitter on next attempt */
+            }
         }
       }
 
@@ -1609,12 +1642,19 @@ CeePewErr_t task_session_sync_visual_state(void) {
       s_ble_scan_start_ms = now_ms;
     }
   }
-  if (!scan_active) {
+if (!scan_active) {
     s_last_ble_scan_heartbeat_ms = 0ULL;
   }
 
-  if (!s_visual_state_ready || pattern != s_last_rgb_pattern) {
-    CeePewErr_t err = rgb_set_pattern(pattern);
+  /* Check for active TX/RX blink overlay */
+  uint32_t now_ms32 = (uint32_t)now_ms;
+  RgbPattern_t effective_pattern = pattern;
+  if (s_rgb_blink_overlay != RGB_OFF && now_ms32 < s_rgb_blink_expiry_ms) {
+    effective_pattern = s_rgb_blink_overlay;
+  }
+
+  if (!s_visual_state_ready || effective_pattern != s_last_rgb_pattern) {
+    CeePewErr_t err = rgb_set_pattern(effective_pattern);
     if (err != CEEPEW_OK) {
       return err;
     }
@@ -1624,11 +1664,11 @@ CeePewErr_t task_session_sync_visual_state(void) {
   s_last_session_phase = phase;
   s_last_session_active = active;
   s_last_ui_state = ui_state;
-  s_last_rgb_pattern = pattern;
+  s_last_rgb_pattern = effective_pattern;
   s_last_ble_state = ble_state;
   s_last_ble_discovered = discovered;
   s_last_ble_hits = ble_hits;
-s_last_ble_rssi = ble_rssi;
+  s_last_ble_rssi = ble_rssi;
   return CEEPEW_OK;
 }
 
@@ -2054,6 +2094,8 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     session_ui_get_state_snapshot(&ui_state);
     session_ui_ctx_lock();
     memcpy(g_ui_ctx.peer_mac, frame->src_mac, CEEPEW_DEVICE_ID_BYTES);
+    g_ui_ctx.rssi_dbm = frame->rssi;
+    g_ui_ctx.current_channel = frame->channel;
     session_ui_ctx_unlock();
   }
 
@@ -2125,6 +2167,8 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
              (int)err, (unsigned)decoded_len);
     goto rx_cleanup;
   }
+  /* Trigger RX LED blink (blue blink for 250 ms) */
+  task_session_trigger_rgb_blink(RGB_BLUE_BLINK, 250U);
 
   {
     UIEvent_t ui_event;

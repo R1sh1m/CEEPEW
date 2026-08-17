@@ -25,7 +25,9 @@
 #include "compress_huffman.h"
 #include "ecc_hamming.h"
 #include "hal_radio.h"
+#include "hal_rgb.h"
 #include "session_msgstore.h"
+#include "task_session.h"
 #include "transport_esl.h"
 #include "esp_crc.h"
 #include "esp_log.h"
@@ -375,6 +377,13 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
             region_reset(&g_region);
             return err;
         }
+        /* Update delivery status to DELIVERED since ecc_arq_send confirmed ARQ ACK */
+        uint8_t count = msg_store_count();
+        if (count > 0U) {
+            (void)msg_store_update_delivery_status(count - 1U, MSG_STATUS_DELIVERED);
+        }
+        /* Trigger TX LED blink (green blink for 250 ms) */
+        task_session_trigger_rgb_blink(RGB_GREEN_BLINK, 250U);
     }
 
     err = session_update_last_message_time();

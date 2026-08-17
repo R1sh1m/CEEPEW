@@ -13,8 +13,8 @@ set(CMAKE_MESSAGE_LOG_LEVEL NOTICE)
 # passes this flag.  The flag tells GCC which xtensa .so to load.
 # Use the short name — cc1.exe resolves it from its own lib directory.
 set(_DYNCONFIG "xtensa_esp32.so")
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mdynconfig=${_DYNCONFIG}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mdynconfig=${_DYNCONFIG}")
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mdynconfig=${_DYNCONFIG} -std=gnu11")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mdynconfig=${_DYNCONFIG} -std=gnu++17")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -mdynconfig=${_DYNCONFIG}")
 
 # Custom component directories

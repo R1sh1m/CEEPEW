@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include "ceepew_assert.h"
+#include "hal_ui_types.h"
 
 /* Forward declarations for ecc_arq.c public host API */
 CeePewErr_t ecc_arq_encode(const uint8_t *in, uint16_t in_len,

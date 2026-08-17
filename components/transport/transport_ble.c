@@ -132,6 +132,7 @@ static esp_bt_uuid_t s_service_uuid_filter = {
  * fires while the stack is still processing SEARCH_CMPL, causing status=133. */
 static esp_timer_handle_t s_sign_pk_delay_timer = NULL;
 static void sign_pk_delayed_dispatch(void *arg);
+static uint32_t s_sign_pk_write_delay_ms = 50U;  /* delay carried to timer callback */
 static esp_gatt_srvc_id_t s_service_id = {
     .id = {
         .uuid = {
@@ -196,17 +197,33 @@ static SemaphoreHandle_t s_ble_init_mutex = NULL;
 static portMUX_TYPE      s_ble_init_mutex_spinlock = portMUX_INITIALIZER_UNLOCKED;
 static bool              s_ble_init_mutex_created = false;
 
-static void ble_init_lock(void)
+static bool ble_init_lock(void)
 {
-    if (s_ble_init_mutex == NULL) { return; }
-    if (xSemaphoreTake(s_ble_init_mutex, pdMS_TO_TICKS(5000U)) != pdTRUE) {
+    if (s_ble_init_mutex == NULL) { return true; }
+    /* BLE deinit+init cycle can take several seconds (controller deinit,
+     * bluedroid deinit, controller init, bluedroid init, service registration).
+     * Use a generous timeout to avoid spurious failures during restart. */
+    if (xSemaphoreTake(s_ble_init_mutex, pdMS_TO_TICKS(15000U)) != pdTRUE) {
         ESP_LOGE(TAG, "ble_init_lock: TIMEOUT acquiring init/deinit mutex");
+        return false;
     }
+    return true;
 }
 
 static void ble_init_unlock(void)
 {
     if (s_ble_init_mutex == NULL) { return; }
+    /* FreeRTOS mutexes are owned: only the task that took the mutex may give
+     * it.  A give from another task (or from a task that timed out while
+     * acquiring) triggers xTaskPriorityDisinherit() in the SMP kernel.
+     * Query the current owner (the SDK's xSemaphoreGetMutexHolder) so a
+     * stale/unowned give is dropped instead of crashing the system. */
+    #if (configUSE_MUTEXES == 1) && (INCLUDE_xSemaphoreGetMutexHolder == 1)
+    if (xSemaphoreGetMutexHolder(s_ble_init_mutex) != xTaskGetCurrentTaskHandle()) {
+        ESP_LOGW(TAG, "ble_init_unlock: dropping give — mutex not owned by current task");
+        return;
+    }
+    #endif
     xSemaphoreGive(s_ble_init_mutex);
 }
 
@@ -285,6 +302,7 @@ static uint32_t s_recovery_started_ms = 0U;
 
 static void transport_ble_supervisor_task(void *arg);
 static void transport_ble_supervisor_check_stall(void);
+static void transport_ble_supervisor_tick_adv_watchdog(void);
 static void transport_ble_supervisor_tick_recovery(void);
 static void transport_ble_enter_phase_unlocked(PairingPhase_t phase);
 
@@ -326,14 +344,30 @@ CeePewErr_t transport_ble_restart_discovery_session(void)
      * silently fail (no CFG_MTU_EVT fires), which blocks the 86-byte
      * sign_pk write (MTU >= 90 required).  A fresh BLE init ensures a
      * fresh GATTS service and a working MTU exchange. */
-    if (s_ble_initialised) {
-        ESP_LOGI(TAG, "restart_discovery: tearing down BLE for fresh GATTS creation");
-        (void)transport_ble_deinit();
-    }
-    ESP_LOGI(TAG, "restart_discovery: re-initializing BLE stack");
-    CeePewErr_t init_err = transport_ble_init();
-    if (init_err != CEEPEW_OK) {
+    CeePewErr_t init_err;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (s_ble_initialised) {
+            ESP_LOGI(TAG, "restart_discovery: tearing down BLE for fresh GATTS creation (attempt %d/3)",
+                     attempt + 1);
+            (void)transport_ble_deinit();
+        }
+        ESP_LOGI(TAG, "restart_discovery: re-initializing BLE stack (attempt %d/3)",
+                 attempt + 1);
+        init_err = transport_ble_init();
+        if (init_err == CEEPEW_OK) {
+            break;
+        }
+        if (init_err == CEEPEW_ERR_BUSY) {
+            ESP_LOGW(TAG, "restart_discovery: init lock busy, retrying in 200 ms (attempt %d/3)",
+                     attempt + 1);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
         ESP_LOGE(TAG, "Failed to re-initialize BLE: %d", (int)init_err);
+        return init_err;
+    }
+    if (init_err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "Failed to re-initialize BLE after retries: %d", (int)init_err);
         return init_err;
     }
 
@@ -989,7 +1023,10 @@ CeePewErr_t transport_ble_init(void)
         portEXIT_CRITICAL(&s_ble_init_mutex_spinlock);
     }
 
-    ble_init_lock();
+    if (!ble_init_lock()) {
+        ESP_LOGE(TAG, "transport_ble_init: init lock unavailable (concurrent init/deinit) — aborting");
+        return CEEPEW_ERR_BUSY;
+    }
 
     if (s_ble_initialised) {
         ESP_LOGI(TAG, "transport_ble_init: BLE already initialised — returning OK");
@@ -1689,7 +1726,10 @@ CeePewErr_t transport_ble_deinit(void)
 {
     CEEPEW_ASSERT(s_ble_initialised, CEEPEW_ERR_PARAM);
 
-    ble_init_lock();
+    if (!ble_init_lock()) {
+        ESP_LOGE(TAG, "transport_ble_deinit: init lock unavailable (concurrent init/deinit) — aborting");
+        return CEEPEW_ERR_BUSY;
+    }
 
     /* Clear initialised flag FIRST, before the long controller/bluedroid
      * deinit sequence below.  esp_bluedroid_deinit() makes
@@ -1814,7 +1854,10 @@ CeePewErr_t transport_ble_teardown(void)
         return CEEPEW_OK;
     }
 
-    ble_init_lock();
+    if (!ble_init_lock()) {
+        ESP_LOGE(TAG, "transport_ble_teardown: init lock unavailable (concurrent init/deinit) — aborting");
+        return CEEPEW_ERR_BUSY;
+    }
 
     /* Clear initialised flag FIRST so retry_scan_if_needed() (called from
      * the same task after this returns) sees BLE as logically down despite
@@ -1999,17 +2042,19 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void)
          * forever.  Serialize against a concurrent init/deinit that may own the
          * stack mid-transition, then clear the stale flag so the task's next
          * discovery cycle performs a real re-init. */
-        ble_init_lock();
+        bool ble_init_lock_taken = ble_init_lock();
         bool stack_still_uninit =
             (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED);
-        if (stack_still_uninit) {
+        if (stack_still_uninit && ble_init_lock_taken) {
             ESP_LOGW(TAG,
                      "retry_scan: Bluedroid UNINITIALIZED with s_ble_initialised=true — "
                      "clearing stale flag, re-init on next discovery cycle");
             s_ble_initialised = false;
             s_stack_needs_full_init = true;
+            ble_init_unlock();
+        } else if (ble_init_lock_taken) {
+            ble_init_unlock();
         }
-        ble_init_unlock();
         return CEEPEW_OK;
     }
 
@@ -2678,10 +2723,11 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 }
 
 /* ── sign_pk delayed-write timer callback ────────────────────────────────
- * Fires 50 ms after SEARCH_CMPL_EVT or CFG_MTU_EVT to let the BLE stack
- * settle before esp_ble_gattc_write_char().  Without this delay, the write
- * fires while the stack is still processing the prior control-plane event,
- * resulting in ESP_GATT_INTERNAL_ERROR (status=133). */
+ * Fires 50/200 ms after SEARCH_CMPL_EVT or CFG_MTU_EVT to let the BLE stack
+ * settle before the sign_pk write. The callback posts a PAIRING_EVENT_SIGN_PK_WRITE
+ * event to the supervisor queue with the settle delay as payload. The actual
+ * write is performed on the supervisor task (Core 1) under ctx lock, avoiding
+ * BLE API calls from the esp_timer task context. */
 static void sign_pk_delayed_dispatch(void *arg)
 {
     (void)arg;
@@ -2696,31 +2742,15 @@ static void sign_pk_delayed_dispatch(void *arg)
         g_ble_ctx.pending_sign_pk_write = false;
         return;
     }
-    ESP_LOGI(TAG, "Delayed sign_pk write dispatch (50 ms settle)");
-    esp_err_t wr_err = esp_ble_gattc_write_char(
-        g_ble_ctx.gattc_if,
-        g_ble_ctx.conn_id,
-        g_ble_ctx.gattc_sign_pk_char_handle,
-        (uint16_t)sizeof(g_ble_ctx.pending_sign_pk_encrypted),
-        g_ble_ctx.pending_sign_pk_encrypted,
-        ESP_GATT_WRITE_TYPE_RSP,
-        ESP_GATT_AUTH_REQ_NONE);
-    if (wr_err != ESP_OK) {
-        ESP_LOGW(TAG, "delayed sign_pk write failed: %d (%s)",
-                 (int)wr_err, esp_err_to_name(wr_err));
-        ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
-                           sizeof(g_ble_ctx.pending_sign_pk_encrypted));
-        g_ble_ctx.pending_sign_pk_write = false;
-        (void)transport_ble_disconnect();
-    } else {
-        g_ble_ctx.gattc_sign_pk_write_pending = true;
-        ESP_LOGI(TAG, "delayed sign_pk write dispatched: %u bytes (mtu=%u)",
-                 (unsigned)sizeof(g_ble_ctx.pending_sign_pk_encrypted),
-                 (unsigned)g_ble_ctx.gattc_mtu);
-        ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
-                           sizeof(g_ble_ctx.pending_sign_pk_encrypted));
-        g_ble_ctx.pending_sign_pk_write = false;
-    }
+    /* Post the write request with the desired settle delay (50 or 200 ms).
+     * The delay is carried in s_sign_pk_write_delay_ms. */
+    uint8_t payload[4];
+    uint32_t delay_ms = s_sign_pk_write_delay_ms;
+    payload[0] = (uint8_t)(delay_ms & 0xFFU);
+    payload[1] = (uint8_t)((delay_ms >> 8) & 0xFFU);
+    payload[2] = (uint8_t)((delay_ms >> 16) & 0xFFU);
+    payload[3] = (uint8_t)((delay_ms >> 24) & 0xFFU);
+    transport_ble_post_event(PAIRING_EVENT_SIGN_PK_WRITE, payload, sizeof(payload));
 }
 
 static void gattc_event_handler(esp_gattc_cb_event_t event,
@@ -2794,18 +2824,25 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                                            sizeof(g_ble_ctx.pending_sign_pk_encrypted));
                         g_ble_ctx.pending_sign_pk_write = false;
                     } else {
-                        ESP_LOGI(TAG, "MTU %u OK — buffering sign_pk for 50 ms settle",
+                        ESP_LOGI(TAG, "MTU %u OK — dispatching sign_pk write (50 ms settle)",
                                  (unsigned)g_ble_ctx.gattc_mtu);
-                        (void)esp_timer_start_once(s_sign_pk_delay_timer, 50000);
+                        s_sign_pk_write_delay_ms = 50U;
+                        uint8_t payload[4];
+                        payload[0] = (uint8_t)(50U & 0xFFU);
+                        payload[1] = (uint8_t)((50U >> 8) & 0xFFU);
+                        payload[2] = (uint8_t)((50U >> 16) & 0xFFU);
+                        payload[3] = (uint8_t)((50U >> 24) & 0xFFU);
+                        (void)transport_ble_post_event(PAIRING_EVENT_SIGN_PK_WRITE, payload, sizeof(payload));
                     }
                 }
             } else {
                 ESP_LOGW(TAG, "GATTC MTU negotiation failed: status=%d",
                          (int)param->cfg_mtu.status);
-                /* Attempt one-shot MTU renegotiation if not already tried */
-                if (!g_ble_ctx.mtu_negotiation_attempts && g_ble_ctx.gattc_connected) {
+                /* Allow up to 2 MTU renegotiation attempts with backoff.
+                 * First attempt immediate, second after ~300 ms via retry logic. */
+                if (g_ble_ctx.mtu_negotiation_attempts < 2U && g_ble_ctx.gattc_connected) {
                     g_ble_ctx.mtu_negotiation_attempts++;
-                    ESP_LOGI(TAG, "Attempting MTU renegotiation (attempt %u)",
+                    ESP_LOGI(TAG, "Attempting MTU renegotiation (attempt %u/2)",
                              (unsigned)g_ble_ctx.mtu_negotiation_attempts);
                     esp_err_t mtu_err = esp_ble_gattc_send_mtu_req(gattc_if, param->cfg_mtu.mtu);
                     if (mtu_err != ESP_OK) {
@@ -2813,7 +2850,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                                  (int)mtu_err, esp_err_to_name(mtu_err));
                     }
                 } else if (g_ble_ctx.pending_sign_pk_write) {
-                    ESP_LOGW(TAG, "MTU negotiation failed — discarding buffered sign_pk write");
+                    ESP_LOGW(TAG, "MTU negotiation failed after %u attempts — discarding buffered sign_pk write",
+                             (unsigned)g_ble_ctx.mtu_negotiation_attempts);
                     ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
                                        sizeof(g_ble_ctx.pending_sign_pk_encrypted));
                     g_ble_ctx.pending_sign_pk_write = false;
@@ -2995,16 +3033,21 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 ceepew_secure_zero(encrypted, sizeof(encrypted));
                 (void)transport_ble_disconnect();
             } else {
-                /* MTU already negotiated — buffer and dispatch after a 50 ms
+                /* MTU already negotiated — dispatch sign_pk write after a 50 ms
                  * settle delay to avoid status=133 from the BLE stack still
-                 * processing SEARCH_CMPL.  The timer callback handles the
-                 * actual esp_ble_gattc_write_char(). */
+                 * processing SEARCH_CMPL.  The supervisor handles the delay. */
                 memcpy(g_ble_ctx.pending_sign_pk_encrypted, encrypted,
                        sizeof(g_ble_ctx.pending_sign_pk_encrypted));
                 g_ble_ctx.pending_sign_pk_write = true;
                 ceepew_secure_zero(encrypted, sizeof(encrypted));
-                ESP_LOGI(TAG, "MTU ready — buffering sign_pk for 50 ms settle");
-                (void)esp_timer_start_once(s_sign_pk_delay_timer, 50000);
+                ESP_LOGI(TAG, "MTU ready — dispatching sign_pk write (50 ms settle)");
+                s_sign_pk_write_delay_ms = 50U;
+                uint8_t payload[4];
+                payload[0] = (uint8_t)(50U & 0xFFU);
+                payload[1] = (uint8_t)((50U >> 8) & 0xFFU);
+                payload[2] = (uint8_t)((50U >> 16) & 0xFFU);
+                payload[3] = (uint8_t)((50U >> 24) & 0xFFU);
+                (void)transport_ble_post_event(PAIRING_EVENT_SIGN_PK_WRITE, payload, sizeof(payload));
             }
         } break;
 
@@ -3034,11 +3077,21 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 }
                 g_ble_ctx.sign_pk_write_attempts++;
                 if (g_ble_ctx.sign_pk_write_attempts < 3U && g_ble_ctx.gattc_connected &&
-                    g_ble_ctx.gattc_sign_pk_mtu_negotiated) {
-                    /* Retry the write without full reconnect */
-                    ESP_LOGW(TAG, "GATTC sign_pk write status=133 (write attempt %u/3) — retrying write",
-                             (unsigned)g_ble_ctx.sign_pk_write_attempts);
-                    (void)esp_timer_start_once(s_sign_pk_delay_timer, 50000);
+                    g_ble_ctx.gattc_sign_pk_mtu_negotiated &&
+                    g_ble_ctx.gattc_sign_pk_char_handle != 0U) {
+                    /* Retry the write without full reconnect.
+                     * Use 500 ms delay for first retry, 900 ms for second (exponential backoff
+                     * to prevent attp_build_sr_msg NULL p_msg race on rapid retry). */
+                    uint32_t retry_delay_ms = (g_ble_ctx.sign_pk_write_attempts == 1U) ? 500U : 900U;
+                    ESP_LOGW(TAG, "GATTC sign_pk write status=133 (write attempt %u/3) — retrying in %u ms",
+                             (unsigned)g_ble_ctx.sign_pk_write_attempts, (unsigned)retry_delay_ms);
+                    s_sign_pk_write_delay_ms = retry_delay_ms;
+                    uint8_t payload[4];
+                    payload[0] = (uint8_t)(retry_delay_ms & 0xFFU);
+                    payload[1] = (uint8_t)((retry_delay_ms >> 8) & 0xFFU);
+                    payload[2] = (uint8_t)((retry_delay_ms >> 16) & 0xFFU);
+                    payload[3] = (uint8_t)((retry_delay_ms >> 24) & 0xFFU);
+                    (void)transport_ble_post_event(PAIRING_EVENT_SIGN_PK_WRITE, payload, sizeof(payload));
                 } else {
                     ESP_LOGW(TAG, "GATTC sign_pk write status=133 (retries=%u, write_attempts=%u) — "
                               "keeping rev_pend, will reconnect",
@@ -3049,12 +3102,23 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             } else {
                 g_ble_ctx.sign_pk_write_attempts++;
                 if (g_ble_ctx.sign_pk_write_attempts < 3U && g_ble_ctx.gattc_connected &&
-                    g_ble_ctx.gattc_sign_pk_mtu_negotiated) {
-                    /* Retry the write without full reconnect */
-                    ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d (write attempt %u/3) — retrying write",
+                    g_ble_ctx.gattc_sign_pk_mtu_negotiated &&
+                    g_ble_ctx.gattc_sign_pk_char_handle != 0U) {
+                    /* Retry the write without full reconnect.
+                     * 500 ms delay for first retry, 900 ms for second (exponential backoff
+                     * to avoid Bluedroid internal race NULL p_msg). */
+                    uint32_t retry_delay_ms = (g_ble_ctx.sign_pk_write_attempts == 1U) ? 500U : 900U;
+                    ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d (write attempt %u/3) — retrying in %u ms",
                              (int)param->write.status,
-                             (unsigned)g_ble_ctx.sign_pk_write_attempts);
-                    (void)esp_timer_start_once(s_sign_pk_delay_timer, 50000);
+                             (unsigned)g_ble_ctx.sign_pk_write_attempts,
+                             (unsigned)retry_delay_ms);
+                    s_sign_pk_write_delay_ms = retry_delay_ms;
+                    uint8_t payload[4];
+                    payload[0] = (uint8_t)(retry_delay_ms & 0xFFU);
+                    payload[1] = (uint8_t)((retry_delay_ms >> 8) & 0xFFU);
+                    payload[2] = (uint8_t)((retry_delay_ms >> 16) & 0xFFU);
+                    payload[3] = (uint8_t)((retry_delay_ms >> 24) & 0xFFU);
+                    (void)transport_ble_post_event(PAIRING_EVENT_SIGN_PK_WRITE, payload, sizeof(payload));
                 } else {
                     ESP_LOGW(TAG, "GATTC sign_pk write failed: status=%d — closing link, "
                               "bumping reconnect_attempts",
@@ -3567,6 +3631,10 @@ static const char *transport_ble_event_name(PairingEventType_t type)
         case PAIRING_EVENT_SIGN_PK_RECEIVED: return "SIGN_PK_RECEIVED";
         case PAIRING_EVENT_PHASE_TIMEOUT:    return "PHASE_TIMEOUT";
         case PAIRING_EVENT_RADIO_RESTART:    return "RADIO_RESTART";
+        case PAIRING_EVENT_HANDOFF_READY:    return "HANDOFF_READY";
+        case PAIRING_EVENT_GATT_METRICS:     return "GATT_METRICS";
+        case PAIRING_EVENT_UI_RESTART:       return "UI_RESTART";
+        case PAIRING_EVENT_SIGN_PK_WRITE:    return "SIGN_PK_WRITE";
         default:                             return "UNKNOWN";
     }
 }
@@ -3600,6 +3668,15 @@ void transport_ble_post_event(PairingEventType_t type,
         ESP_LOGW(TAG, "pairing event queue full, dropped %s",
                  transport_ble_event_name(type));
     }
+}
+
+CeePewErr_t transport_ble_ui_request_restart(void)
+{
+    if (g_pairing_event_queue == NULL) {
+        return CEEPEW_ERR_BUSY;
+    }
+    transport_ble_post_event(PAIRING_EVENT_UI_RESTART, NULL, 0U);
+    return CEEPEW_OK;
 }
 
 static void transport_ble_enter_phase_unlocked(PairingPhase_t phase)
@@ -3647,6 +3724,74 @@ static CeePewErr_t transport_ble_handle_event_internal(const PairingEvent_t *eve
     if (event == NULL) { return CEEPEW_ERR_NULL_PTR; }
 
     switch (event->type) {
+        case PAIRING_EVENT_UI_RESTART:
+            ESP_LOGI(TAG, "supervisor: UI requested discovery restart");
+            (void)transport_ble_restart_discovery_session();
+            break;
+
+        case PAIRING_EVENT_SIGN_PK_WRITE: {
+            /* Delayed sign_pk write dispatched from the supervisor task.
+             * Payload: uint32_t delay_ms (0 for immediate, or 50/200 for settle). */
+            uint32_t delay_ms = 0U;
+            if (event->payload_len >= 4U) {
+                delay_ms = ((uint32_t)event->payload[3] << 24) |
+                           ((uint32_t)event->payload[2] << 16) |
+                           ((uint32_t)event->payload[1] << 8)  |
+                           (uint32_t)event->payload[0];
+            }
+            if (delay_ms > 0U) {
+                vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            }
+            /* Perform the actual sign_pk write under ctx lock */
+            if (!ble_ctx_lock()) {
+                ESP_LOGW(TAG, "SIGN_PK_WRITE: ctx lock timeout — dropping write");
+                break;
+            }
+            if (!g_ble_ctx.pending_sign_pk_write || !g_ble_ctx.gattc_connected) {
+                ESP_LOGW(TAG, "SIGN_PK_WRITE: write no longer needed (pending=%u connected=%u)",
+                         (unsigned)g_ble_ctx.pending_sign_pk_write, (unsigned)g_ble_ctx.gattc_connected);
+                ble_ctx_unlock();
+                break;
+            }
+            if (g_ble_ctx.gattc_mtu < GATT_MIN_MTU) {
+                ESP_LOGW(TAG, "SIGN_PK_WRITE: MTU %u < %u — aborting",
+                         (unsigned)g_ble_ctx.gattc_mtu, (unsigned)GATT_MIN_MTU);
+                ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
+                                   sizeof(g_ble_ctx.pending_sign_pk_encrypted));
+                g_ble_ctx.pending_sign_pk_write = false;
+                (void)transport_ble_disconnect_unlocked();
+                ble_ctx_unlock();
+                break;
+            }
+            ESP_LOGI(TAG, "SIGN_PK_WRITE: dispatching sign_pk write (delay=%u ms)", (unsigned)delay_ms);
+            esp_err_t wr_err = esp_ble_gattc_write_char(
+                g_ble_ctx.gattc_if,
+                g_ble_ctx.conn_id,
+                g_ble_ctx.gattc_sign_pk_char_handle,
+                (uint16_t)sizeof(g_ble_ctx.pending_sign_pk_encrypted),
+                g_ble_ctx.pending_sign_pk_encrypted,
+                ESP_GATT_WRITE_TYPE_RSP,
+                ESP_GATT_AUTH_REQ_NONE);
+            if (wr_err != ESP_OK) {
+                ESP_LOGW(TAG, "SIGN_PK_WRITE: write failed: %d (%s)",
+                         (int)wr_err, esp_err_to_name(wr_err));
+                ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
+                                   sizeof(g_ble_ctx.pending_sign_pk_encrypted));
+                g_ble_ctx.pending_sign_pk_write = false;
+                (void)transport_ble_disconnect_unlocked();
+            } else {
+                g_ble_ctx.gattc_sign_pk_write_pending = true;
+                ESP_LOGI(TAG, "SIGN_PK_WRITE: write dispatched: %u bytes (mtu=%u)",
+                         (unsigned)sizeof(g_ble_ctx.pending_sign_pk_encrypted),
+                         (unsigned)g_ble_ctx.gattc_mtu);
+                ceepew_secure_zero(g_ble_ctx.pending_sign_pk_encrypted,
+                                   sizeof(g_ble_ctx.pending_sign_pk_encrypted));
+                g_ble_ctx.pending_sign_pk_write = false;
+            }
+            ble_ctx_unlock();
+            break;
+        }
+
         case PAIRING_EVENT_SIGN_PK_RECEIVED: {
             ESP_LOGI(TAG, "supervisor: SIGN_PK_RECEIVED — phase=%s handoff=%d sign_pk=%d",
                      transport_ble_phase_name(s_pairing_ctx.phase),
@@ -3710,6 +3855,7 @@ static void transport_ble_supervisor_task(void *arg)
         }
         transport_ble_supervisor_check_stall();
         transport_ble_supervisor_tick_recovery();
+        transport_ble_supervisor_tick_adv_watchdog();
 
         /* Periodic GATT metrics log during active pairing phases */
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -3766,10 +3912,55 @@ static void transport_ble_supervisor_check_stall(void)
     }
 }
 
-/* Drive the non-blocking recovery state machine forward. Runs on every
- * supervisor tick (CEEPEW_SUPERVISOR_PERIOD_MS = 500ms). Replaces the
- * vTaskDelay-based recovery path in transport_ble_handle_event_internal
- * with an event-driven design that does not block the supervisor. */
+/* Advertising re-arm watchdog: if we are in a discovery/pairing phase and
+ * advertising has been down for >2s, force a re-arm. This handles
+ * cases where the radio recovery or a race leaves us scanning but not
+ * advertising (stuck adv=0). Also runs during GATT connections in
+ * pairing phases to ensure the GATT-ready beacon continues broadcasting. */
+static void transport_ble_supervisor_tick_adv_watchdog(void)
+{
+    ble_ctx_lock();
+    bool ble_init = s_ble_initialised;
+    BleState_t state = g_ble_ctx.state;
+    bool adv = g_ble_ctx.is_advertising;
+    bool session_active = session_is_active();
+    PairingPhase_t phase = s_pairing_ctx.phase;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    static uint32_t s_adv_down_since_ms = 0U;
+
+    if (!ble_init || session_active || phase == PAIRING_PHASE_IDLE ||
+        phase == PAIRING_PHASE_FAILED) {
+        s_adv_down_since_ms = 0U;
+        ble_ctx_unlock();
+        return;
+    }
+
+    /* In pairing phases (GATT_IDENTITY, SIGN_PK_EXCHANGE), we must keep
+     * advertising our commitment with the GATT-ready flag so the peer
+     * can proceed. This applies even when a GATT connection is open
+     * (BLE_CONNECTED state) because the responder's GATT-ready flag
+     * in the scan response is what the initiator waits for. */
+    bool in_pairing_phase = (phase == PAIRING_PHASE_GATT_IDENTITY ||
+                             phase == PAIRING_PHASE_SIGN_PK_EXCHANGE);
+
+    if (adv) {
+        s_adv_down_since_ms = 0U;
+    } else if (state == BLE_SCANNING || state == BLE_IDLE ||
+               (in_pairing_phase && state == BLE_CONNECTED)) {
+        if (s_adv_down_since_ms == 0U) {
+            s_adv_down_since_ms = now_ms;
+        } else if ((now_ms - s_adv_down_since_ms) >= 2000U) {
+            ESP_LOGW(TAG, "adv watchdog: advertising down for %u ms — forcing re-arm (phase=%s state=%s)",
+                     (unsigned)(now_ms - s_adv_down_since_ms),
+                     transport_ble_phase_name(phase),
+                     transport_ble_state_name(state));
+            s_adv_down_since_ms = now_ms;  /* prevent spam */
+            (void)transport_ble_start_advertising();
+        }
+    }
+    ble_ctx_unlock();
+}
+
 static void transport_ble_supervisor_tick_recovery(void)
 {
     if (s_recovery_state == RECOVERY_STATE_IDLE) { return; }

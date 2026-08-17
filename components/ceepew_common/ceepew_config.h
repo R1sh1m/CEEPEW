@@ -129,7 +129,7 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_KEYDER_DURATION_MS        20000U  /* Key derivation animation (ms) */
 #define CEEPEW_KEYS_VERIFIED_HOLD_MS     3000U  /* "Keys Verified" screen hold (ms) */
 #define CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS 45000U /* CONFIRM verification timeout (ms) */
-#define CEEPEW_CHAT_LONG_PRESS_MS        1500U  /* Long press to return to menu (ms) */
+#define CEEPEW_CHAT_LONG_PRESS_MS        600U   /* Long press to return to menu (ms) */
 #define CEEPEW_MESSAGE_TTL_S             3600U  /* Phase 4: Message auto-wipe, 1hr default */
 #define CEEPEW_MESSAGE_TTL_DIAG_S        300U   /* Phase 4: 5 min in DIAG mode */
 #define CEEPEW_KEEPALIVE_INTERVAL_S     15U    /* Active chat ping interval (15s) */
@@ -165,6 +165,29 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_RGB_CODE_ENTRY_BLINK_MS   200U   /* Code entry blink interval  */
 #define CEEPEW_RGB_ERROR_BLINK_MS        300U   /* Error/nonce_exhausted blink*/
 #define CEEPEW_RGB_REJECT_SEQUENCE_CT    3U     /* Red blinks on reject */
+
+/* ── Navigator (relative pot selection) ──────────────────────────────────────
+ * Step threshold: pot units per cursor step. Larger = less sensitive.
+ * Default 4: 256 / 4 = 64 steps across full travel for 66 items → 1 char/step.
+ */
+#define CEEPEW_NAV_STEP_THRESH            4U
+
+/* Velocity ramp: step multiplier = clamp(|frame_dv| / VEL_DIV, 1, MAX_STEP).
+ * frame_dv ~ 1..6 per frame at 60 Hz normal turn; 24+ for medium sweep;
+ * 48+ for fast flick. VEL_DIV=6 → step 4 at 24/frame, step 8 at 48/frame.
+ */
+#define CEEPEW_NAV_VEL_DIV                6U
+#define CEEPEW_NAV_MAX_STEP               8U
+
+/* Edge dwell: pot parked at extremes (0..4 / 251..255) auto-repeats after
+ * EDGE_REPEAT_DELAY_MS (400 ms), then every EDGE_REPEAT_TICK_MS (80 ms),
+ * ramping step from 1 up to MAX_STEP (8). */
+#define CEEPEW_NAV_EDGE_ZONE              4U
+#define CEEPEW_NAV_EDGE_REPEAT_DELAY_MS   400U
+#define CEEPEW_NAV_EDGE_REPEAT_TICK_MS    80U
+
+/* Post-selection position hold duration (ms) to eliminate mechanical button-press jitter */
+#define CEEPEW_NAV_SELECTION_HOLD_MS      800U
 
 /* Pairing Supervisor Watchdog (Event-Driven Architecture)
  *
