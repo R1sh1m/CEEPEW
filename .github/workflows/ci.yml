@@ -83,7 +83,7 @@ jobs:
       - name: Install clang + libFuzzer
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
-          apt-get update && apt-get install -y clang libclang-rt-dev cmake
+          apt-get update && apt-get install -y clang libclang-rt-dev cmake libmbedtls-dev
       - name: Build and smoke-test fuzz harnesses
         run: |
           chmod +x tools/run_fuzz_harnesses.sh
