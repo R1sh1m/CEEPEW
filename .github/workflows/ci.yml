@@ -37,8 +37,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build (debug / diagnostic mode)
+        shell: bash
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          source /opt/esp/idf/export.sh
           idf.py set-target esp32
           idf.py build
       - name: Archive firmware artifacts
@@ -56,8 +58,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build (production)
+        shell: bash
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          source /opt/esp/idf/export.sh
           idf.py set-target esp32
           idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.production" reconfigure
           idf.py build
@@ -141,4 +145,3 @@ jobs:
           find tests/host/ -name '*.c' -print0 | xargs -0 -P$(nproc) clang-tidy \
             --quiet \
             -p tests/host/build || true
-
