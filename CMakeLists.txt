@@ -16,6 +16,7 @@ set(_DYNCONFIG "xtensa_esp32.so")
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mdynconfig=${_DYNCONFIG} -std=gnu11")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mdynconfig=${_DYNCONFIG} -std=gnu++17")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -mdynconfig=${_DYNCONFIG}")
+add_compile_options(-Wno-error=missing-field-initializers)
 
 # Custom component directories
 set(EXTRA_COMPONENT_DIRS
