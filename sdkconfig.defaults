@@ -12,3 +12,6 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # which prevents the SSD1306 internal DC-DC converter from activating, resulting in
 # a blank display. See DEBUG_LOG_OLED_I2C.md.
 # CONFIG_CEEPEW_OLED_FORCE_SH1106 is not set
+
+# Prevent third-party component warnings (e.g. arduino-esp32 C++ libraries) from breaking builds on newer IDF/GCC versions
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y

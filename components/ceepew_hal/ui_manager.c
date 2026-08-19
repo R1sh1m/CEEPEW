@@ -267,10 +267,10 @@ static void compose_reset_cursor_if_needed(void)
 
 static CeePewErr_t compose_insert_char(char ch)
 {
-    /* Guard against the actual protocol limit, not uint8_t max.
-     * compose_buffer is only CEEPEW_MAX_MSG_CHARS + 4 bytes;
+    /* Guard against the actual protocol limit.
+     * compose_buffer is CEEPEW_MAX_MSG_CHARS + 4 bytes;
      * writing past CEEPEW_MAX_MSG_CHARS corrupts adjacent struct fields. */
-    CEEPEW_ASSERT(g_ui_ctx.compose_length < CEEPEW_MAX_MSG_CHARS, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(g_ui_ctx.compose_length <= CEEPEW_MAX_MSG_CHARS, CEEPEW_ERR_BOUNDS);
 
     if (g_ui_ctx.compose_length >= CEEPEW_MAX_MSG_CHARS) {
         return CEEPEW_ERR_BOUNDS;
@@ -278,8 +278,8 @@ static CeePewErr_t compose_insert_char(char ch)
 
     compose_reset_cursor_if_needed();
 
-    for (uint8_t i = g_ui_ctx.compose_length; i > g_ui_ctx.compose_cursor; i--) {
-        g_ui_ctx.compose_buffer[i] = g_ui_ctx.compose_buffer[(uint8_t)(i - 1U)];
+    for (uint16_t i = g_ui_ctx.compose_length; i > g_ui_ctx.compose_cursor; i--) {
+        g_ui_ctx.compose_buffer[i] = g_ui_ctx.compose_buffer[i - 1U];
     }
     g_ui_ctx.compose_buffer[g_ui_ctx.compose_cursor] = ch;
     g_ui_ctx.compose_length++;
@@ -295,9 +295,9 @@ static CeePewErr_t compose_delete_before_cursor(void)
     }
 
     compose_reset_cursor_if_needed();
-    uint8_t delete_idx = (uint8_t)(g_ui_ctx.compose_cursor - 1U);
-    for (uint8_t i = delete_idx; (uint8_t)(i + 1U) < g_ui_ctx.compose_length; i++) {
-        g_ui_ctx.compose_buffer[i] = g_ui_ctx.compose_buffer[(uint8_t)(i + 1U)];
+    uint16_t delete_idx = g_ui_ctx.compose_cursor - 1U;
+    for (uint16_t i = delete_idx; (i + 1U) < g_ui_ctx.compose_length; i++) {
+        g_ui_ctx.compose_buffer[i] = g_ui_ctx.compose_buffer[i + 1U];
     }
     g_ui_ctx.compose_length--;
     g_ui_ctx.compose_cursor--;
@@ -2599,22 +2599,61 @@ static CeePewErr_t render_chat_detail(void)
     hal_ui_text(4U, 14U, type_str, HAL_UI_WHITE);
     draw_hline(4U, 23U, 120U);
 
-    /* Word-wrap plaintext to fit 128px screen (21 chars per line) */
-    uint8_t line_y = 26U;
+    /* Word-wrap plaintext to fit 128px screen (21 chars per line).
+     * Support scrolling for messages up to 255 chars (13 lines max).
+     * Use potentiometer to scroll: map pot position to line offset. */
     const char *ptr = msg->plaintext;
     char line_buf[22U];
-    for (uint8_t line = 0U; line < 4U; line++) {
-        if (*ptr == '\0') { break; }
+    uint8_t lines[13U];  /* Max 13 lines for 255 chars @ 21/line */
+    uint8_t line_count = 0U;
+
+    /* First pass: wrap entire message into lines array */
+    while (*ptr != '\0' && line_count < 13U) {
         uint8_t len = 0U;
-        /* Copy up to 21 characters */
         while (len < 21U && ptr[len] != '\0') {
-            line_buf[len] = ptr[len];
+            len++;
+        }
+        lines[line_count++] = len;
+        ptr += len;
+    }
+
+    /* Scroll offset from potentiometer (0..255 mapped to 0..max(0, line_count-4)) */
+    uint8_t max_scroll = (line_count > 4U) ? (uint8_t)(line_count - 4U) : 0U;
+    uint8_t scroll_offset = (max_scroll > 0U) ? (uint8_t)(((uint16_t)g_ui_ctx.user_input * max_scroll) >> 8U) : 0U;
+
+    /* Render visible window of 4 lines starting at scroll_offset */
+    uint8_t visible_lines = (line_count > 4U) ? 4U : line_count;
+    uint8_t line_y = 26U;
+    uint16_t total_offset = 0U;
+    for (uint8_t i = 0U; i < scroll_offset; i++) {
+        total_offset += lines[i];
+    }
+    const char *render_ptr = msg->plaintext + total_offset;
+
+    for (uint8_t line = 0U; line < visible_lines; line++) {
+        if (render_ptr[0] == '\0') { break; }
+        uint8_t len = 0U;
+        while (len < 21U && render_ptr[len] != '\0') {
+            line_buf[len] = render_ptr[len];
             len++;
         }
         line_buf[len] = '\0';
         hal_ui_text(4U, line_y, line_buf, HAL_UI_WHITE);
-        ptr += len;
+        render_ptr += len;
         line_y = (uint8_t)(line_y + 9U);
+    }
+
+    /* Scroll indicator on right edge */
+    if (max_scroll > 0U) {
+        uint8_t bar_top = 26U;
+        uint8_t bar_h = 36U;
+        uint8_t thumb_h = (uint8_t)((bar_h * 4U) / line_count);
+        if (thumb_h < 4U) { thumb_h = 4U; }
+        uint8_t thumb_y = (uint8_t)(bar_top + ((uint16_t)scroll_offset * (uint16_t)(bar_h - thumb_h)) / max_scroll);
+        HalUIRect_t track = { .x = 126U, .y = bar_top, .w = 1U, .h = bar_h };
+        hal_ui_rect(&track, HAL_UI_WHITE);
+        HalUIRect_t thumb = { .x = 125U, .y = thumb_y, .w = 3U, .h = thumb_h };
+        hal_ui_rect_fill(&thumb, HAL_UI_WHITE);
     }
 
     /* Footer */
@@ -3523,7 +3562,7 @@ CeePewErr_t ui_manager_update(void)
 
                     if (send_err == CEEPEW_OK) {
                         ESP_LOGI("ui", "SEND OK: '%.*s'", (int)g_ui_ctx.compose_length, g_ui_ctx.compose_buffer);
-                        for (uint8_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
+                        for (uint16_t ci = 0U; ci < g_ui_ctx.compose_length; ci++) {
                             g_ui_ctx.compose_buffer[ci] = 0U;
                         }
                         g_ui_ctx.compose_length = 0U;
