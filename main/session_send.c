@@ -1,8 +1,8 @@
 /* main/session_send.c
  *
  * End-to-end TX wrapper for a single plaintext message.
- * Stages are composed via Pipeline_t: compress → encrypt → frame_fec → esl_wrap.
- * Each stage allocates its output from the region allocator.
+ * With fragmentation: compress once → split compressed stream into fragments
+ * → each fragment: [frag_hdr][chunk] → encrypt → FEC → ESL → ARQ send.
  *
  * KEY DESIGN INVARIANTS (do not violate):
  *   - crypto_box_encrypt takes the peer's X25519 public key (g_crypto_ctx.peer_box_pubkey).
@@ -45,35 +45,6 @@ extern CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6],
 /* ────────────────────────────────────────────────────────────────────────── */
 /* TX Pipeline Stage Functions                                              */
 /* ────────────────────────────────────────────────────────────────────────── */
-
-/* Stage 1: compress — wraps compress_huffman_compress with region output */
-static CeePewErr_t stage_tx_compress(Region_t *region, const uint8_t *in,
-                                     uint16_t in_len, uint8_t **out,
-                                     uint16_t *out_len, void *stage_ctx)
-{
-    (void)stage_ctx;
-    CEEPEW_ASSERT(region != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
-
-    uint8_t *buf = (uint8_t *)region_alloc(region, CEEPEW_HUFF_BUF_MAX);
-    if (buf == NULL) { return CEEPEW_ERR_ALLOC; }
-
-    uint16_t comp_len = CEEPEW_HUFF_BUF_MAX;
-    CeePewErr_t err = compress_huffman_compress(in, in_len, buf, &comp_len,
-                                                CEEPEW_HUFF_BUF_MAX, NULL);
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "[SECURE_CHAT_TX] Huffman compression failed: err=%d", (int)err);
-        return err;
-    }
-
-    float ratio = (in_len > 0U) ? ((float)comp_len / (float)in_len * 100.0f) : 100.0f;
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Huffman compress: in=%u B -> out=%u B (ratio=%.1f%%)",
-             (unsigned)in_len, (unsigned)comp_len, (double)ratio);
-
-    *out = buf;
-    *out_len = comp_len;
-    return CEEPEW_OK;
-}
 
 /* Stage 2: encrypt — mutex-locked ascon → box → sign, produces framed payload.
  * Output layout: [2-byte LE box_ct_len][box_ct][64-byte Ed25519 sig].
@@ -258,31 +229,27 @@ static CeePewErr_t stage_tx_esl_wrap(Region_t *region, const uint8_t *in,
     return CEEPEW_OK;
 }
 
-/* TX pipeline handle and build-once flag */
-static Pipeline_t s_tx_pipeline;
-static bool s_tx_pipeline_built = false;
+/* Per-fragment pipeline: encrypt → frame_fec → esl_wrap (no compress) */
+static Pipeline_t s_tx_frag_pipeline;
+static bool s_tx_frag_pipeline_built = false;
 
-/* Build the TX pipeline once at first use. Called from session_send_message */
-static CeePewErr_t session_send_build_tx_pipeline(void)
+static CeePewErr_t session_send_build_frag_pipeline(void)
 {
     CeePewErr_t err;
 
-    err = pipeline_reset(&s_tx_pipeline);
+    err = pipeline_reset(&s_tx_frag_pipeline);
     if (err != CEEPEW_OK) { return err; }
 
-    err = pipeline_add_stage(&s_tx_pipeline, stage_tx_compress, NULL);
+    err = pipeline_add_stage(&s_tx_frag_pipeline, stage_tx_encrypt, NULL);
     if (err != CEEPEW_OK) { return err; }
 
-    err = pipeline_add_stage(&s_tx_pipeline, stage_tx_encrypt, NULL);
+    err = pipeline_add_stage(&s_tx_frag_pipeline, stage_tx_frame_fec, NULL);
     if (err != CEEPEW_OK) { return err; }
 
-    err = pipeline_add_stage(&s_tx_pipeline, stage_tx_frame_fec, NULL);
+    err = pipeline_add_stage(&s_tx_frag_pipeline, stage_tx_esl_wrap, NULL);
     if (err != CEEPEW_OK) { return err; }
 
-    err = pipeline_add_stage(&s_tx_pipeline, stage_tx_esl_wrap, NULL);
-    if (err != CEEPEW_OK) { return err; }
-
-    s_tx_pipeline_built = true;
+    s_tx_frag_pipeline_built = true;
     return CEEPEW_OK;
 }
 
@@ -320,57 +287,119 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
 
     (void)peer_public_key;
 
-    /* Build pipeline on first use */
-    if (!s_tx_pipeline_built) {
-        CeePewErr_t err = session_send_build_tx_pipeline();
+    /* Detect control/handshake messages (single-byte, no fragmentation) */
+    bool is_handshake = (len == 1U && (plaintext[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
+                                        plaintext[0] == CEEPEW_KEY_SYNC_ACK_BYTE ||
+                                        plaintext[0] == CEEPEW_KEY_SYNC_PING_BYTE ||
+                                        plaintext[0] == CEEPEW_KEY_SYNC_PONG_BYTE));
+
+    /* ── Step 1: Compress the full message once ─────────────────────────── */
+    uint8_t *compressed = (uint8_t *)region_alloc(&g_region, CEEPEW_HUFF_BUF_MAX);
+    if (compressed == NULL) { return CEEPEW_ERR_ALLOC; }
+
+    uint16_t comp_len = CEEPEW_HUFF_BUF_MAX;
+    CeePewErr_t err = compress_huffman_compress(plaintext, len, compressed, &comp_len,
+                                                CEEPEW_HUFF_BUF_MAX, NULL);
+    if (err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "[SECURE_CHAT_TX] Huffman compression failed: err=%d", (int)err);
+        region_reset(&g_region);
+        return err;
+    }
+
+    float ratio = (len > 0U) ? ((float)comp_len / (float)len * 100.0f) : 100.0f;
+    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Huffman compress: in=%u B -> out=%u B (ratio=%.1f%%)",
+             (unsigned)len, (unsigned)comp_len, (double)ratio);
+
+    /* ── Step 2: Fragment compressed stream ─────────────────────────────── */
+    uint8_t total_frags = (uint8_t)((comp_len + CEEPEW_FRAG_DATA_MAX - 1U) / CEEPEW_FRAG_DATA_MAX);
+    if (total_frags == 0U) { total_frags = 1U; }
+    if (total_frags > CEEPEW_MAX_FRAGMENTS) {
+        ESP_LOGE(TAG, "[SECURE_CHAT_TX] Too many fragments: %u > %u", total_frags, CEEPEW_MAX_FRAGMENTS);
+        region_reset(&g_region);
+        return CEEPEW_ERR_BOUNDS;
+    }
+
+    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Fragmenting: %u compressed bytes -> %u fragments",
+             (unsigned)comp_len, (unsigned)total_frags);
+
+    /* Build per-fragment pipeline on first use */
+    if (!s_tx_frag_pipeline_built) {
+        err = session_send_build_frag_pipeline();
         if (err != CEEPEW_OK) {
-            ESP_LOGE(TAG, "[SECURE_CHAT_TX] Failed to build TX pipeline: %d", (int)err);
+            ESP_LOGE(TAG, "[SECURE_CHAT_TX] Failed to build fragment pipeline: %d", (int)err);
+            region_reset(&g_region);
             return err;
         }
     }
 
-    /* Run the pipeline: compress → encrypt → frame_fec → esl_wrap. */
-    uint8_t *final_frame = NULL;
-    uint16_t final_len = 0U;
-    CeePewErr_t err = pipeline_run(&s_tx_pipeline, &g_region,
-                                    plaintext, len,
-                                    &final_frame, &final_len);
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "[SECURE_CHAT_TX] Pipeline execution failed: err=%d", (int)err);
-        /* Roll back the nonce that session_enforce_nonce_limit() pre-incremented
-         * inside stage_tx_encrypt. The frame was NEVER sent (we haven't reached
-         * ecc_arq_send yet), so rolling back is safe — the peer hasn't seen this
-         * nonce value and the counter remains synchronized. Without this rollback,
-         * every TX pipeline failure permanently advances the nonce counter by 2,
-         * eventually desynchronizing INIT's and RESP's nonce sequences and causing
-         * all subsequent INIT→RESP messages to fail Ascon AEAD verification. */
-        if (session_is_active()) {
-            (void)session_rollback_nonce();
+    /* ── Step 3: Send each fragment sequentially ────────────────────────── */
+    uint16_t offset = 0U;
+    for (uint8_t frag_idx = 0U; frag_idx < total_frags; frag_idx++) {
+        uint16_t chunk_len = (uint16_t)((comp_len - offset > CEEPEW_FRAG_DATA_MAX)
+                                         ? CEEPEW_FRAG_DATA_MAX
+                                         : (comp_len - offset));
+        
+        /* Build fragment payload: [flags|total-1][idx][chunk] */
+        uint16_t frag_payload_len = (uint16_t)(CEEPEW_FRAG_HEADER_BYTES + chunk_len);
+        uint8_t *frag_in = (uint8_t *)region_alloc(&g_region, frag_payload_len);
+        if (frag_in == NULL) {
+            region_reset(&g_region);
+            return CEEPEW_ERR_ALLOC;
         }
-        region_reset(&g_region);
-        return err;
+
+        frag_in[0] = (uint8_t)(0x80U | ((total_frags - 1U) & 0x3FU)); /* START bit + total-1 (6 bits) */
+        frag_in[1] = frag_idx;                                         /* fragment index */
+        if (chunk_len > 0U) {
+            memcpy(frag_in + CEEPEW_FRAG_HEADER_BYTES, compressed + offset, chunk_len);
+        }
+
+        ESP_LOGI(TAG, "[SECURE_CHAT_TX] Fragment %u/%u: chunk=%u B, frag_in=%u B",
+                 (unsigned)(frag_idx + 1U), (unsigned)total_frags,
+                 (unsigned)chunk_len, (unsigned)frag_payload_len);
+
+        /* Run per-fragment pipeline: encrypt → fec → esl */
+        uint8_t *final_frame = NULL;
+        uint16_t final_len = 0U;
+        err = pipeline_run(&s_tx_frag_pipeline, &g_region,
+                            frag_in, frag_payload_len,
+                            &final_frame, &final_len);
+        if (err != CEEPEW_OK) {
+            ESP_LOGE(TAG, "[SECURE_CHAT_TX] Fragment %u pipeline failed: err=%d",
+                     (unsigned)(frag_idx + 1U), (int)err);
+            /* Roll back the nonce that session_enforce_nonce_limit() pre-incremented
+             * inside stage_tx_encrypt. The frame was NEVER sent. */
+            if (session_is_active()) {
+                (void)session_rollback_nonce();
+            }
+            region_reset(&g_region);
+            return err;
+        }
+
+        /* Update last message activity timestamp on first fragment send attempt */
+        if (frag_idx == 0U) {
+            (void)session_update_last_message_time();
+        }
+
+        /* Wrap frame with ARQ and send with retry/backoff */
+        ESP_LOGI(TAG, "[SECURE_CHAT_TX] Submitting fragment %u/%u (%u B) to ARQ...",
+                 (unsigned)(frag_idx + 1U), (unsigned)total_frags, (unsigned)final_len);
+        err = ecc_arq_send(peer_mac, final_frame, final_len);
+        if (err != CEEPEW_OK) {
+            ESP_LOGE(TAG, "[SECURE_CHAT_TX] Fragment %u ARQ failed: err=%d (peer offline or packet dropped)",
+                     (unsigned)(frag_idx + 1U), (int)err);
+            region_reset(&g_region);
+            return err;
+        }
+
+        ESP_LOGI(TAG, "[SECURE_CHAT_TX] Fragment %u/%u delivered & ACKed via ARQ!",
+                 (unsigned)(frag_idx + 1U), (unsigned)total_frags);
+
+        offset += chunk_len;
     }
 
+    ESP_LOGI(TAG, "[SECURE_CHAT_TX] All %u fragments successfully delivered!", (unsigned)total_frags);
 
-    /* Update last message activity timestamp on send attempt */
-    (void)session_update_last_message_time();
-
-    /* Wrap frame with ARQ and send with retry/backoff */
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Submitting %u B ESL frame to Stop-and-Wait ARQ...", (unsigned)final_len);
-    err = ecc_arq_send(peer_mac, final_frame, final_len);
-    if (err != CEEPEW_OK) {
-        ESP_LOGE(TAG, "[SECURE_CHAT_TX] ARQ transmission failed: err=%d (peer offline or packet dropped)", (int)err);
-        region_reset(&g_region);
-        return err;
-    }
-
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Message successfully delivered & ACKed via ARQ!");
-
-    /* Do not store handshake/control sync messages (HELLO/ACK/PING/PONG) in the message store */
-    bool is_handshake = (len == 1U && (plaintext[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
-                                       plaintext[0] == CEEPEW_KEY_SYNC_ACK_BYTE ||
-                                       plaintext[0] == CEEPEW_KEY_SYNC_PING_BYTE ||
-                                       plaintext[0] == CEEPEW_KEY_SYNC_PONG_BYTE));
+    /* Do not store handshake/control sync messages in the message store */
     if (!is_handshake) {
         err = msg_store_add(plaintext, len, 1U);
         if (err != CEEPEW_OK) {
@@ -437,4 +466,3 @@ CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_
 
     return CEEPEW_ERR_TIMEOUT;
 }
-

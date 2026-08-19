@@ -6,18 +6,22 @@
 /* -------------------------------------------------------------------------- */
 /* Message Limits                                                             */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_MAX_MSG_BYTES             60U    /* fits ESP-NOW v1 250-byte limit */
-#define CEEPEW_MAX_MSG_CHARS             60U
-#define CEEPEW_MAX_FRAGMENTS             4U
+#define CEEPEW_MAX_MSG_BYTES             255U   /* max user message bytes (plaintext) */
+#define CEEPEW_MAX_MSG_CHARS             255U   /* max user message chars (ASCII) */
+#define CEEPEW_MAX_FRAGMENTS             8U     /* max fragments for 255-char message */
 #define CEEPEW_STREAM_MAX_FRAGMENTS      512U
-#define CEEPEW_STREAM_PAYLOAD_MAX        210U   /* bytes per fragment payload */
-#define CEEPEW_HUFF_BUF_MAX              200U   /* worst-case compressed      */
-#define CEEPEW_FEC_BUF_MAX               224U   /* worst-case FEC-encoded     */
+#define CEEPEW_STREAM_PAYLOAD_MAX        210U   /* bytes per fragment payload (legacy) */
+#define CEEPEW_HUFF_BUF_MAX              416U   /* worst-case compressed (255 * 12/8 + 3 hdr) */
+#define CEEPEW_FEC_BUF_MAX               224U   /* worst-case FEC-encoded (per fragment) */
 #define CEEPEW_PACKET_MAX_BYTES          512U   /* max total frame size       */
+#define CEEPEW_FRAG_HEADER_BYTES         2U     /* [flags|total-1][idx] inside AEAD */
+#define CEEPEW_FRAG_DATA_MAX             58U    /* max compressed bytes per fragment */
 /* Max input to ecc_hamming_encode that fits ESP-NOW v1 (250-byte limit).
  * Derivation: 2-byte LE box_ct_len prefix + (max box_ct) + 64-byte sig
  *           = 2 + (76+16) + 64 = 158.
- * Wire frame = ARQ(1) + ESL(24) + FEC(216) + inner-CRC(4) + ESL-CRC(4) = 249. */
+ * Wire frame = ARQ(1) + ESL(24) + FEC(216) + inner-CRC(4) + ESL-CRC(4) = 249.
+ * Per fragment: compressed <= CEEPEW_FRAG_DATA_MAX (58) + 2B frag hdr = 60.
+ * box_ct = 60 + 16 (Ascon) + 16 (box) = 92 <= 92. */
 #define CEEPEW_PAYLOAD_MAX_BYTES         158U
 
 /* -------------------------------------------------------------------------- */
@@ -26,7 +30,7 @@
 #define CEEPEW_SESSION_KEY_BYTES         16U    /* Ascon-128 key = 128 bits   */
 #define CEEPEW_ASCON_TAG_BYTES           16U    /* Ascon auth tag             */
 #define CEEPEW_BOX_TAG_BYTES             16U    /* crypto_box Poly1305 tag    */
-/* Max ciphertext length handed to Ed25519 signing: plaintext(60) + Ascon
+/* Max ciphertext length handed to Ed25519 signing: compressed per fragment (60) + Ascon
  * tag(16) + box tag(16) = 92 B. See CEEPEW_PAYLOAD_MAX_BYTES derivation. */
 #define CEEPEW_SIGN_MAX_BYTES            (CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES + CEEPEW_BOX_TAG_BYTES)
 #define CEEPEW_SHA256_BYTES              32U

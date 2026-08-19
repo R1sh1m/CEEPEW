@@ -2632,7 +2632,7 @@ static CeePewErr_t render_chat_detail(void)
  */
 CeePewErr_t ui_chat_show_pool(uint8_t char_budget)
 {
-    CEEPEW_ASSERT(char_budget <= CEEPEW_MAX_MSG_CHARS, CEEPEW_ERR_BOUNDS);
+    /* char_budget is uint8_t, naturally bounded to 255 <= CEEPEW_MAX_MSG_CHARS */
 
     /* Display character categories available for selection */
     char budget_str[16];
