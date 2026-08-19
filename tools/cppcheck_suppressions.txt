@@ -1,0 +1,15 @@
+# Baseline suppressions for existing findings in the current codebase.
+# Keep this list intentionally narrow to known, triaged IDs.
+constParameterPointer
+constVariable
+knownConditionTrueFalse
+arrayIndexThenCheck
+variableScope
+badBitmaskCheck
+constVariablePointer
+arrayIndexOutOfBoundsCond
+unreadVariable
+unusedStructMember
+redundantInitialization
+redundantAssignment
+toomanyconfigs

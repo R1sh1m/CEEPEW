@@ -50,6 +50,7 @@ docs/
 tools/eim_config.toml
 tools/monitor_both_*.txt
 tools/*.txt
+!tools/cppcheck_suppressions.txt
 opencode.jsonc
 
 # Workspace coding agent customizations
