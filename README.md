@@ -17,7 +17,7 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 
 ## Features
 
-- **End-to-end encrypted messaging** — 8-layer crypto stack (Curve25519 ECDH, Ed25519 EdDSA, HKDF-SHA256, HMAC-SHA256, Ascon-128 AEAD, digital_sum_mix, HMAC-eFuse binding, nonce counter + expiry)
+- **End-to-end encrypted messaging** — 7-layer crypto stack (Curve25519 ECDH, Ed25519 EdDSA, HKDF-SHA256, HMAC-SHA256, Ascon-128 AEAD, digital_sum_mix, nonce counter + expiry)
 - **User-verified PIN pairing** — 4-character one-time PIN provides ~20 bits of brute-force resistance against active MITM during the ~30 s pairing window
 - **Hardware-gated identity handoff** — BLE discovery/pairing, then handoff to ESP-NOW for session transport
 - **Forward error correction** — Hamming(15,11) on every frame; selective-repeat ARQ with exponential backoff
@@ -40,7 +40,7 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 
 ### Prerequisites
 
-- [ESP-IDF v6.0.1](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32/get-started/)
+- [ESP-IDF v6.0.2](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/)
 - Python 3.12+
 - ESP32 DevKit v1 with CP210x UART
 
@@ -48,7 +48,7 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 
 ```powershell
 # Set up ESP-IDF environment (adjust path for your install)
-& "C:\esp\v6.0.1\esp-idf\export.ps1"
+& "C:\esp\v6.0.2\esp-idf\export.ps1"
 idf.py set-target esp32
 idf.py build
 idf.py -p COM5 flash
@@ -59,7 +59,7 @@ idf.py -p COM5 monitor
 
 ```bash
 # Set up ESP-IDF environment
-source ~/esp/v6.0.1/esp-idf/export.sh
+source ~/esp/v6.0.2/esp-idf/export.sh
 idf.py set-target esp32
 idf.py build
 idf.py -p /dev/ttyUSB0 flash
@@ -143,8 +143,7 @@ fuzz/                   Off-host fuzzing harnesses (AFL/libFuzzer)
 | 4 | HMAC-SHA256 | Commitment binding |
 | 5 | Ascon-128 AEAD | Message encryption + authentication |
 | 6 | digital_sum | Session-key mixing (HKDF salt preprocessor) |
-| 7 | HMAC-eFuse | Device binding via eFuse MAC |
-| 8 | Nonce + expiry | Replay prevention (64-bit, 2^56 hard limit) |
+| 7 | Nonce + expiry | Replay prevention (64-bit, 2^56 hard limit) |
 
 ## Pairing Protocol
 

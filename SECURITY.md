@@ -8,7 +8,7 @@ CEE-PEW is designed to resist:
 - **Passive eavesdropping** — Layered authenticated encryption: Ascon-128 AEAD (inner) + XSalsa20-Poly1305 over X25519 ECDH (outer) for all session traffic
 - **Active MITM during pairing** — EdDSA identity binding + 4-character PIN confirmation (user-verified). The PIN provides approximately 20 bits of brute-force resistance against an active MITM during the pairing window
 - **Replay attacks** — 64-bit nonce counter with WireGuard-style replay window + session expiry at `CEEPEW_NONCE_HARD_LIMIT` (2^56)
-- **Cloning attacks** — HMAC-eFuse binding ties derived keys to the device's unique eFuse MAC. **Requires manufacturing-time provisioning:** a unique 256-bit key must be burned into EFUSE_BLK1. On stock dev kits (unprovisioned), the device secret falls back to SHA-256(MAC || salt), which is deterministic from the public MAC and does not resist cloning.
+- **Cloning attacks** — Session keys are derived from ephemeral ECDH material and a user-provided session code. No hardware eFuse binding is applied (eFuse HMAC was dropped by design decision); the device identity falls back to SHA-256(MAC || salt), which is deterministic from the public MAC and does not resist cloning on stock dev kits.
 
 CEE-PEW is NOT designed to resist:
 - **Physical hardware attacks** — No secure enclave, no tamper detection, keys in SRAM

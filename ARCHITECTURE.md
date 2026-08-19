@@ -15,15 +15,14 @@ Once both commitments match, the devices enter a GATT-based identity exchange. E
 **Phase 3: Handoff** — BLE torn down. ESP-NOW peer registered. Session FSM advances.
 Both devices send a "HANDOFF_READY" beacon over BLE and wait for the peer's beacon (synchronization). Once both are received, BLE is fully torn down (controller + bluedroid deinit), WiFi is initialized in STA mode, ESP-NOW is started on a fixed channel (default: 1), and the peer is registered using the **WiFi MAC** (not BLE MAC) exchanged during Phase 2. Session FSM enters ACTIVE state.
 
-## Cryptographic Stack (8 Layers)
+## Cryptographic Stack (7 Layers)
 1. **ECDH (Curve25519)** — Ephemeral key agreement for session key derivation
 2. **EdDSA (Ed25519)** — Peer identity authentication via sign_pk exchange
 3. **HKDF (SHA-256)** — Key derivation from ECDH shared secret + session code
 4. **HMAC (SHA-256)** — Commitment binding in pairing (beacon = truncate(HMAC))
 5. **Ascon-128 AEAD** — Data encryption in session (payload + associated data)
 6. **digital_sum_mix** — Proprietary session key mixing (HKDF salt preprocessor)
-7. **HMAC-eFuse binding** — Device-bound key material from eFuse MAC
-8. **Nonce counter + expiry** — Replay prevention (64-bit counter, 2^56 hard limit)
+7. **Nonce counter + expiry** — Replay prevention (64-bit counter, 2^56 hard limit)
 
 ## Transport Stack
 **BLE (pairing only) → ESP-NOW (session)**

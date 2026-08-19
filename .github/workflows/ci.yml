@@ -2,9 +2,7 @@ name: CEE-PEW CI
 
 on:
   push:
-    branches: [main, develop]
   pull_request:
-    branches: [main]
 
 env:
   IDF_VERSION: release-v6.0
