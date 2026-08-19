@@ -33,7 +33,7 @@ jobs:
   # ── Debug firmware build ───────────────────────────────────────────
   build-debug:
     runs-on: ubuntu-latest
-    container: ${{ env.IDF_DOCKER_IMAGE }}
+    container: espressif/idf:release-v6.0
     steps:
       - uses: actions/checkout@v4
       - name: Build (debug / diagnostic mode)
@@ -52,7 +52,7 @@ jobs:
   # ── Production firmware build ──────────────────────────────────────
   build-production:
     runs-on: ubuntu-latest
-    container: ${{ env.IDF_DOCKER_IMAGE }}
+    container: espressif/idf:release-v6.0
     steps:
       - uses: actions/checkout@v4
       - name: Build (production)
@@ -73,7 +73,7 @@ jobs:
   # Runs inside the IDF Docker container for ESP-IDF header access.
   fuzz:
     runs-on: ubuntu-latest
-    container: ${{ env.IDF_DOCKER_IMAGE }}
+    container: espressif/idf:release-v6.0
     steps:
       - uses: actions/checkout@v4
       - name: Install clang + libFuzzer
