@@ -91,6 +91,9 @@ add_executable(test_side_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/test_side_channel.c
 )
 target_link_libraries(test_side_channel PRIVATE ceepew_portable)
+if(NOT MINGW)
+    target_link_libraries(test_side_channel PRIVATE m)
+endif()
 target_include_directories(test_side_channel PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_side_channel COMMAND test_side_channel)
 
@@ -240,5 +243,5 @@ add_executable(fuzz_smoke_arq
 )
 target_link_libraries(fuzz_smoke_arq PRIVATE ceepew_portable)
 target_include_directories(fuzz_smoke_arq PRIVATE ${COMMON_INCLUDES})
-add_test(NAME fuzz_smoke_arq COMMAND fuzz_smoke_arq ${COMPONENT_DIR}/fuzz/fuzz_arq/corpus/*)
-
+file(GLOB FUZZ_ARQ_SEEDS ${COMPONENT_DIR}/fuzz/fuzz_arq/corpus/*)
+add_test(NAME fuzz_smoke_arq COMMAND fuzz_smoke_arq ${FUZZ_ARQ_SEEDS})
