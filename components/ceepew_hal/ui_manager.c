@@ -353,7 +353,7 @@ static void render_compose_preview_line(void)
     }
 
     uint8_t start = 0U;
-    const uint8_t window_chars = 21U;
+    const uint8_t window_chars = 20U;
     if (g_ui_ctx.compose_length > window_chars) {
         uint8_t cursor = g_ui_ctx.compose_cursor;
         if (cursor > g_ui_ctx.compose_length) {
@@ -386,6 +386,10 @@ static void render_compose_preview_line(void)
     if (blink == 0U && g_ui_ctx.compose_cursor >= start && g_ui_ctx.compose_cursor <= end) {
         uint8_t cursor_screen_col = (uint8_t)(g_ui_ctx.compose_cursor - start);
         uint8_t cursor_x = (uint8_t)(4U + (cursor_screen_col * 6U));
+        /* Clamp cursor x so caret always draws (max visible col = 19 at x=118) */
+        if (cursor_x > 118U) {
+            cursor_x = 118U;
+        }
         if ((uint16_t)cursor_x + 5U <= 128U) {
             draw_hline(cursor_x, 46U, 5U);
         }
@@ -2599,18 +2603,18 @@ static CeePewErr_t render_chat_detail(void)
     hal_ui_text(4U, 14U, type_str, HAL_UI_WHITE);
     draw_hline(4U, 23U, 120U);
 
-    /* Word-wrap plaintext to fit 128px screen (21 chars per line).
+    /* Word-wrap plaintext to fit 128px screen (20 chars per line).
      * Support scrolling for messages up to 255 chars (13 lines max).
      * Use potentiometer to scroll: map pot position to line offset. */
     const char *ptr = msg->plaintext;
     char line_buf[22U];
-    uint8_t lines[13U];  /* Max 13 lines for 255 chars @ 21/line */
+    uint8_t lines[13U];  /* Max 13 lines for 255 chars @ 20/line */
     uint8_t line_count = 0U;
 
     /* First pass: wrap entire message into lines array */
     while (*ptr != '\0' && line_count < 13U) {
         uint8_t len = 0U;
-        while (len < 21U && ptr[len] != '\0') {
+        while (len < 20U && ptr[len] != '\0') {
             len++;
         }
         lines[line_count++] = len;
@@ -2633,7 +2637,7 @@ static CeePewErr_t render_chat_detail(void)
     for (uint8_t line = 0U; line < visible_lines; line++) {
         if (render_ptr[0] == '\0') { break; }
         uint8_t len = 0U;
-        while (len < 21U && render_ptr[len] != '\0') {
+        while (len < 20U && render_ptr[len] != '\0') {
             line_buf[len] = render_ptr[len];
             len++;
         }
@@ -2973,7 +2977,21 @@ static CeePewErr_t render_chat_send_confirm(void)
     hal_ui_text(4U, 14U, "send message:", HAL_UI_WHITE);
 
     char preview[24U];
-    (void)hal_ui_fit_text(g_ui_ctx.compose_buffer, 120U, preview, sizeof(preview));
+    uint16_t text_w = hal_ui_text_width(g_ui_ctx.compose_buffer);
+    if (text_w <= 120U) {
+        (void)hal_ui_fit_text(g_ui_ctx.compose_buffer, 120U, preview, sizeof(preview));
+    } else {
+        /* Truncate with "..." indicator (3 chars = 18px) */
+        uint8_t max_chars = (uint8_t)((120U - 18U) / 6U);  /* 17 chars */
+        uint8_t i;
+        for (i = 0U; i < max_chars && i < sizeof(preview) - 4U && g_ui_ctx.compose_buffer[i] != '\0'; i++) {
+            preview[i] = g_ui_ctx.compose_buffer[i];
+        }
+        preview[i++] = '.';
+        preview[i++] = '.';
+        preview[i++] = '.';
+        preview[i] = '\0';
+    }
     hal_ui_text(4U, 22U, preview, HAL_UI_WHITE);
 
     if (g_ui_ctx.send_pending) {

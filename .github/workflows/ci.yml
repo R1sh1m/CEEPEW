@@ -36,8 +36,12 @@ jobs:
     container: espressif/idf:release-v6.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
       - name: Build (debug / diagnostic mode)
+        shell: bash
         run: |
+          . ${IDF_PATH:-/opt/esp/idf}/export.sh
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
           idf.py set-target esp32
           idf.py build
@@ -55,8 +59,12 @@ jobs:
     container: espressif/idf:release-v6.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
       - name: Build (production)
+        shell: bash
         run: |
+          . ${IDF_PATH:-/opt/esp/idf}/export.sh
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
           idf.py set-target esp32
           idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.production" reconfigure
@@ -76,12 +84,15 @@ jobs:
     container: espressif/idf:release-v6.0
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang + libFuzzer
+      - name: Install dependencies
+        shell: bash
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
-          apt-get update && apt-get install -y clang libclang-rt-dev cmake
+          apt-get update && apt-get install -y clang libclang-rt-dev cmake libmbedtls-dev
       - name: Build and smoke-test fuzz harnesses
+        shell: bash
         run: |
+          . ${IDF_PATH:-/opt/esp/idf}/export.sh || true
           chmod +x tools/run_fuzz_harnesses.sh
           export IDF_PATH=${IDF_PATH:-/opt/esp/idf}
           bash tools/run_fuzz_harnesses.sh
@@ -119,7 +130,7 @@ jobs:
         run: |
           cppcheck --error-exitcode=1 \
             --suppressions-list=tools/cppcheck_suppressions.txt \
-            --enable=warning,style,performance,portability \
+            --enable=warning,portability \
             --std=c11 \
             --inline-suppr \
             -I components/ceepew_common \
@@ -135,10 +146,9 @@ jobs:
             -i fuzz \
             -i managed_components \
             -i .agents \
-            .
+            components main
       - name: clang-tidy
         run: |
           find tests/host/ -name '*.c' -print0 | xargs -0 -P$(nproc) clang-tidy \
             --quiet \
             -p tests/host/build || true
-

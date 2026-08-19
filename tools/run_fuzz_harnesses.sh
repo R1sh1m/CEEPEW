@@ -96,8 +96,15 @@ COMMON_DEFS="-DWIFI_PS_MIN_MODEM=0 -DWIFI_PS_NONE=0 -DCONFIG_CEEPEW_DEVELOPMENT_
 
 # Per-harness extra include paths (e.g. for ESP-IDF dependencies)
 declare -A EXTRA_INCLUDES
+EXTRA_INCLUDES[fuzz_ascon]="-I${ROOT}/tests/host/include"
+EXTRA_INCLUDES[fuzz_sha256]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/mbedtls/mbedtls/include -I${IDF_PATH}/components/mbedtls/port/include"
+EXTRA_INCLUDES[fuzz_hkdf]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/mbedtls/mbedtls/include -I${IDF_PATH}/components/mbedtls/port/include"
 EXTRA_INCLUDES[fuzz_hamming]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/esp_common/include -I${IDF_PATH}/components/log/include"
 EXTRA_INCLUDES[fuzz_arq]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/esp_common/include -I${IDF_PATH}/components/log/include -I${IDF_PATH}/components/freertos/FreeRTOS-Kernel/include -I${IDF_PATH}/components/freertos/esp_additions/include -I${IDF_PATH}/components/esp_timer/include -I${IDF_PATH}/components/esp_system/include -I${IDF_PATH}/components/esp_hw_support/include -I${IDF_PATH}/components/esp_rom/include -I${IDF_PATH}/components/soc/include -I${IDF_PATH}/components/hal/include -I${IDF_PATH}/components/esp_random/include"
+
+declare -A EXTRA_LIBS
+EXTRA_LIBS[fuzz_sha256]="-lmbedcrypto"
+EXTRA_LIBS[fuzz_hkdf]="-lmbedcrypto"
 
 # Working directory for build artefacts
 BUILD_DIR="${FUZZ_DIR}/build"
@@ -146,8 +153,9 @@ for HARNESS_DIR in "${!HARNESSES[@]}"; do
     # Build harness binary if needed
     if [[ ! -f "${HARNESS_BIN}" ]] || [[ "${HARNESS_SRC}" -nt "${HARNESS_BIN}" ]] || [[ "${NEED_REBUILD}" -eq 1 ]]; then
         echo "  Linking:   ${HARNESS_DIR}"
+        HARNESS_LIBS="${EXTRA_LIBS[$HARNESS_DIR]:-}"
         clang -fsanitize=fuzzer -g -O1 ${ALL_INCLUDES} \
-            "${HARNESS_SRC}" ${OBJ_FILES} \
+            "${HARNESS_SRC}" ${OBJ_FILES} ${HARNESS_LIBS} \
             -o "${HARNESS_BIN}"
     fi
 

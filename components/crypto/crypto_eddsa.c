@@ -93,6 +93,7 @@ int crypto_core_hsalsa20(u8 *out, const u8 *in, const u8 *k, const u8 *c) { core
  * Replaces the inline TweetNaCl SHA-512 with the platform implementation
  * which is optimised for the target and may use hardware acceleration. */
 static int crypto_hash(u8 *out, const u8 *m, u64 n) {
+    (void)psa_crypto_init();
     psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
     psa_status_t status;
 

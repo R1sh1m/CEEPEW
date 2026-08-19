@@ -240,5 +240,6 @@ add_executable(fuzz_smoke_arq
 )
 target_link_libraries(fuzz_smoke_arq PRIVATE ceepew_portable)
 target_include_directories(fuzz_smoke_arq PRIVATE ${COMMON_INCLUDES})
-add_test(NAME fuzz_smoke_arq COMMAND fuzz_smoke_arq ${COMPONENT_DIR}/fuzz/fuzz_arq/corpus/*)
+file(GLOB FUZZ_ARQ_SEEDS ${COMPONENT_DIR}/fuzz/fuzz_arq/corpus/*)
+add_test(NAME fuzz_smoke_arq COMMAND fuzz_smoke_arq ${FUZZ_ARQ_SEEDS})
 

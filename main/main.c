@@ -17,6 +17,8 @@
 #include "session_fsm.h"
 #include "hal_radio.h"
 #include "hal_gpio.h"
+#include "driver/gpio.h"
+#include "hal_i2c_scanner.h"
 #include "hal_adc.h"
 #include "hal_rng.h"
 #include "crypto_rng.h"
