@@ -189,7 +189,7 @@ static const uint32_t s_rev_gattc_backoff_ms[] = {
 };
 
 /* Fragment reassembly state for multi-fragment messages */
-#define CEEPEW_FRAG_TIMEOUT_MS  3000U  /* timeout for partial message reassembly */
+#define CEEPEW_FRAG_TIMEOUT_MS  10000U  /* timeout for partial message reassembly */
 static uint8_t s_frag_accum[CEEPEW_HUFF_BUF_MAX];
 static uint8_t s_frag_total = 0U;
 static uint8_t s_frag_expected_idx = 0U;
@@ -2135,6 +2135,8 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     /* New message start (either first fragment or single-fragment message) */
     if (frag_idx != 0U) {
       ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: START fragment with idx=%u != 0", (unsigned)frag_idx);
+      s_frag_active = false;
+      s_frag_accum_len = 0U;
       goto rx_cleanup;
     }
     if (total_frags == 0U || total_frags > CEEPEW_MAX_FRAGMENTS) {

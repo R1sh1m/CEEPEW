@@ -10,8 +10,8 @@
  * - No dynamic allocation; bounded buffer operations
  *
  * DESIGN:
- * The primary code table covers 51 symbols (a-z, A-Z, 0-9, space, common punctuation).
- * Uncommon symbols are encoded via 12-bit escape: ESC_CODE (0x0FFF) + 8-bit symbol.
+ * The primary code table covers 88 symbols (a-z, A-Z, 0-9, space, common punctuation).
+ * Uncommon symbols are encoded via 12-bit escape: ESC_CODE (0x0FE0) + 8-bit symbol.
  * Passthrough flag in first 2 bits of output: 0b11 = passthrough, 0b10 = compressed.
  *
  * THREAD SAFETY: All functions are stateless. Caller responsible for buffer
@@ -33,10 +33,13 @@ extern "C" {
 /* ────────────────────────────────────────────────────────────────────── */
 
 /* Number of symbols in primary Huffman table */
-#define CEEPEW_HUFFMAN_PRIMARY_SYMBOLS  54U
+#define CEEPEW_HUFFMAN_PRIMARY_SYMBOLS  88U
 
-/* Escape code for symbols not in primary table */
-#define CEEPEW_HUFFMAN_ESCAPE_CODE      (0x0FFFU)  /* 12-bit sentinel */
+/* Escape code for symbols not in primary table.
+ * 12-bit sentinel 0x0FE0 (111111100000). Every prefix (1..11 bits) is
+ * disjoint from all table codes, so the decoder can never misread the
+ * escape as a table symbol and vice versa. */
+#define CEEPEW_HUFFMAN_ESCAPE_CODE      (0x0FE0U)  /* 12-bit sentinel */
 
 /* Passthrough mode flag (stored in first 2 bits of output byte 0) */
 #define CEEPEW_HUFFMAN_FLAG_PASSTHROUGH 0x3U       /* 0b11 */

@@ -2624,9 +2624,15 @@ static CeePewErr_t render_chat_detail(void)
         ptr += len;
     }
 
-    /* Scroll offset from potentiometer (0..255 mapped to 0..max(0, line_count-4)) */
+    /* Scroll offset from potentiometer (0..255 mapped to 0..max_scroll inclusive).
+     * Multiplying by (max_scroll + 1) before the >>8 makes the top of the range
+     * reachable: pot=255 -> (255 * (max_scroll+1)) >> 8 = max_scroll. */
     uint8_t max_scroll = (line_count > 4U) ? (uint8_t)(line_count - 4U) : 0U;
-    uint8_t scroll_offset = (max_scroll > 0U) ? (uint8_t)(((uint16_t)g_ui_ctx.user_input * max_scroll) >> 8U) : 0U;
+    uint8_t scroll_offset = 0U;
+    if (max_scroll > 0U) {
+        uint16_t scaled = (uint16_t)(((uint16_t)g_ui_ctx.user_input * (uint16_t)(max_scroll + 1U)) >> 8U);
+        scroll_offset = (scaled > (uint16_t)max_scroll) ? max_scroll : (uint8_t)scaled;
+    }
 
     /* Render visible window of 4 lines starting at scroll_offset */
     uint8_t visible_lines = (line_count > 4U) ? 4U : line_count;

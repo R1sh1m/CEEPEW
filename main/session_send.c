@@ -347,7 +347,11 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
             return CEEPEW_ERR_ALLOC;
         }
 
-        frag_in[0] = (uint8_t)(0x80U | ((total_frags - 1U) & 0x3FU)); /* START bit + total-1 (6 bits) */
+        /* Fragment header: START bit (0x80) only on the FIRST fragment;
+         * continuation fragments carry flags = total-1 without 0x80 so the
+         * receiver's reassembly treats them as continuations, not new starts. */
+        frag_in[0] = (uint8_t)(((frag_idx == 0U) ? 0x80U : 0x00U) |
+                               ((total_frags - 1U) & 0x3FU)); /* START bit + total-1 (6 bits) */
         frag_in[1] = frag_idx;                                         /* fragment index */
         if (chunk_len > 0U) {
             memcpy(frag_in + CEEPEW_FRAG_HEADER_BYTES, compressed + offset, chunk_len);

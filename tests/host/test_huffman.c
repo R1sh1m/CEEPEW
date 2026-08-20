@@ -207,13 +207,184 @@ static int test_get_table_entry_bounds(void)
         return 1;
     }
 
-    const CeePewHuffEntry_t *e54 = compress_huffman_get_table_entry(CEEPEW_HUFFMAN_PRIMARY_SYMBOLS);
-    if (e54 != NULL) {
+    const CeePewHuffEntry_t *e87 = compress_huffman_get_table_entry(CEEPEW_HUFFMAN_PRIMARY_SYMBOLS - 1U);
+    if (e87 == NULL || e87->code_len == 0U) {
+        printf("FAIL: get_table_entry(%u) invalid\n",
+               (unsigned)(CEEPEW_HUFFMAN_PRIMARY_SYMBOLS - 1U));
+        return 1;
+    }
+
+    const CeePewHuffEntry_t *e88 = compress_huffman_get_table_entry(CEEPEW_HUFFMAN_PRIMARY_SYMBOLS);
+    if (e88 != NULL) {
         printf("FAIL: get_table_entry(%u) should be out of bounds\n",
                (unsigned)CEEPEW_HUFFMAN_PRIMARY_SYMBOLS);
         return 1;
     }
     printf("PASS: table entry bounds\n");
+    return 0;
+}
+
+/* Regression: full compose keyboard charset (uppercase A-Z, digits,
+ * space, punctuation) must round-trip exactly. The old 54-symbol table
+ * lacked uppercase Y/P/B/V/K/J/X/Q/Z and all punctuation, which forced
+ * escape sequences that misdecoded as '9' (escape 0x0FFF shared the
+ * 7-bit prefix 0x7F with the code for '9'). */
+static int test_full_charset_roundtrip(void)
+{
+    const char input[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
+        ".,!?;:'\"_-@#/()+=%&*<>[]{}";
+    uint16_t in_len = (uint16_t)(sizeof(input) - 1U);
+    uint8_t comp[CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES];
+    uint16_t comp_len = 0;
+    uint8_t decomp[CEEPEW_HUFFMAN_MAX_INPUT_BYTES];
+    uint16_t decomp_len = 0;
+    CeePewHuffStats_t stats;
+
+    CeePewErr_t err = compress_huffman_compress((const uint8_t *)input, in_len,
+                                                 comp, &comp_len,
+                                                 (uint16_t)sizeof(comp), &stats);
+    if (err != CEEPEW_OK) {
+        printf("FAIL: full_charset compress returned %d\n", err);
+        return 1;
+    }
+    if (stats.passthrough_applied) {
+        printf("FAIL: full_charset unexpectedly used passthrough\n");
+        return 1;
+    }
+
+    err = compress_huffman_decompress(comp, comp_len, decomp, &decomp_len,
+                                       (uint16_t)sizeof(decomp));
+    if (err != CEEPEW_OK) {
+        printf("FAIL: full_charset decompress returned %d\n", err);
+        return 1;
+    }
+    if (decomp_len != in_len || memcmp(decomp, input, in_len) != 0) {
+        printf("FAIL: full_charset data mismatch (%u vs %u)\n",
+               (unsigned)decomp_len, (unsigned)in_len);
+        return 1;
+    }
+    printf("PASS: full charset round-trip (%u -> %u bytes)\n",
+           (unsigned)in_len, (unsigned)comp_len);
+    return 0;
+}
+
+/* Regression: the exact user-reported corruption
+ * "SO HOW DO YOU FEEL ABOUT IT?" must round-trip exactly. The old table
+ * escaped 'Y', 'B' and '?' and produced "SO HOW DO FELL A97ed Hiot". */
+static int test_user_message_regression(void)
+{
+    const char input[] = "SO HOW DO YOU FEEL ABOUT IT?";
+    uint16_t in_len = (uint16_t)(sizeof(input) - 1U);
+    uint8_t comp[CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES];
+    uint16_t comp_len = 0;
+    uint8_t decomp[CEEPEW_HUFFMAN_MAX_INPUT_BYTES];
+    uint16_t decomp_len = 0;
+    CeePewHuffStats_t stats;
+
+    CeePewErr_t err = compress_huffman_compress((const uint8_t *)input, in_len,
+                                                 comp, &comp_len,
+                                                 (uint16_t)sizeof(comp), &stats);
+    if (err != CEEPEW_OK) {
+        printf("FAIL: user_message compress returned %d\n", err);
+        return 1;
+    }
+
+    err = compress_huffman_decompress(comp, comp_len, decomp, &decomp_len,
+                                       (uint16_t)sizeof(decomp));
+    if (err != CEEPEW_OK) {
+        printf("FAIL: user_message decompress returned %d\n", err);
+        return 1;
+    }
+    if (decomp_len != in_len || memcmp(decomp, input, in_len) != 0) {
+        printf("FAIL: user_message mismatch: got '");
+        for (uint16_t i = 0U; i < decomp_len; i++) {
+            printf("%c", decomp[i] >= 32 && decomp[i] < 127 ? (char)decomp[i] : '?');
+        }
+        printf("' (exp 'SO HOW DO YOU FEEL ABOUT IT?')\n");
+        return 1;
+    }
+    printf("PASS: user message regression (escape-free)\n");
+    return 0;
+}
+
+/* Regression: an out-of-table symbol inside a compressible message must
+ * decode via the escape sequence. The old escape sentinel (0x0FFF) could
+ * never be decoded because its 7-bit prefix matched '9', so this message
+ * produced garbage. With the prefix-disjoint escape (0x0FE0) it must
+ * round-trip byte-exactly. */
+static int test_escape_prefix_disjoint(void)
+{
+    const char input[] = "aaaaaaaaaaaa|bbbbbbbbbbbb";
+    uint16_t in_len = (uint16_t)(sizeof(input) - 1U);
+    uint8_t comp[CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES];
+    uint16_t comp_len = 0;
+    uint8_t decomp[CEEPEW_HUFFMAN_MAX_INPUT_BYTES];
+    uint16_t decomp_len = 0;
+    CeePewHuffStats_t stats;
+
+    CeePewErr_t err = compress_huffman_compress((const uint8_t *)input, in_len,
+                                                 comp, &comp_len,
+                                                 (uint16_t)sizeof(comp), &stats);
+    if (err != CEEPEW_OK) {
+        printf("FAIL: escape_prefix_disjoint compress returned %d\n", err);
+        return 1;
+    }
+    if (stats.passthrough_applied) {
+        printf("FAIL: escape_prefix_disjoint unexpectedly used passthrough\n");
+        return 1;
+    }
+    if (stats.escape_sequences == 0U) {
+        printf("FAIL: escape_prefix_disjoint expected >=1 escape\n");
+        return 1;
+    }
+
+    err = compress_huffman_decompress(comp, comp_len, decomp, &decomp_len,
+                                       (uint16_t)sizeof(decomp));
+    if (err != CEEPEW_OK) {
+        printf("FAIL: escape_prefix_disjoint decompress returned %d\n", err);
+        return 1;
+    }
+    if (decomp_len != in_len || memcmp(decomp, input, in_len) != 0) {
+        printf("FAIL: escape_prefix_disjoint data mismatch\n");
+        return 1;
+    }
+    printf("PASS: escape prefix-disjoint round-trip (%u escapes)\n",
+           (unsigned)stats.escape_sequences);
+    return 0;
+}
+
+/* Regression: escaped symbol adjacent to table symbols (e.g. '|' next to
+ * '9') must not create a false escape or false symbol match at the
+ * bit level. */
+static int test_escape_adjacent_digit(void)
+{
+    const char input[] = "9999999999|9999999999";
+    uint16_t in_len = (uint16_t)(sizeof(input) - 1U);
+    uint8_t comp[CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES];
+    uint16_t comp_len = 0;
+    uint8_t decomp[CEEPEW_HUFFMAN_MAX_INPUT_BYTES];
+    uint16_t decomp_len = 0;
+
+    CeePewErr_t err = compress_huffman_compress((const uint8_t *)input, in_len,
+                                                 comp, &comp_len,
+                                                 (uint16_t)sizeof(comp), NULL);
+    if (err != CEEPEW_OK) {
+        printf("FAIL: escape_adjacent_digit compress returned %d\n", err);
+        return 1;
+    }
+
+    err = compress_huffman_decompress(comp, comp_len, decomp, &decomp_len,
+                                       (uint16_t)sizeof(decomp));
+    if (err != CEEPEW_OK) {
+        printf("FAIL: escape_adjacent_digit decompress returned %d\n", err);
+        return 1;
+    }
+    if (decomp_len != in_len || memcmp(decomp, input, in_len) != 0) {
+        printf("FAIL: escape_adjacent_digit data mismatch\n");
+        return 1;
+    }
+    printf("PASS: escape adjacent to digit\n");
     return 0;
 }
 
@@ -251,6 +422,10 @@ int main(void)
     failures += test_escape_symbols();
     failures += test_passthrough_trigger();
     failures += test_get_table_entry_bounds();
+    failures += test_full_charset_roundtrip();
+    failures += test_user_message_regression();
+    failures += test_escape_prefix_disjoint();
+    failures += test_escape_adjacent_digit();
     failures += test_estimate_accuracy();
     printf("\nStatic Huffman: %d failures\n", failures);
     return failures;

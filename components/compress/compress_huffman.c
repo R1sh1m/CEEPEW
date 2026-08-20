@@ -20,12 +20,18 @@
 #include <string.h>
 
 /* ────────────────────────────────────────────────────────────────────── */
-/* Static Huffman Table (54 symbols, canonical prefix-free codes)        */
+/* Static Huffman Table (88 symbols, canonical prefix-free codes)        */
 /* ────────────────────────────────────────────────────────────────────── */
 
 /* Canonical prefix-free Huffman codes derived from English letter
-   frequency distribution. Code lengths (5/6/7 bits) satisfy the Kraft
-   inequality: Σ 2^(-len) = 12/32 + 38/64 + 4/128 = 1.0.
+   frequency distribution. Code lengths (5/6/7/8 bits) satisfy the Kraft
+   inequality: Σ 2^(-len) = 10/32 + 24/64 + 24/128 + 30/256 = 0.9922 ≤ 1.0.
+
+   The table covers the complete compose keyboard charset (a-z, A-Z, 0-9,
+   space, and common punctuation) so user-typed messages never require
+   escapes. The 12-bit escape sentinel (0x0FE0) is prefix-disjoint from
+   every table code at all lengths 1..11, making escape decoding
+   unambiguous.
 
    Codes are assigned MSB-first in the bit stream (encoder writes the
    highest bit of the code value first). Sorted by frequency descending
@@ -33,10 +39,11 @@
 
    Frequency distribution: space (~13%), e (~12.7%), t (~9.1%),
    a/o/i/n/s/h/r/d (~4-8%), l/c/u/m/w/f/g/y/p/b/v/k (~1-4%),
-   j/x/q/z/E/A/T/O/I/S/H/R/N/D/L/C/M/U/W/F/G/0-9 (<1% each).
+   j/x/q/z/E/A/T/O/I/S/H/R/N/D/L/C/M/U/W/F/G/Y/P/B/V/K/J/X/Q/Z/0-9
+   and punctuation (<1% each).
 */
 static const CeePewHuffEntry_t g_huffman_table[CEEPEW_HUFFMAN_PRIMARY_SYMBOLS] = {
-    /* Len 5 (12 most frequent symbols) */
+    /* Len 5 (10 most frequent symbols) */
     { ' ',    0x0000U,  5 },
     { 'e',    0x0001U,  5 },
     { 't',    0x0002U,  5 },
@@ -47,52 +54,87 @@ static const CeePewHuffEntry_t g_huffman_table[CEEPEW_HUFFMAN_PRIMARY_SYMBOLS] =
     { 's',    0x0007U,  5 },
     { 'h',    0x0008U,  5 },
     { 'r',    0x0009U,  5 },
-    { 'd',    0x000AU,  5 },
-    { 'l',    0x000BU,  5 },
-    /* Len 6 (38 medium-frequency symbols) */
-    { 'c',    0x0018U,  6 },
-    { 'u',    0x0019U,  6 },
-    { 'm',    0x001AU,  6 },
-    { 'w',    0x001BU,  6 },
-    { 'f',    0x001CU,  6 },
-    { 'g',    0x001DU,  6 },
-    { 'y',    0x001EU,  6 },
-    { 'p',    0x001FU,  6 },
-    { 'b',    0x0020U,  6 },
-    { 'v',    0x0021U,  6 },
-    { 'k',    0x0022U,  6 },
-    { 'j',    0x0023U,  6 },
-    { 'x',    0x0024U,  6 },
-    { 'q',    0x0025U,  6 },
-    { 'z',    0x0026U,  6 },
-    { 'E',    0x0027U,  6 },
-    { 'A',    0x0028U,  6 },
-    { 'T',    0x0029U,  6 },
-    { 'O',    0x002AU,  6 },
-    { 'I',    0x002BU,  6 },
-    { 'S',    0x002CU,  6 },
-    { 'H',    0x002DU,  6 },
-    { 'R',    0x002EU,  6 },
-    { 'N',    0x002FU,  6 },
-    { 'D',    0x0030U,  6 },
-    { 'L',    0x0031U,  6 },
-    { 'C',    0x0032U,  6 },
-    { 'M',    0x0033U,  6 },
-    { 'U',    0x0034U,  6 },
-    { 'W',    0x0035U,  6 },
-    { 'F',    0x0036U,  6 },
-    { 'G',    0x0037U,  6 },
-    { '0',    0x0038U,  6 },
-    { '1',    0x0039U,  6 },
-    { '2',    0x003AU,  6 },
-    { '3',    0x003BU,  6 },
-    { '4',    0x003CU,  6 },
-    { '5',    0x003DU,  6 },
-    /* Len 7 (4 least frequent symbols) */
-    { '6',    0x007CU,  7 },
-    { '7',    0x007DU,  7 },
-    { '8',    0x007EU,  7 },
-    { '9',    0x007FU,  7 },
+    /* Len 6 (24 medium-frequency symbols) */
+    { 'd',    0x0014U,  6 },
+    { 'l',    0x0015U,  6 },
+    { 'c',    0x0016U,  6 },
+    { 'u',    0x0017U,  6 },
+    { 'm',    0x0018U,  6 },
+    { 'w',    0x0019U,  6 },
+    { 'f',    0x001AU,  6 },
+    { 'g',    0x001BU,  6 },
+    { 'y',    0x001CU,  6 },
+    { 'p',    0x001DU,  6 },
+    { 'b',    0x001EU,  6 },
+    { 'v',    0x001FU,  6 },
+    { 'k',    0x0020U,  6 },
+    { 'j',    0x0021U,  6 },
+    { 'x',    0x0022U,  6 },
+    { 'q',    0x0023U,  6 },
+    { 'z',    0x0024U,  6 },
+    { 'E',    0x0025U,  6 },
+    { 'A',    0x0026U,  6 },
+    { 'T',    0x0027U,  6 },
+    { 'O',    0x0028U,  6 },
+    { 'I',    0x0029U,  6 },
+    { 'S',    0x002AU,  6 },
+    { 'H',    0x002BU,  6 },
+    /* Len 7 (24 less frequent symbols) */
+    { 'R',    0x0058U,  7 },
+    { 'N',    0x0059U,  7 },
+    { 'D',    0x005AU,  7 },
+    { 'L',    0x005BU,  7 },
+    { 'C',    0x005CU,  7 },
+    { 'M',    0x005DU,  7 },
+    { 'U',    0x005EU,  7 },
+    { 'W',    0x005FU,  7 },
+    { 'F',    0x0060U,  7 },
+    { 'G',    0x0061U,  7 },
+    { 'Y',    0x0062U,  7 },
+    { 'P',    0x0063U,  7 },
+    { 'B',    0x0064U,  7 },
+    { 'V',    0x0065U,  7 },
+    { 'K',    0x0066U,  7 },
+    { 'J',    0x0067U,  7 },
+    { 'X',    0x0068U,  7 },
+    { 'Q',    0x0069U,  7 },
+    { 'Z',    0x006AU,  7 },
+    { '0',    0x006BU,  7 },
+    { '1',    0x006CU,  7 },
+    { '2',    0x006DU,  7 },
+    { '3',    0x006EU,  7 },
+    { '4',    0x006FU,  7 },
+    /* Len 8 (30 least frequent symbols: digits 5-9, punctuation) */
+    { '5',    0x00E0U,  8 },
+    { '6',    0x00E1U,  8 },
+    { '7',    0x00E2U,  8 },
+    { '8',    0x00E3U,  8 },
+    { '9',    0x00E4U,  8 },
+    { '.',    0x00E5U,  8 },
+    { ',',    0x00E6U,  8 },
+    { '!',    0x00E7U,  8 },
+    { '?',    0x00E8U,  8 },
+    { ';',    0x00E9U,  8 },
+    { ':',    0x00EAU,  8 },
+    { '\'',   0x00EBU,  8 },
+    { '"',    0x00ECU,  8 },
+    { '_',    0x00EDU,  8 },
+    { '-',    0x00EEU,  8 },
+    { '@',    0x00EFU,  8 },
+    { '#',    0x00F0U,  8 },
+    { '/',    0x00F1U,  8 },
+    { '(',    0x00F2U,  8 },
+    { ')',    0x00F3U,  8 },
+    { '+',    0x00F4U,  8 },
+    { '=',    0x00F5U,  8 },
+    { '%',    0x00F6U,  8 },
+    { '&',    0x00F7U,  8 },
+    { '*',    0x00F8U,  8 },
+    { '<',    0x00F9U,  8 },
+    { '>',    0x00FAU,  8 },
+    { '[',    0x00FBU,  8 },
+    { ']',    0x00FCU,  8 },
+    { '{',    0x00FDU,  8 },
 };
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -487,8 +529,9 @@ uint16_t compress_huffman_estimate_output_size(const uint8_t *data, uint16_t len
         return 1U;  /* Just the flag byte */
     }
 
-    /* Estimate bits needed: flag (2) + 2-byte length prefix (16) + symbol code lengths */
-    uint32_t estimated_bits = 2U + 16U;  /* Mode flag + length prefix */
+    /* Estimate bits needed: 3-byte header (flag byte + 2-byte length prefix,
+     * fully allocated as 24 bits by the writer) + symbol code lengths. */
+    uint32_t estimated_bits = 24U;  /* Flag byte + length prefix bytes */
 
     for (uint16_t i = 0U; i < len; i++) {
         uint8_t sym = data[i];
