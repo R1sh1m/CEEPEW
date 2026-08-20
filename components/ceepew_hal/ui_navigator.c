@@ -191,17 +191,25 @@ CeePewErr_t ui_nav_update(NavCtx_t *nav, uint8_t pot, uint32_t now_ms)
 
         /* Check if accumulated travel crosses the threshold. */
         int8_t abs_travel = nav->travel_accum >= 0 ? nav->travel_accum : -nav->travel_accum;
-
-        /* Velocity ramp: step multiplier = clamp(|dv| / VEL_DIV, 1, MAX_STEP). */
         int8_t abs_dv = dv >= 0 ? dv : -dv;
+
+        /* Dynamic speed curve:
+         * 1. Low speed (|dv| <= 2): Double threshold (NAV_STEP_THRESH * 2 = 8) so slow deliberate
+         *    dialing requires more physical rotation per character, giving fine precision and
+         *    eliminating overshooting.
+         * 2. Medium speed (3 <= |dv| < NAV_VEL_DIV): Standard threshold (NAV_STEP_THRESH = 4) for 1:1 stepping.
+         * 3. High speed (|dv| >= NAV_VEL_DIV): Velocity multiplier accelerates traversal.
+         */
+        uint8_t effective_thresh = (abs_dv <= 2) ? (uint8_t)(NAV_STEP_THRESH * 2U) : (uint8_t)NAV_STEP_THRESH;
+
         uint8_t vel_mult = 1U + (uint8_t)(abs_dv / NAV_VEL_DIV);
         if (vel_mult > NAV_MAX_STEP) {
             vel_mult = NAV_MAX_STEP;
         }
 
-        if (abs_travel >= NAV_STEP_THRESH) {
+        if (abs_travel >= effective_thresh) {
             /* Number of whole thresholds crossed. */
-            uint8_t threshold_crossings = (uint8_t)(abs_travel / NAV_STEP_THRESH);
+            uint8_t threshold_crossings = (uint8_t)(abs_travel / effective_thresh);
 
             /* Total steps = crossings * velocity multiplier. */
             uint8_t total_steps = threshold_crossings * vel_mult;
@@ -212,7 +220,7 @@ CeePewErr_t ui_nav_update(NavCtx_t *nav, uint8_t pot, uint32_t now_ms)
 
             /* Do NOT advance anchor — it tracks the latest sample.
              * Keep the remainder in travel_accum for sub-threshold precision. */
-            nav->travel_accum = (int8_t)(abs_travel % NAV_STEP_THRESH);
+            nav->travel_accum = (int8_t)(abs_travel % effective_thresh);
             if (dir < 0) {
                 nav->travel_accum = -nav->travel_accum;
             }

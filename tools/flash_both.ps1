@@ -157,23 +157,24 @@ function Format-Elapsed {
 # Environment initialisation
 # ---------------------------------------------------------------------------
 function Initialize-Environment {
-    if (Test-Path -LiteralPath $IdfProfile) {
-        Write-Info "[env] Sourcing IDF profile: $IdfProfile"
-        . $IdfProfile
-    } else {
-        Write-Warn "[env] IDF profile not found at $IdfProfile"
-        Write-Warn "[env] Ensure ESP-IDF environment is set manually, or set CEEPEW_IDF_PROFILE"
-    }
+    $env:IDF_PATH = "C:\esp\v6.0.2\esp-idf"
+    $env:IDF_TOOLS_PATH = "C:\Espressif\tools"
+    $env:IDF_PYTHON_ENV_PATH = "C:\Espressif\tools\python\v6.0.2\venv"
+    $env:ESP_IDF_VERSION = "6.0.2"
+    $idfBinPaths = @(
+        "C:\Espressif\tools\python\v6.0.2\venv\Scripts",
+        "C:\Espressif\tools\xtensa-esp-elf\esp-15.2.0_20251204\xtensa-esp-elf\bin",
+        "C:\Espressif\tools\cmake\4.0.3\bin",
+        "C:\Espressif\tools\ninja\1.12.1",
+        "C:\esp\v6.0.2\esp-idf\tools"
+    )
+    $env:PATH = ($idfBinPaths -join ';') + ';' + $env:PATH
 
-    $script:PythonExeResolved = $PythonExe
-    if (-not (Get-Command $script:PythonExeResolved -ErrorAction SilentlyContinue)) {
+    $script:PythonExeResolved = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $script:PythonExeResolved)) {
         $fallback = (Get-Command python -ErrorAction SilentlyContinue).Source
         if ($fallback) {
-            Write-Warn "[env] Python not found at configured path; using system python: $fallback"
             $script:PythonExeResolved = $fallback
-        } else {
-            Write-Err "[env] Python not found. Install Python 3.12+ or set CEEPEW_PYTHON"
-            exit 5
         }
     }
 }
@@ -424,7 +425,18 @@ function Invoke-Build {
     $buildLog  = Join-Path $LogDir "build_${timestamp}.log"
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $output = idf.py build 2>&1
+    $idfScript = Join-Path $env:IDF_PATH "tools/idf.py"
+    if (Test-Path "build/build.ninja") {
+        $output = ninja -C build 2>&1 | ForEach-Object {
+            if (-not $Quiet) { Write-Host "  $_" }
+            "$_"
+        }
+    } else {
+        $output = & $script:PythonExeResolved $idfScript build 2>&1 | ForEach-Object {
+            if (-not $Quiet) { Write-Host "  $_" }
+            "$_"
+        }
+    }
     $sw.Stop()
 
     $output | Out-File -FilePath $buildLog -Encoding utf8
@@ -433,9 +445,12 @@ function Invoke-Build {
         $outputText = ($output | Out-String)
         if ($outputText -match "currently active in the environment while the project was configured with") {
             Write-Warn "[build] Python environment mismatch detected -- running idf.py fullclean and retrying..."
-            idf.py fullclean 2>&1 | Out-Null
+            & $script:PythonExeResolved $idfScript fullclean 2>&1 | Out-Null
             $sw.Restart()
-            $output = idf.py build 2>&1
+            $output = & $script:PythonExeResolved $idfScript build 2>&1 | ForEach-Object {
+                if (-not $Quiet) { Write-Host "  $_" }
+                "$_"
+            }
             $sw.Stop()
             $output | Out-File -FilePath $buildLog -Encoding utf8
             if ($LASTEXITCODE -eq 0) {
@@ -444,7 +459,6 @@ function Invoke-Build {
             }
         }
         Write-Err "[build] BUILD FAILED (exit $LASTEXITCODE)"
-        if (-not $Quiet) { $output | ForEach-Object { Write-Host $_ } }
         Write-Err "[build] Full log: $buildLog"
         return $false
     }
@@ -454,19 +468,20 @@ function Invoke-Build {
 }
 
 # ---------------------------------------------------------------------------
-# Flash - parallel via ForEach-Object -Parallel -AsJob (PowerShell 7+)
+# Flash both devices (parallel via runspaces, fallback sequential)
 # ---------------------------------------------------------------------------
 function Invoke-FlashBoth {
-    param([string]$PortA, [string]$PortB)
+    param(
+        [Parameter(Mandatory=$true)][string]$PortA,
+        [Parameter(Mandatory=$true)][string]$PortB
+    )
 
     Write-Banner "Flashing Both Devices"
-
     Write-Info " Device A: $PortA"
     Write-Info " Device B: $PortB"
     Write-Info " Started:  $(Get-Date -Format 'HH:mm:ss')"
 
-    # Source IDF env in the calling scope so background runspaces can inherit it
-    if (Test-Path -LiteralPath $IdfProfile) { . $IdfProfile }
+    # Environment is initialized globally by Initialize-Environment
 
     $ports = @($PortA, $PortB)
     $flashTimer = [System.Diagnostics.Stopwatch]::StartNew()
@@ -476,7 +491,10 @@ function Invoke-FlashBoth {
         Write-Info "Flashing $port..."
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            $output = idf.py -p $port flash 2>&1 | ForEach-Object { "$_" }
+            $output = & $script:PythonExeResolved -m esptool --chip esp32 -p $port -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/ceepew.bin 2>&1 | ForEach-Object {
+                if (-not $Quiet) { Write-Host "  [$port] $_" }
+                "$_"
+            }
             $exitCode = $LASTEXITCODE
         } catch {
             $output = @("JOB ERROR: $_")
@@ -549,7 +567,10 @@ function Invoke-FlashBoth {
             Write-Info "[retry] $port - flashing (attempt 2)..."
             $swRetry = [System.Diagnostics.Stopwatch]::StartNew()
             try {
-                $output = idf.py -p $port flash 2>&1 | ForEach-Object { "$_" }
+                $output = & $script:PythonExeResolved -m esptool --chip esp32 -p $port -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/ceepew.bin 2>&1 | ForEach-Object {
+                    if (-not $Quiet) { Write-Host "  [$port] $_" }
+                    "$_"
+                }
                 $retryExit = $LASTEXITCODE
             } catch {
                 $output = @("JOB ERROR: $_")

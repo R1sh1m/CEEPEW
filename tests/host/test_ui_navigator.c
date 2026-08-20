@@ -99,11 +99,12 @@ static int test_slow_drift_two_units(void)
 
     uint32_t now = 1000U;
     (void)ui_nav_update(&nav, 100U, now);
-    /* Two units per frame for 10 frames = 20 total → 5 threshold crossings (THRESH=4). */
+    /* Two units per frame (|dv|<=2) activates slow-speed precision threshold (THRESH*2 = 8).
+     * 10 frames of 2 units = 20 total travel → 20 / 8 = 2 steps (fine precision). */
     for (int i = 0; i < 10; i++) {
         (void)ui_nav_update(&nav, (uint8_t)(102U + i * 2U), now + (i + 1) * 16U);
     }
-    TEST_ASSERT_EQ(ui_nav_get_index(&nav), 5U, "slow 2/frame drift = 1 step per 2 frames");
+    TEST_ASSERT_EQ(ui_nav_get_index(&nav), 2U, "slow 2/frame drift = 1 step per 4 frames (fine precision)");
     printf("test_slow_drift_two_units: OK\n");
     return 0;
 }
@@ -258,6 +259,43 @@ static int test_post_selection_hold(void)
     return 0;
 }
 
+static int test_button_press_freeze_and_reanchor(void)
+{
+    NavCtx_t nav;
+    /* User navigates to 'E' (idx 4) with pot at 100 */
+    (void)ui_nav_init(&nav, 66U, 4U);
+    (void)ui_nav_reset(&nav, 100U);
+    TEST_ASSERT_EQ(ui_nav_get_index(&nav), 4U, "initial position at 'E'");
+
+    uint32_t now = 1000U;
+    /* User pushes button down on stacked hardware: button_pressed becomes true */
+    /* While button is held (t=1000..1150ms), mechanical downward pressure shifts pot from 100 to 125 */
+    for (int i = 1; i <= 5; i++) {
+        uint8_t shifted_pot = (uint8_t)(100U + i * 5U); /* drifts up to 125 */
+        /* UI loop freezes cursor and re-anchors to shifted_pot */
+        (void)ui_nav_reset(&nav, shifted_pot);
+        TEST_ASSERT_EQ(ui_nav_get_index(&nav), 4U, "cursor remains solidly frozen at 'E' during press");
+    }
+
+    /* User releases button at t=1150ms: committed character is 4 ('E') */
+    uint32_t release_ms = 1150U;
+    (void)ui_nav_hold(&nav, 125U, 800U, release_ms);
+
+    /* Post-selection hold absorbs release recoil (pot 125 -> 130) */
+    for (int i = 1; i <= 10; i++) {
+        (void)ui_nav_update(&nav, (uint8_t)(125U + (i % 3) * 2U), release_ms + i * 30U);
+        TEST_ASSERT_EQ(ui_nav_get_index(&nav), 4U, "cursor held post-release");
+    }
+
+    /* Once hold window expires (t=2000ms), navigation resumes from resting pot without skipping */
+    (void)ui_nav_update(&nav, 130U, release_ms + 850U); /* seeds anchor at 130 */
+    (void)ui_nav_update(&nav, 134U, release_ms + 880U); /* +4 from anchor -> step 1 */
+    TEST_ASSERT_EQ(ui_nav_get_index(&nav), 5U, "stepping resumes smoothly after hold to next item 'F'");
+
+    printf("test_button_press_freeze_and_reanchor: OK\n");
+    return 0;
+}
+
 int main(void)
 {
     int failed = 0;
@@ -276,6 +314,7 @@ int main(void)
     failed += test_set_count_clamps();
     failed += test_reverse_no_bounce();
     failed += test_post_selection_hold();
+    failed += test_button_press_freeze_and_reanchor();
 
     if (failed == 0) {
         printf("\n=== ALL ui_navigator TESTS PASSED ===\n");

@@ -2021,8 +2021,8 @@ CeePewErr_t ui_peer_select_handle_input(uint8_t pot_value, bool button_pressed)
         return CEEPEW_OK;
     }
 
-    /* List mode: pot → index */
-    if (count > 0U) {
+    /* List mode: pot → index (freeze during button press) */
+    if (!button_pressed && count > 0U) {
         uint8_t idx = (uint8_t)(((uint16_t)pot_value * (uint16_t)count) / 256U);
         if (idx >= count) { idx = (uint8_t)(count - 1U); }
         g_ui_ctx.peer_select_idx = idx;
@@ -2508,9 +2508,12 @@ static CeePewErr_t render_chat_thread(void)
         return CEEPEW_OK;
     }
 
-    /* Potentiometer-driven selection */
-    uint8_t selected_idx = ui_map_pot_to_index(g_ui_ctx.user_input, count);
-    g_ui_ctx.chat_selected_idx = selected_idx;
+    /* Potentiometer-driven selection (freeze during button press) */
+    if (!g_ui_ctx.button_pressed) {
+        uint8_t sel = ui_map_pot_to_index(g_ui_ctx.user_input, count);
+        g_ui_ctx.chat_selected_idx = sel;
+    }
+    uint8_t selected_idx = g_ui_ctx.chat_selected_idx;
 
     /* Fewer visible messages when banner occupies screen real estate */
     uint8_t visible = degraded ? 2U : 3U;
@@ -2875,9 +2878,12 @@ static CeePewErr_t render_chat_menu(void)
         "  VIEW THREAD  "
     };
 
-    /* Map the full potentiometer travel across the visible options. */
-    uint8_t sel = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
-    g_ui_ctx.chat_menu_selected = sel;
+    /* Map the full potentiometer travel across the visible options (freeze during button press). */
+    if (!g_ui_ctx.button_pressed) {
+        uint8_t s = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
+        g_ui_ctx.chat_menu_selected = s;
+    }
+    uint8_t sel = g_ui_ctx.chat_menu_selected;
 
     for (uint8_t i = 0U; i < 2U; i++) {
         uint8_t y = (uint8_t)((uint8_t)(18U + banner_shift) + i * 20U);
@@ -2969,7 +2975,9 @@ static CeePewErr_t render_chat_compose(void)
 static CeePewErr_t render_chat_send_confirm(void)
 {
     hal_ui_clear();
-    g_ui_ctx.chat_send_confirm_selected = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
+    if (!g_ui_ctx.button_pressed) {
+        g_ui_ctx.chat_send_confirm_selected = ui_map_pot_to_index(g_ui_ctx.user_input, 2U);
+    }
     compose_terminate_buffer();
 
     ui_draw_centered_text(1U, "SEND MESSAGE");
@@ -3365,15 +3373,17 @@ CeePewErr_t ui_manager_update(void)
     if (state_changed) {
         g_ui_ctx.button_prev = g_ui_ctx.button_pressed;
     } else if (g_ui_ctx.current_state == UI_STATE_CODE_ENTRY) {
-        /* Map pot value (0-255) to extended charset 0-9,A-Z (36 symbols) */
-        uint8_t pot = g_ui_ctx.user_input;
-        static const char CODE_CHARSET[37] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"; /* 36 + NUL */
-        uint8_t idx = (uint8_t)(((uint16_t)pot * 36U) / 256U); /* 0..35 */
-        if (idx >= 36U) { idx = 35U; }
-        if (g_ui_ctx.code_selected < 4U) {
-            session_ui_ctx_lock();
-            g_ui_ctx.code_digits[g_ui_ctx.code_selected] = (uint8_t)CODE_CHARSET[idx];
-            session_ui_ctx_unlock();
+        /* Map pot value (0-255) to extended charset 0-9,A-Z (36 symbols) when button not held */
+        if (!g_ui_ctx.button_pressed) {
+            uint8_t pot = g_ui_ctx.user_input;
+            static const char CODE_CHARSET[37] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"; /* 36 + NUL */
+            uint8_t idx = (uint8_t)(((uint16_t)pot * 36U) / 256U); /* 0..35 */
+            if (idx >= 36U) { idx = 35U; }
+            if (g_ui_ctx.code_selected < 4U) {
+                session_ui_ctx_lock();
+                g_ui_ctx.code_digits[g_ui_ctx.code_selected] = (uint8_t)CODE_CHARSET[idx];
+                session_ui_ctx_unlock();
+            }
         }
 
         /* Button edge detection for short-press vs hold */
@@ -3456,10 +3466,12 @@ CeePewErr_t ui_manager_update(void)
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT) {
         /* Chat thread: potentiometer selects message, short press opens detail view, long press returns to menu */
         uint8_t count = msg_store_count();
-        if (count > 0U) {
-            g_ui_ctx.chat_selected_idx = ui_map_pot_to_index(g_ui_ctx.user_input, count);
-        } else {
-            g_ui_ctx.chat_selected_idx = 0U;
+        if (!g_ui_ctx.button_pressed) {
+            if (count > 0U) {
+                g_ui_ctx.chat_selected_idx = ui_map_pot_to_index(g_ui_ctx.user_input, count);
+            } else {
+                g_ui_ctx.chat_selected_idx = 0U;
+            }
         }
 
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
@@ -3519,8 +3531,13 @@ CeePewErr_t ui_manager_update(void)
     } else if (g_ui_ctx.current_state == UI_STATE_CHAT_COMPOSE) {
         /* Flat compose: navigator provides hysteresis, dynamic velocity ramp & edge dwell */
         (void)ui_nav_set_count(&g_ui_ctx.nav, COMPOSE_TOTAL_CHOICES);
-        (void)ui_nav_update(&g_ui_ctx.nav, g_ui_ctx.user_input, now_ms);
-        g_ui_ctx.keyboard_col = ui_nav_get_index(&g_ui_ctx.nav);
+        if (!g_ui_ctx.button_pressed) {
+            (void)ui_nav_update(&g_ui_ctx.nav, g_ui_ctx.user_input, now_ms);
+            g_ui_ctx.keyboard_col = ui_nav_get_index(&g_ui_ctx.nav);
+        } else {
+            /* Keep navigator anchor tracking the pot so mechanical torque/deflection during press does not jump cursor */
+            (void)ui_nav_reset(&g_ui_ctx.nav, g_ui_ctx.user_input);
+        }
 
         if (g_ui_ctx.button_pressed && !g_ui_ctx.button_prev) {
             g_ui_ctx.button_press_start_ms = now_ms;
@@ -3853,9 +3870,8 @@ static CeePewErr_t render_diag_page(void)
     DiagMetrics_t metrics;
     diag_collect_metrics(&metrics);
 
-    (void)ui_nav_set_count(&g_ui_ctx.nav, s_diag_page_count);
-    (void)ui_nav_update(&g_ui_ctx.nav, g_ui_ctx.user_input, (uint32_t)(esp_timer_get_time() / 1000LL));
-    uint8_t page = ui_nav_get_index(&g_ui_ctx.nav);
+    /* Equal proportion mapping for diag pages: each page gets 1/Nth of full pot travel (20% each) */
+    uint8_t page = ui_map_pot_to_index(g_ui_ctx.user_input, s_diag_page_count);
     char ln[48U];
     diag_draw_header(s_diag_page_names[page], page);
 
