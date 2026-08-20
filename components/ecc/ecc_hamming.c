@@ -268,7 +268,7 @@ CeePewErr_t ecc_hamming_decode(const uint8_t *in, uint16_t in_len, uint8_t *out,
             *corrected = true;
             s_fec_corrections_total++;
             ESP_LOGD(TAG, "FEC: Corrected 1-bit error at position %u (total_corrections=%lu)", 
-                     flip_idx, s_fec_corrections_total);
+                     (unsigned int)flip_idx, (unsigned long)s_fec_corrections_total);
         }
 
         uint16_t data11 = hamming_extract_data11(code);

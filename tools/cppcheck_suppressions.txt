@@ -1,0 +1,19 @@
+# Cppcheck suppressions for CEE-PEW
+missingInclude
+missingIncludeSystem
+unusedFunction
+unmatchedSuppression
+knownConditionTrueFalse
+unreadVariable
+variableScope
+constParameter
+constParameterPointer
+constVariable
+clarifyCalculation
+cstyleCast
+shadowVariable
+redundantAssignment
+unusedStructMember
+noValidConfiguration
+syntaxError
+checkersReport

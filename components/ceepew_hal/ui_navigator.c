@@ -7,6 +7,8 @@
 #include "ui_navigator.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
+#include <stddef.h>
+#include <stdint.h>
 
 /* Step threshold (pot units) — per CEEPEW_NAV_STEP_THRESH (default 4). */
 #define NAV_STEP_THRESH          CEEPEW_NAV_STEP_THRESH
