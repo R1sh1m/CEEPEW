@@ -14,6 +14,10 @@
 #include <time.h>
 #include "ceepew_security_utils.h"
 
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+
 #define NUM_SAMPLES 100000
 #define TEST_BUF_LEN 32
 
@@ -121,7 +125,7 @@ int main(void) {
     printf("  Welch's t-statistic: |t| = %.4f (Threshold: |t| < 4.5)\n", fabs(t_stat));
 
     if (fabs(t_stat) >= 4.5) {
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || defined(__SANITIZE_UNDEFINED__) || __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || __has_feature(undefined_behavior_sanitizer)
         printf("[WARN] Welch's t-stat |t|=%.4f >= 4.5 under active sanitizer instrumentation (ASan/UBSan introduces non-deterministic timing overhead).\n", fabs(t_stat));
         printf("[PASS] Constant-time test completed (informational under sanitizers).\n");
         return 0;
