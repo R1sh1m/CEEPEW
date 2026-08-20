@@ -9,11 +9,10 @@
 #include <stdint.h>
 #include <string.h>
 
-/* PSA Crypto for SHA-512 (mbedTLS v4.0 / ESP-IDF v6.0+).
+/* SHA-512 via mbedTLS message digest API (mbedtls/md.h).
  * Replaces the inline TweetNaCl SHA-512 with the platform implementation
- * which benefits from compiler optimisations and, on future chips with
- * SHA-512 hardware, automatic acceleration. */
-#include "psa/crypto.h"
+ * which is optimised for the target and portable across ESP-IDF and host platforms. */
+#include <mbedtls/md.h>
 
 #define FOR(i, n) for (i = 0; i < (n); ++i)
 #define sv static void
@@ -33,7 +32,6 @@ static const gf Y = {0x6658, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6
 static const gf I = {0xa0b0, 0x4a0e, 0x1b27, 0xc4ee, 0xe478, 0xad2f, 0x1806, 0x2f43, 0xd7a7, 0x3dfb, 0x0099, 0x2b4d, 0xdf0b, 0x4fc1, 0x2480, 0x2b83};
 static const u64 Lc[32] = {0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10};
 
-static inline u64 R(u64 x, int c) { return (x >> c) | (x << (64 - c));}
 
 static u32 L32(u32 x, int c) { return (x << c) | ((x & 0xffffffffU) >> (32 - c)); }
 static u32 ld32(const u8 *x) { u32 u = x[3]; u = (u << 8) | x[2]; u = (u << 8) | x[1]; return (u << 8) | x[0]; }
@@ -89,33 +87,26 @@ sv core(u8 *out, const u8 *in, const u8 *k, const u8 *c, int h) {
 
 int crypto_core_hsalsa20(u8 *out, const u8 *in, const u8 *k, const u8 *c) { core(out, in, k, c, 1); return 0; }
 
-/* SHA-512 via PSA Crypto API (mbedTLS v4.0 / ESP-IDF v6.0+).
- * Replaces the inline TweetNaCl SHA-512 with the platform implementation
- * which is optimised for the target and may use hardware acceleration. */
+/* SHA-512 via mbedTLS message digest API (mbedtls/md.h).
+ * Uses the platform / mbedTLS implementation consistent with crypto_sha256.c. */
 static int crypto_hash(u8 *out, const u8 *m, u64 n) {
-    (void)psa_crypto_init();
-    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
-    psa_status_t status;
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA512);
+    if (info == NULL) { return -1; }
 
-    status = psa_hash_setup(&op, PSA_ALG_SHA_512);
-    if (status != PSA_SUCCESS) { return -1; }
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    int rc = mbedtls_md_setup(&ctx, info, 0);
+    if (rc != 0) { mbedtls_md_free(&ctx); return -1; }
 
-    /* Feed data in chunks to avoid excessive stack use for large messages.
-     * PSA drivers may DMA from SRAM, so the source must be word-aligned
-     * for some targets — but the API handles unaligned input. */
-    u64 remaining = n;
-    const u8 *ptr = m;
-    while (remaining > 0U) {
-        u64 chunk = (remaining > 4096U) ? 4096U : remaining;
-        status = psa_hash_update(&op, ptr, (size_t)chunk);
-        if (status != PSA_SUCCESS) { return -1; }
-        ptr += chunk;
-        remaining -= chunk;
-    }
+    rc = mbedtls_md_starts(&ctx);
+    if (rc != 0) { mbedtls_md_free(&ctx); return -1; }
 
-    size_t hash_len = 0U;
-    status = psa_hash_finish(&op, out, 64U, &hash_len);
-    return (status == PSA_SUCCESS && hash_len == 64U) ? 0 : -1;
+    rc = mbedtls_md_update(&ctx, m, (size_t)n);
+    if (rc != 0) { mbedtls_md_free(&ctx); return -1; }
+
+    rc = mbedtls_md_finish(&ctx, out);
+    mbedtls_md_free(&ctx);
+    return (rc == 0) ? 0 : -1;
 }
 
 static void set25519(gf r, const gf a) { int i; FOR(i, 16) r[i] = a[i]; }

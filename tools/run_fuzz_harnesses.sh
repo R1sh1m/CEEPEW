@@ -80,27 +80,30 @@ if [[ ${HAVE_LIBFUZZER} -eq 0 ]]; then
     exit 0
 fi
 
+# Common sources needed by all harnesses (assertions and security utils)
+COMMON_SRCS="components/ceepew_common/ceepew_security_utils.c tests/host/stubs/ceepew_assert_stub.c"
+
 # Harness directory   → component source files needed
 declare -A HARNESSES
 HARNESSES[fuzz_ascon]="components/crypto/crypto_ascon.c"
 HARNESSES[fuzz_sha256]="components/crypto/crypto_sha256.c"
 HARNESSES[fuzz_hamming]="components/ecc/ecc_hamming.c"
-HARNESSES[fuzz_hkdf]="components/crypto/crypto_hkdf.c components/crypto/crypto_sha256.c"
-HARNESSES[fuzz_arq]="components/ecc/ecc_arq.c"
+HARNESSES[fuzz_hkdf]="components/crypto/crypto_hkdf.c components/crypto/crypto_sha256.c components/crypto/crypto_hmac.c"
+HARNESSES[fuzz_arq]="components/ecc/ecc_arq.c tests/host/stubs/fuzz_arq_runtime_stub.c"
 
 # Include paths common to all harnesses
-COMMON_INCLUDES="-I${ROOT}/components/ceepew_common -I${ROOT}/components/hal -I${ROOT}/components/crypto -I${ROOT}/components/ecc -I${ROOT}/components/transport"
+COMMON_INCLUDES="-I${ROOT}/components/ceepew_common -I${ROOT}/components/hal -I${ROOT}/components/crypto -I${ROOT}/components/ecc -I${ROOT}/components/transport -I${ROOT}/tests/host/include"
 
 # Compile definitions for host-side builds (stubs for ESP-IDF macros)
 COMMON_DEFS="-DWIFI_PS_MIN_MODEM=0 -DWIFI_PS_NONE=0 -DCONFIG_CEEPEW_DEVELOPMENT_MODE=1"
 
 # Per-harness extra include paths (e.g. for ESP-IDF dependencies)
 declare -A EXTRA_INCLUDES
-EXTRA_INCLUDES[fuzz_ascon]="-I${ROOT}/tests/host/include"
-EXTRA_INCLUDES[fuzz_sha256]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/mbedtls/mbedtls/include -I${IDF_PATH}/components/mbedtls/port/include"
-EXTRA_INCLUDES[fuzz_hkdf]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/mbedtls/mbedtls/include -I${IDF_PATH}/components/mbedtls/port/include"
-EXTRA_INCLUDES[fuzz_hamming]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/esp_common/include -I${IDF_PATH}/components/log/include"
-EXTRA_INCLUDES[fuzz_arq]="-I${ROOT}/tests/host/include -I${IDF_PATH}/components/esp_common/include -I${IDF_PATH}/components/log/include -I${IDF_PATH}/components/freertos/FreeRTOS-Kernel/include -I${IDF_PATH}/components/freertos/esp_additions/include -I${IDF_PATH}/components/esp_timer/include -I${IDF_PATH}/components/esp_system/include -I${IDF_PATH}/components/esp_hw_support/include -I${IDF_PATH}/components/esp_rom/include -I${IDF_PATH}/components/soc/include -I${IDF_PATH}/components/hal/include -I${IDF_PATH}/components/esp_random/include"
+EXTRA_INCLUDES[fuzz_ascon]=""
+EXTRA_INCLUDES[fuzz_sha256]="-I${IDF_PATH}/components/mbedtls/mbedtls/include -I${IDF_PATH}/components/mbedtls/port/include"
+EXTRA_INCLUDES[fuzz_hkdf]="-I${IDF_PATH}/components/mbedtls/mbedtls/include -I${IDF_PATH}/components/mbedtls/port/include"
+EXTRA_INCLUDES[fuzz_hamming]="-I${IDF_PATH}/components/esp_common/include -I${IDF_PATH}/components/log/include"
+EXTRA_INCLUDES[fuzz_arq]="-I${IDF_PATH}/components/esp_common/include -I${IDF_PATH}/components/log/include -I${IDF_PATH}/components/freertos/FreeRTOS-Kernel/include -I${IDF_PATH}/components/freertos/esp_additions/include -I${IDF_PATH}/components/esp_timer/include -I${IDF_PATH}/components/esp_system/include -I${IDF_PATH}/components/esp_hw_support/include -I${IDF_PATH}/components/esp_rom/include -I${IDF_PATH}/components/soc/include -I${IDF_PATH}/components/hal/include -I${IDF_PATH}/components/esp_random/include"
 
 declare -A EXTRA_LIBS
 EXTRA_LIBS[fuzz_sha256]="-lmbedcrypto"
@@ -113,6 +116,18 @@ mkdir -p "${BUILD_DIR}"
 echo "============================================"
 echo " CEE-PEW Fuzz Harness Smoke Tests"
 echo "============================================"
+
+# Compile common objects first
+COMMON_OBJS=""
+for CSRC_REL in ${COMMON_SRCS}; do
+    CSRC="${ROOT}/${CSRC_REL}"
+    COBJ="${BUILD_DIR}/$(basename "${CSRC_REL}" .c).o"
+    if [[ ! -f "${COBJ}" ]] || [[ "${CSRC}" -nt "${COBJ}" ]]; then
+        echo "  Compiling common: ${CSRC_REL}"
+        clang -fsanitize=fuzzer -g -O1 ${COMMON_DEFS} ${COMMON_INCLUDES} -c "${CSRC}" -o "${COBJ}"
+    fi
+    COMMON_OBJS="${COMMON_OBJS} ${COBJ}"
+done
 
 TOTAL=0
 PASSED=0
@@ -155,7 +170,7 @@ for HARNESS_DIR in "${!HARNESSES[@]}"; do
         echo "  Linking:   ${HARNESS_DIR}"
         HARNESS_LIBS="${EXTRA_LIBS[$HARNESS_DIR]:-}"
         clang -fsanitize=fuzzer -g -O1 ${ALL_INCLUDES} \
-            "${HARNESS_SRC}" ${OBJ_FILES} ${HARNESS_LIBS} \
+            "${HARNESS_SRC}" ${OBJ_FILES} ${COMMON_OBJS} ${HARNESS_LIBS} \
             -o "${HARNESS_BIN}"
     fi
 

@@ -6,16 +6,18 @@ set(IDF_TARGET esp32)
 # Keep CMake output focused on warnings and errors.
 set(CMAKE_MESSAGE_LOG_LEVEL NOTICE)
 
-# GCC 15.2.0 toolchain requires explicit dynconfig to load Xtensa CPU
-# config (rer opcode, MUL16, etc.). Without this the assembler errors
-# on xtensa-specific instructions and cmake C/C++ compiler detection
-# fails because the Rust wrapper in bin/ (which we bypass) normally
-# passes this flag.  The flag tells GCC which xtensa .so to load.
-# Use the short name — cc1.exe resolves it from its own lib directory.
-set(_DYNCONFIG "xtensa_esp32.so")
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mdynconfig=${_DYNCONFIG} -std=gnu11")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mdynconfig=${_DYNCONFIG} -std=gnu++17")
-set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -mdynconfig=${_DYNCONFIG}")
+# GCC 15.2.0 toolchain on Windows requires explicit dynconfig to load Xtensa CPU
+# config (rer opcode, MUL16, etc.). On Linux/Docker CI the standard IDF toolchain
+# handles CPU config without -mdynconfig.
+if(WIN32)
+    set(_DYNCONFIG "xtensa_esp32.so")
+    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mdynconfig=${_DYNCONFIG} -std=gnu11")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mdynconfig=${_DYNCONFIG} -std=gnu++17")
+    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -mdynconfig=${_DYNCONFIG}")
+else()
+    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -std=gnu11")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
+endif()
 
 # Custom component directories
 set(EXTRA_COMPONENT_DIRS

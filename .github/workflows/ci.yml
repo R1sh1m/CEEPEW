@@ -135,12 +135,15 @@ jobs:
             --inline-suppr \
             -I components/ceepew_common \
             -I components/ceepew_hal \
+            -I components/ceepew_oled \
             -I components/hal \
             -I components/crypto \
             -I components/ecc \
             -I components/transport \
             -I components/mem \
             -I components/compress \
+            -I components/tools \
+            -I main \
             -i build \
             -i tests \
             -i fuzz \

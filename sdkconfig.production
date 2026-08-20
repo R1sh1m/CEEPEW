@@ -10,8 +10,6 @@
 # DO NOT re-add secure boot / flash encryption here without a dedicated
 # provisioning process — they burn one-way eFuses on the target hardware.
 
-include sdkconfig.defaults
-
 # Development mode MUST be off for production (real-usage) firmware.
 CONFIG_CEEPEW_DEVELOPMENT_MODE=n
 
