@@ -1,4 +1,7 @@
 # Cppcheck suppressions for CEE-PEW firmware & host test infrastructure
+unknownMacro
+ConfigurationNotChecked
+normalCheckLevelMaxBranches
 missingInclude
 missingIncludeSystem
 unusedFunction

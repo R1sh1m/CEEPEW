@@ -13,18 +13,16 @@
 # the ordering inconsistency can surface.
 if(NOT EXISTS "${RSP_IN}")
     message(STATUS "wrap_rsp_in_group: ${RSP_IN} not yet generated — skipping")
-    return()
+else()
+    file(READ "${RSP_IN}" RSP_CONTENT)
+
+    string(STRIP "${RSP_CONTENT}" RSP_CONTENT)
+
+    if(RSP_CONTENT MATCHES "-Wl,--start-group")
+        message(STATUS "rsp already has --start-group; leaving it alone")
+    else()
+        set(NEW_CONTENT "-Wl,--start-group ${RSP_CONTENT} -Wl,--end-group")
+        file(WRITE "${RSP_OUT}" "${NEW_CONTENT}")
+        message(STATUS "Wrapped rsp with group flags: ${RSP_OUT}")
+    endif()
 endif()
-
-file(READ "${RSP_IN}" RSP_CONTENT)
-
-string(STRIP "${RSP_CONTENT}" RSP_CONTENT)
-
-if(RSP_CONTENT MATCHES "-Wl,--start-group")
-    message(STATUS "rsp already has --start-group; leaving it alone")
-    return()
-endif()
-
-set(NEW_CONTENT "-Wl,--start-group ${RSP_CONTENT} -Wl,--end-group")
-file(WRITE "${RSP_OUT}" "${NEW_CONTENT}")
-message(STATUS "Wrapped rsp with group flags: ${RSP_OUT}")

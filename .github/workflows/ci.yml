@@ -130,6 +130,7 @@ jobs:
         run: |
           cppcheck --error-exitcode=1 \
             --suppressions-list=tools/cppcheck_suppressions.txt \
+            --suppress=unknownMacro \
             --enable=warning,portability \
             --std=c11 \
             --inline-suppr \

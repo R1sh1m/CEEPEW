@@ -67,6 +67,9 @@ add_library(ceepew_mbedtls OBJECT ${MBEDTLS_SRCS})
 target_include_directories(ceepew_mbedtls PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(ceepew_mbedtls PUBLIC mbedcrypto)
 
+# Find system math library for test_side_channel (uses sqrt, fabs from math.h)
+find_library(MATH_LIBRARY m)
+
 # MinGW static linking workaround: -static avoids WDAC/DeviceGuard
 # blocking executables that import from external DLLs.
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND MINGW)
@@ -90,7 +93,7 @@ add_test(NAME test_security_utils COMMAND test_security_utils)
 add_executable(test_side_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/test_side_channel.c
 )
-target_link_libraries(test_side_channel PRIVATE ceepew_portable m)
+target_link_libraries(test_side_channel PRIVATE ceepew_portable ${MATH_LIBRARY})
 target_include_directories(test_side_channel PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_side_channel COMMAND test_side_channel)
 
