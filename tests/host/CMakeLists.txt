@@ -90,7 +90,7 @@ add_test(NAME test_security_utils COMMAND test_security_utils)
 add_executable(test_side_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/test_side_channel.c
 )
-target_link_libraries(test_side_channel PRIVATE ceepew_portable)
+target_link_libraries(test_side_channel PRIVATE ceepew_portable m)
 target_include_directories(test_side_channel PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_side_channel COMMAND test_side_channel)
 
