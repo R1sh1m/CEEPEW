@@ -26,8 +26,13 @@ idf_component_register(
         "."
     REQUIRES
         ceepew_common
-        crypto
         ceepew_oled
+        crypto
+        ecc
+        compress
+        transport
+        mem
+        tools
         esp_driver_gpio
         esp_driver_ledc
         esp_adc
@@ -44,3 +49,5 @@ idf_component_register(
         efuse
         bt
 )
+
+target_link_libraries(${COMPONENT_LIB} PUBLIC transport ceepew_oled)
