@@ -68,7 +68,12 @@ target_include_directories(ceepew_mbedtls PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(ceepew_mbedtls PUBLIC mbedcrypto)
 
 # Find system math library for test_side_channel (uses sqrt, fabs from math.h)
+# On Linux: libm.so (separate), on Windows: part of CRT (no separate lib)
 find_library(MATH_LIBRARY m)
+if(NOT MATH_LIBRARY)
+    # Math functions may be in standard C library (Windows, some embedded)
+    set(MATH_LIBRARY "")
+endif()
 
 # MinGW static linking workaround: -static avoids WDAC/DeviceGuard
 # blocking executables that import from external DLLs.
@@ -93,7 +98,10 @@ add_test(NAME test_security_utils COMMAND test_security_utils)
 add_executable(test_side_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/test_side_channel.c
 )
-target_link_libraries(test_side_channel PRIVATE ceepew_portable ${MATH_LIBRARY})
+target_link_libraries(test_side_channel PRIVATE ceepew_portable)
+if(MATH_LIBRARY)
+    target_link_libraries(test_side_channel PRIVATE ${MATH_LIBRARY})
+endif()
 target_include_directories(test_side_channel PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_side_channel COMMAND test_side_channel)
 
