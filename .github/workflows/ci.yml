@@ -133,6 +133,10 @@ jobs:
             --enable=warning,portability \
             --std=c11 \
             --inline-suppr \
+            -DCONFIG_CEEPEW_DEVELOPMENT_MODE=1 \
+            -DWIFI_PS_MIN_MODEM=0 \
+            -DWIFI_PS_NONE=0 \
+            -I tests/host/include \
             -I components/ceepew_common \
             -I components/ceepew_hal \
             -I components/ceepew_oled \
