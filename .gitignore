@@ -33,7 +33,6 @@ logs/
 # IDF managed components & dependencies
 managed_components/
 dependencies.lock
-partitions.csv
 
 # CI / AI assistant internals (keep workflows/)
 .github/agents/
