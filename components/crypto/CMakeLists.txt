@@ -17,7 +17,6 @@ idf_component_register(
         "."
     REQUIRES
         ceepew_common
-        ceepew_hal
         mbedtls
         esp_system
         esp_hw_support

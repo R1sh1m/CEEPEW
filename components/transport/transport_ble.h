@@ -389,7 +389,7 @@ void transport_ble_supervisor_stop(void);
 
 /* Phase → RGB pattern mapping (per spec table in
  * Technical Specification §4 — RGB LED Patterns). */
-#include "hal_rgb.h"
+#include "rgb_pattern.h"
 RgbPattern_t transport_ble_phase_to_rgb(PairingPhase_t phase);
 
 #ifdef __cplusplus

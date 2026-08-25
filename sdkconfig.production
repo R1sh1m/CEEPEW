@@ -20,6 +20,10 @@ CONFIG_CEEPEW_DEVELOPMENT_MODE=n
 # both burn one-way eFuses on first boot. Removed by design decision so the
 # firmware can be flashed and iterated on without permanently locking boards.
 
+# Custom partition table with extended factory partition (~1.94MB) for arduino-esp32 component
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
 # Bluetooth / BLE Configuration (Bluedroid required for Phases 1-2 Discovery + Pairing)
 CONFIG_BT_ENABLED=y
 CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y

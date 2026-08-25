@@ -30,6 +30,7 @@
 #include "freertos/task.h"
 #include "transport_ble_gatt_crypto.h"
 #include "ui_manager.h"
+#include "hal_rgb.h"
 #include <esp_timer.h>
 #include <stdio.h>
 #include <string.h>

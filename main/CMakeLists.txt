@@ -34,5 +34,3 @@ idf_component_register(
         bt
 )
 
-target_link_libraries(${COMPONENT_LIB} PUBLIC ceepew_hal transport ceepew_oled crypto ecc compress mem tools)
-

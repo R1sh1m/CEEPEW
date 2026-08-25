@@ -10,7 +10,6 @@ idf_component_register(
         "."
     REQUIRES
         ceepew_common
-        ceepew_hal
         crypto
         mem
         bt
@@ -19,4 +18,6 @@ idf_component_register(
         esp_timer
         log
         esp_common
+    PRIV_REQUIRES
+        ceepew_hal
 )

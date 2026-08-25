@@ -1,33 +1,8 @@
 #ifndef HAL_RGB_H
 #define HAL_RGB_H
 
-#include <stdint.h>
+#include "rgb_pattern.h"
 #include "hal_ui_types.h"
-
-typedef enum {
-    RGB_OFF = 0,
-    RGB_RED,
-    RGB_GREEN,
-    RGB_BLUE,
-    RGB_YELLOW,
-    RGB_CYAN,
-    RGB_MAGENTA,
-    RGB_WHITE,
-    RGB_RED_BLINK,
-    RGB_GREEN_BLINK,
-    RGB_BLUE_BLINK,
-    RGB_RED_PULSE,          /* Smooth PWM breathing red for error states */
-    RGB_WHITE_PULSE,        /* Smooth PWM breathing white */
-    RGB_BLUE_PULSE,         /* Smooth PWM breathing blue  */
-    RGB_GREEN_PULSE,        /* Smooth PWM breathing green */
-    RGB_AMBER_PULSE,        /* Smooth PWM breathing amber */
-    RGB_CYAN_PULSE,         /* Smooth PWM breathing cyan  */
-    RGB_YELLOW_RED_BLINK,   /* Alternating yellow/red blink — supervisor recovery indicator */
-    RGB_CYAN_BLINK,         /* Steady cyan blink — GATT identity exchange in progress */
-    RGB_RAINBOW_CYCLE,
-    RGB_HEARTBEAT,
-    RGB_PATTERN_COUNT
-} RgbPattern_t;
 
 CeePewErr_t rgb_init(void);
 CeePewErr_t rgb_set_pattern(RgbPattern_t pattern);

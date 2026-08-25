@@ -39,7 +39,7 @@ endif()
 include(${IDF_PATH}/tools/cmake/project.cmake)
 
 # Keep the build focused on the components this app actually uses.
-idf_build_set_property(MINIMAL_BUILD ON)
+idf_build_set_property(MINIMAL_BUILD OFF)
 
 project(ceepew)
 
@@ -55,10 +55,4 @@ if(NOT GIT_HASH)
     set(GIT_HASH "unknown")
 endif()
 add_compile_definitions(CEEPEW_GIT_HASH="${GIT_HASH}")
-
-# Link group options: ensure GNU ld resolves cyclic or forward dependencies
-# between components (e.g. ceepew_hal -> ceepew_oled) without requiring manual rsp wrapping.
-if(TARGET ceepew.elf)
-    target_link_libraries(ceepew.elf PRIVATE "-Wl,--start-group" "-Wl,--end-group")
-endif()
 
