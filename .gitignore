@@ -1,40 +1,52 @@
+# Build directories & compilation artifacts
 build/
 build_host/
 **/build_host/
 build_host_tmp/
 **/build_host_tmp/
+**/build_fuzz/
+out/
+
+# ESP-IDF runtime configurations & keys
 sdkconfig
-.claude/
+sdkconfig.old
+sdkconfig.bak
 *.pem
 *.key
 keys/
 *.p12
-.vscode/
-__pycache__/
-*.pyc
-venv/
-.git/
-.venv/
-.vcode/
-eim_config.toml
-project_snapshot.ps1
-project_snapshot_md.ps1
-Research/
-sdkconfig.old
-sdkconfig.bak
-.clangd
-CLAUDE.md
-opencode.json
-.cache/
-skills-lock.json
-logs/
-*.log
 
-# IDF managed components & dependencies
+# Managed components & lockfiles
 managed_components/
 dependencies.lock
 
-# CI / AI assistant internals (keep workflows/)
+# Python, environment & cache
+__pycache__/
+*.pyc
+venv/
+.venv/
+.cache/
+*.bak
+*.backup
+*~
+
+# IDE, OS & editor configuration
+.vscode/
+.vcode/
+.clangd
+.DS_Store
+Thumbs.db
+.ignore
+
+# Agent & AI assistant internals (keep .github/workflows/)
+.claude/
+CLAUDE.md
+.opencode/
+opencode.json
+opencode.jsonc
+skills-lock.json
+.agents/
+.slim/
 .github/agents/
 .github/instructions/
 .github/prompts/
@@ -42,28 +54,38 @@ dependencies.lock
 .github/COPILOT_USAGE.md
 .github/run_tests.sh
 
-# Docs — internal design documents, not published to GitHub
+# Project snapshots & scratch
+digest.txt
+project_snapshot.ps1
+project_snapshot_md.ps1
+eim_config.toml
+Research/
+
+# Logs & hardware analysis artifacts
+logs/
+*.log
+*log*.*
+DEVICE_LOG_FINDINGS.md
+ceepew_log_store.json
+CEEPEW_ICITIIT_HARDWARE_LOGS*.md
+drops_report.csv
+
+# Docs — internal design documents, presentations, and paper research
 docs/
 
-# Tools — keep scripts, ignore artifacts
+# Tools & capture artifacts
 tools/eim_config.toml
 tools/monitor_both_*.txt
 tools/*.txt
 !tools/cppcheck_suppressions.txt
-opencode.jsonc
+tools/citation_report.md
+tools/build_technical_report.py
+tools/recompute_paper_numbers.py
+tools/capture/captures/
+*.pcap
+*review_pack*
+*REVIEW_PACK*
 
-# Workspace coding agent customizations
-.agents/
-digest.txt
-
-DEVICE_LOG_FINDINGS.md
-ceepew_log_store.json
-*log*.*
-**/build_fuzz/
-
-# Local-only reports, benchmarks, and paper artifacts
+# Local-only benchmarks
 **/*benchmark*/
 **/*benchmark*.*
-CEEPEW_ICITIIT_HARDWARE_LOGS*.md
-out/
-tools/build_technical_report.py
