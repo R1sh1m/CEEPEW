@@ -28,9 +28,14 @@
 extern "C" {
 #endif
 
-/* Ring depth and per-entry payload cap. 4 x ~308 B ~= 1.2 KB static. */
+/* Ring depth and per-entry payload cap. 4 x ~296 B ~= 1.16 KB static.
+ * Cap is 288 B: any ESP-NOW frame is bounded by 24 (MAC header) + 250
+ * (ESP-NOW payload ceiling) + 4 (FCS) = 278 B, and the longest genuine DUT
+ * frame observed in the 2026-10-19 OTA sniffer capture was 269 B, so 288 B
+ * cannot truncate a real frame. (Was 300 B; reduced to free 48 B of DRAM
+ * needed to link the CONFIG_CEEPEW_BENCH_TIMING build.) */
 #define TRANSPORT_CAPTURE_RING_LEN  4U
-#define TRANSPORT_CAPTURE_MAX_BYTES 300U
+#define TRANSPORT_CAPTURE_MAX_BYTES 288U
 
 /* Install MGMT promiscuous filter + RX callback, enable promiscuous mode,
  * and start the logger task. Must be called AFTER BLE teardown when WiFi

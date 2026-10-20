@@ -69,12 +69,13 @@ static TaskHandle_t s_logger_task = NULL;
 /* Static footprint guard: ring must stay well under budget. */
 _Static_assert(sizeof(s_ring) <= 8192U, "capture ring exceeds 8 KB static budget");
 _Static_assert(TRANSPORT_CAPTURE_RING_LEN == 4U, "capture ring depth changed");
-_Static_assert(TRANSPORT_CAPTURE_MAX_BYTES == 300U, "capture payload cap changed");
+_Static_assert(TRANSPORT_CAPTURE_MAX_BYTES == 288U, "capture payload cap changed");
 
 /* ISR-light promiscuous callback: MGMT filter + OUI guard, copy, advance. */
 static void IRAM_ATTR transport_capture_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 {
-    /* accept all packet types – removed MGMT-only filter */
+    /* All promiscuous packet types are delivered to this callback; the OUI
+     * guard below selects ESP-NOW vendor action frames. */
     if (buf == NULL) {
         return;
     }
@@ -84,7 +85,17 @@ static void IRAM_ATTR transport_capture_cb(void *buf, wifi_promiscuous_pkt_type_
         return;
     }
     const uint8_t *payload = pkt->payload;
-    /* OUI guard disabled */
+    /* ESP-NOW vendor action-frame guard (original design, restored
+     * 2026-10-19): payload[24] = category 0x7F, payload[25..27] = Espressif
+     * OUI 18:FE:34. The "accept-all" variant flooded the 4-slot ring with
+     * beacon/MISC noise, so the rare DUT frames were overwritten before the
+     * logger could drain them (E1_A_plain_20261018 / E1_C_ceepew_20261018
+     * splits: zero-to-few DUT rows despite ~87 peer frames received).
+     * Offsets verified against captured DUT frames in Modes A/B/C. */
+    if (payload[24] != 0x7FU || payload[25] != 0x18U ||
+        payload[26] != 0xFEU || payload[27] != 0x34U) {
+        return;
+    }
     uint16_t copy_len = (sig_len > TRANSPORT_CAPTURE_MAX_BYTES)
                         ? TRANSPORT_CAPTURE_MAX_BYTES
                         : (uint16_t)sig_len;
@@ -111,19 +122,41 @@ static void IRAM_ATTR transport_capture_cb(void *buf, wifi_promiscuous_pkt_type_
 static void transport_capture_logger_task(void *arg)
 {
     (void)arg;
+    /* The assembled row lives on THIS task's stack, not in .bss: a static
+     * 768-byte row buffer pushed .dram0.bss past dram0_0_seg (link failed,
+     * 448 bytes over, 2026-10-19). This task exists solely to format and
+     * emit rows, and its stack was raised 1536 -> 4096 bytes to hold the
+     * worst-case row (24 prefix + 2*288 hex + newline) plus stdio/VFS
+     * frames. Capture semantics are unchanged. */
+    char row[768];
     for (;;) {
         uint8_t head = s_head;
         while (s_tail != head) {
             uint8_t idx = s_tail;
-            printf("%lu,%d,%u,%u,",
-                   (unsigned long)s_ring[idx].ts_us,
-                   (int)s_ring[idx].rssi_dbm,
-                   (unsigned)s_ring[idx].channel,
-                   (unsigned)s_ring[idx].len);
-            for (uint16_t i = 0U; i < s_ring[idx].len; i++) {
-                printf("%02X", s_ring[idx].buf[i]);
+            /* Build the whole row in `row` and emit it with ONE stdio call.
+             * The previous per-byte printf loop released the console lock
+             * between bytes, so other tasks' log lines interleaved mid-row
+             * and corrupted the strict RING_LINE_RE format (observed as
+             * ~30% loose-only rows in the E1_A/E1_C splits). */
+            int n = snprintf(row, sizeof(row), "%lu,%d,%u,%u,",
+                             (unsigned long)s_ring[idx].ts_us,
+                             (int)s_ring[idx].rssi_dbm,
+                             (unsigned)s_ring[idx].channel,
+                             (unsigned)s_ring[idx].len);
+            if (n < 0) {
+                n = 0;
             }
-            printf("\n");
+            for (uint16_t i = 0U; i < s_ring[idx].len; i++) {
+                if ((size_t)n >= sizeof(row) - 3U) {
+                    break;
+                }
+                (void)snprintf(&row[n], sizeof(row) - (size_t)n, "%02X",
+                               s_ring[idx].buf[i]);
+                n += 2;
+            }
+            row[n++] = '\n';
+            (void)fwrite(row, 1U, (size_t)n, stdout);
+            (void)fflush(stdout);
             s_tail = (uint8_t)((idx + 1U) % TRANSPORT_CAPTURE_RING_LEN);
         }
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -154,14 +187,16 @@ CeePewErr_t transport_capture_start(void)
         return CEEPEW_ERR_HW;
     }
     if (s_logger_task == NULL) {
-        if (xTaskCreate(transport_capture_logger_task, "cap_log", 1536,
+        /* 4096 bytes: 768-byte row staging buffer on this task's stack plus
+         * stdio/VFS/UART frames (was 1536 before the single-write row fix). */
+        if (xTaskCreate(transport_capture_logger_task, "cap_log", 4096,
                         NULL, 1, &s_logger_task) != pdPASS) {
             (void)esp_wifi_set_promiscuous(false);
             return CEEPEW_ERR_HW;
         }
     }
     s_running = true;
-    ESP_LOGI(TAG, "on-node capture started (all-packet filter)");
+    ESP_LOGI(TAG, "on-node capture started (ESP-NOW OUI guard 7F:18FE34)");
     return CEEPEW_OK;
 }
 

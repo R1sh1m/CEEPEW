@@ -177,6 +177,10 @@ static bool s_scan_rsp_set = false;
 static bool s_adv_starting = false;
 static bool s_scan_start_failed = false;
 static bool s_scan_start_pending = false; /* deferred until GAP idle */
+/* Deferred advertising re-arm requested under ble_ctx_lock by
+ * transport_ble_disconnect_unlocked(); drained after unlock by
+ * transport_ble_service_pending_adv_restart(). */
+static bool s_adv_restart_pending = false;
 
 static uint8_t s_pending_scan_rsp_buf[64U];
 static uint8_t s_pending_scan_rsp_len = 0U;
@@ -1837,7 +1841,16 @@ static CeePewErr_t transport_ble_disconnect_unlocked(void) {
     s_adv_data_set = false;
     s_scan_rsp_set = false;
     s_adv_starting = false;
-    (void)transport_ble_start_advertising();
+    /* Defer the re-arm until AFTER the caller releases ble_ctx_lock (drained
+     * by transport_ble_service_pending_adv_restart()). start_advertising()
+     * reaches the controller through configure_data_raw_unlocked() -> BTC
+     * task queue posts that can block indefinitely; holding ble_ctx_lock
+     * across that call is the >2 s lock-hold class behind
+     * BUG-BLE-CTX-LOCK-PANIC. Same rationale as the supervisor re-arm site
+     * further down this file. */
+    ESP_LOGI(TAG, "adv re-arm deferred to post-unlock (pre_disconnect_state=%s)",
+             transport_ble_state_name(pre_disconnect_state));
+    s_adv_restart_pending = true;
   }
 
   ESP_LOGI(TAG, "BLE disconnected: state=%s adv=%u scan=%u (session preserved)",
@@ -1847,12 +1860,37 @@ static CeePewErr_t transport_ble_disconnect_unlocked(void) {
   return CEEPEW_OK;
 }
 
+/* Drain a deferred advertising re-arm requested under ble_ctx_lock by
+ * transport_ble_disconnect_unlocked(). MUST be called with the ctx lock
+ * RELEASED: transport_ble_start_advertising() can block indefinitely on a
+ * full BTC work queue and must never run under ble_ctx_lock. No-op when no
+ * re-arm is pending; if the lock cannot be re-acquired the advertising
+ * watchdog re-arms later. */
+static void transport_ble_service_pending_adv_restart(void) {
+  bool pending = false;
+  if (ble_ctx_lock()) {
+    pending = s_adv_restart_pending;
+    s_adv_restart_pending = false;
+    ble_ctx_unlock();
+  } else {
+    ESP_LOGW(TAG,
+             "adv re-arm drain: ctx lock unavailable — advertising watchdog "
+             "will retry");
+    return;
+  }
+  if (pending) {
+    ESP_LOGI(TAG, "adv re-arm executing with ctx lock released");
+    (void)transport_ble_start_advertising();
+  }
+}
+
 CeePewErr_t transport_ble_disconnect(void) {
   if (!ble_ctx_lock()) {
     return CEEPEW_ERR_BUSY;
   }
   CeePewErr_t err = transport_ble_disconnect_unlocked();
   ble_ctx_unlock();
+  transport_ble_service_pending_adv_restart();
   return err;
 }
 
@@ -4003,6 +4041,7 @@ transport_ble_handle_event_internal(const PairingEvent_t *event) {
       g_ble_ctx.pending_sign_pk_write = false;
       (void)transport_ble_disconnect_unlocked();
       ble_ctx_unlock();
+      transport_ble_service_pending_adv_restart();
       break;
     }
     ESP_LOGI(TAG, "SIGN_PK_WRITE: dispatching sign_pk write (delay=%u ms)",
@@ -4030,6 +4069,7 @@ transport_ble_handle_event_internal(const PairingEvent_t *event) {
       g_ble_ctx.pending_sign_pk_write = false;
     }
     ble_ctx_unlock();
+    transport_ble_service_pending_adv_restart();
     break;
   }
 

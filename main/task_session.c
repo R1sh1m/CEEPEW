@@ -23,6 +23,8 @@
 #include "compress_huffman.h"
 #include "crypto_box_wrap.h"
 #include "crypto_ctx.h"
+#include "crypto_ecdh.h"
+#include "crypto_eddsa.h"
 #include "ecc_hamming.h"
 #include "esp_random.h"
 #include "esp_crc.h"
@@ -2668,6 +2670,98 @@ static void bench_kat_run(void)
 }
 #endif
 
+#if CONFIG_CEEPEW_BENCH_TIMING
+/* One-shot primitive micro-bench (timing builds only, bench use).
+ *
+ * Measures the raw primitive costs the paper cycle table models:
+ *   1. X25519 shared secret  (one scalarmult, fixed inputs after setup)
+ *   2. Ed25519 sign          (58-byte message)
+ *   3. Ed25519 verify        (same message + signature)
+ *
+ * Protocol (declared before the first run):
+ *   - N = 25 samples per primitive; every sample is reported, no exclusions.
+ *   - One operation timed per sample with esp_timer_get_time(); no UART
+ *     printing inside a timed region.
+ *   - 1 tick yield between samples (outside the timed region) to keep the
+ *     CPU1 idle task fed.
+ *   - Result lines (host-parsed):
+ *       [BENCHPRIM] begin n=25 msg_len=58
+ *       [BENCHPRIM] x25519 i=<i> us=<dt> err=<e>
+ *       [BENCHPRIM] ed25519_sign i=<i> us=<dt> err=<e>
+ *       [BENCHPRIM] ed25519_verify i=<i> us=<dt> err=<e>
+ *       [BENCHPRIM] end
+ *   - Raw primitive only: this is NOT a per-fragment/outer-box measurement.
+ *   - Fresh keys per boot (key values do not affect X25519/Ed25519 cost).
+ */
+#define CEEPEW_BENCHPRIM_N 25U
+#define CEEPEW_BENCHPRIM_MSG_LEN 58U
+
+static void bench_prim_run(void) {
+  uint8_t x_pub_local[32];
+  uint8_t x_priv_local[32];
+  uint8_t x_pub_peer[32];
+  uint8_t x_priv_peer[32];
+  uint8_t x_ss[32];
+  uint8_t ed_pk[32];
+  uint8_t ed_sk[64];
+  uint8_t ed_sig[64];
+  uint8_t ed_msg[CEEPEW_BENCHPRIM_MSG_LEN];
+
+  if (crypto_ecdh_generate_keypair(x_pub_local, x_priv_local) != CEEPEW_OK ||
+      crypto_ecdh_generate_keypair(x_pub_peer, x_priv_peer) != CEEPEW_OK ||
+      crypto_eddsa_keypair(ed_pk, ed_sk) != CEEPEW_OK) {
+    ESP_LOGW(TAG, "[BENCHPRIM] setup failed — aborting");
+    ceepew_secure_zero(x_priv_local, sizeof(x_priv_local));
+    ceepew_secure_zero(x_priv_peer, sizeof(x_priv_peer));
+    ceepew_secure_zero(ed_sk, sizeof(ed_sk));
+    return;
+  }
+  for (uint16_t i = 0U; i < CEEPEW_BENCHPRIM_MSG_LEN; i++) {
+    ed_msg[i] = 0x41U; /* 'A' fill, same as the BENCH58 campaign payload */
+  }
+
+  ESP_LOGI(TAG, "[BENCHPRIM] begin n=%u msg_len=%u",
+           (unsigned)CEEPEW_BENCHPRIM_N, (unsigned)CEEPEW_BENCHPRIM_MSG_LEN);
+
+  for (uint32_t i = 0U; i < (uint32_t)CEEPEW_BENCHPRIM_N; i++) {
+    int64_t t0 = esp_timer_get_time();
+    CeePewErr_t err =
+        crypto_ecdh_shared_secret(x_priv_local, x_pub_peer, x_ss);
+    int64_t dt = esp_timer_get_time() - t0;
+    ESP_LOGI(TAG, "[BENCHPRIM] x25519 i=%lu us=%lld err=%d", (unsigned long)i,
+             (long long)dt, (int)err);
+    vTaskDelay(pdMS_TO_TICKS(1U));
+  }
+  for (uint32_t i = 0U; i < (uint32_t)CEEPEW_BENCHPRIM_N; i++) {
+    int64_t t0 = esp_timer_get_time();
+    CeePewErr_t err = crypto_eddsa_sign(ed_sk, ed_msg,
+                                        (uint16_t)CEEPEW_BENCHPRIM_MSG_LEN,
+                                        ed_sig);
+    int64_t dt = esp_timer_get_time() - t0;
+    ESP_LOGI(TAG, "[BENCHPRIM] ed25519_sign i=%lu us=%lld err=%d",
+             (unsigned long)i, (long long)dt, (int)err);
+    vTaskDelay(pdMS_TO_TICKS(1U));
+  }
+  for (uint32_t i = 0U; i < (uint32_t)CEEPEW_BENCHPRIM_N; i++) {
+    int64_t t0 = esp_timer_get_time();
+    CeePewErr_t err = crypto_eddsa_verify(ed_pk, ed_msg,
+                                          (uint16_t)CEEPEW_BENCHPRIM_MSG_LEN,
+                                          ed_sig);
+    int64_t dt = esp_timer_get_time() - t0;
+    ESP_LOGI(TAG, "[BENCHPRIM] ed25519_verify i=%lu us=%lld err=%d",
+             (unsigned long)i, (long long)dt, (int)err);
+    vTaskDelay(pdMS_TO_TICKS(1U));
+  }
+
+  ESP_LOGI(TAG, "[BENCHPRIM] end");
+  ceepew_secure_zero(x_priv_local, sizeof(x_priv_local));
+  ceepew_secure_zero(x_priv_peer, sizeof(x_priv_peer));
+  ceepew_secure_zero(x_ss, sizeof(x_ss));
+  ceepew_secure_zero(ed_sk, sizeof(ed_sk));
+  ceepew_secure_zero(ed_sig, sizeof(ed_sig));
+}
+#endif
+
 /* Task Entry Points                                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -2747,6 +2841,18 @@ void task_session_run(void *pvParameters) {
     if (!s_bench_kat_done) {
       s_bench_kat_done = true;
       bench_kat_run();
+    }
+  }
+#endif
+
+#if CONFIG_CEEPEW_BENCH_TIMING
+  /* One-shot primitive micro-bench (timing builds only): runs before any
+   * session traffic; protocol comments at bench_prim_run(). */
+  {
+    static bool s_bench_prim_done = false;
+    if (!s_bench_prim_done) {
+      s_bench_prim_done = true;
+      bench_prim_run();
     }
   }
 #endif
