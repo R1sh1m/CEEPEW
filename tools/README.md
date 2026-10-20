@@ -1,7 +1,7 @@
 # tools/
 
 Helper scripts for CEE-PEW development, testing, and debugging.
-None are referenced by the firmware build (except `wrap_rsp_in_group.cmake`).
+None are referenced by the firmware build.
 
 ## Contents
 
@@ -13,7 +13,7 @@ None are referenced by the firmware build (except `wrap_rsp_in_group.cmake`).
 | `ceepew_log_pipeline.py` | Post-hoc log ingestion + signature analysis — tags known failure signatures, tracks across runs, generates findings report |
 | `ceepew_production_check.py` | Audits deployment configuration (eFuse HMAC, Secure Boot v2, Flash Encryption, dev mode) |
 | `flash_both.ps1` | Flash firmware to two ESP32 devices sequentially, then monitor the first |
-| `wrap_rsp_in_group.cmake` | CMake helper (included from root `CMakeLists.txt:59`) — wraps linker response files in `--start-group`/`--end-group` |
+| `wrap_rsp_in_group.cmake` | CMake helper — wraps linker response files in `--start-group`/`--end-group` |
 
 ---
 
@@ -208,7 +208,7 @@ Flash two ESP32 devices sequentially, then start a serial monitor on the first p
 
 ## `wrap_rsp_in_group.cmake`
 
-CMake helper included from the root `CMakeLists.txt` (line 59).
+Standalone CMake helper (not currently included from the root `CMakeLists.txt`).
 Wraps the linker response file in `-Wl,--start-group` / `-Wl,--end-group`
 to prevent one-pass GNU ld from skipping libraries.
 Not intended to be invoked directly.

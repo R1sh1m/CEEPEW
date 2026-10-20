@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "transport_espnow.c"
+        "transport_capture.c"
         "transport_replay.c"
         "transport_esl.c"
         "transport_ble.c"

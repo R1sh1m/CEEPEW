@@ -125,6 +125,17 @@ menu "CEE-PEW Configuration"
                 addressing (+2 column offset). Enable if your board hardware uses an
                 SH1106 controller instead of SSD1306.
 
+        config CEEPEW_CAPTURE
+            bool "Enable on-node promiscuous OTA capture (Phase 3 debug)"
+            default n
+            help
+                Start a WiFi promiscuous-mode sniffer (MGMT filter, ESP-NOW
+                vendor OUI 18:fe:34) after BLE teardown when entering
+                ESP-NOW Phase 3, plus a low-priority logger task that prints
+                ts/rssi/ch/len/hex per frame. Consume the logger output at
+                921600 baud host-side. Debug only — normal builds leave this
+                disabled (default).
+
     endmenu
 
 endmenu

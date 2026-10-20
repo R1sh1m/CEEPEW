@@ -79,6 +79,7 @@ $PythonExe  = if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\
     throw "ESP-IDF 6.0.2 Python environment was not found."
 }
 $MonitorPy  = Join-Path $PSScriptRoot "ceepew_monitor.py"
+$IdfProfile = "C:\esp\v6.0.2\esp-idf\export.ps1"
 
 # -- Fallback: if TimeoutSec was passed (old diagnose.ps1 convention), use it
 if ($TimeoutSec -gt 0) { $Duration = $TimeoutSec }
@@ -301,8 +302,8 @@ function Invoke-PairingMode {
     $pairingLog = Join-Path $logDir "pairing_${timestamp}.txt"
     $summaryCsv = Join-Path $logDir "summary_${timestamp}.csv"
 
-    # Source the IDF profile
-    if (Test-Path -LiteralPath $IdfProfile) {
+    # Source the IDF profile (null-safe: $IdfProfile may be unset on some hosts)
+    if (-not [string]::IsNullOrEmpty($IdfProfile) -and (Test-Path -LiteralPath $IdfProfile)) {
         Write-Host "[pairing] Sourcing IDF profile: $IdfProfile"
         . $IdfProfile
     } else {
@@ -400,8 +401,8 @@ function Invoke-PairingMode {
 }
 
 function Invoke-BuildMode {
-    # Source the IDF profile
-    if (Test-Path -LiteralPath $IdfProfile) {
+    # Source the IDF profile (null-safe: $IdfProfile may be unset on some hosts)
+    if (-not [string]::IsNullOrEmpty($IdfProfile) -and (Test-Path -LiteralPath $IdfProfile)) {
         Write-Host "[build] Sourcing IDF profile: $IdfProfile"
         . $IdfProfile
     } else {

@@ -142,6 +142,7 @@ def run_host_tests(enable_coverage=False):
         "test_session_pairing",
         "test_arq_sync",
         "test_arq_fault_injection",
+        "test_replay_window",
         "test_ui_navigator"
     ]
 
