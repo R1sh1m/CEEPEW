@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "state": "sealed",
+  "run_id": "E1_A_plain_20261019",
+  "experiment": "E1",
+  "date_utc": "2026-10-19T16:39:15+00:00",
+  "roles": "COM3 + COM4 both Mode A (app crypto bypassed); both TX BENCH58 and capture the peer; A=8C:94:DF:97:D0:C0 B=1C:C3:AB:C2:52:AC",
+  "git_commit": "23c1a5eacb15da50893ec97196736ef5f7979f2d",
+  "git_describe": "23c1a5e-dirty",
+  "git_dirty": true,
+  "dirty_paths": [
+    "M .gitignore",
+    " M CMakeLists.txt",
+    " M CONTRIBUTING.md",
+    " M README.md",
+    " M components/ceepew_oled/README.md",
+    " M components/transport/transport_ble.c",
+    " M components/transport/transport_capture.c",
+    " M components/transport/transport_capture.h",
+    " M data/manifests/index.json",
+    " M main/task_session.c",
+    " M results/registry.json",
+    " M tests/host/CMakeLists.txt",
+    " M tools/README.md",
+    " M tools/bench_manifest.py",
+    " D tools/capture/ota_bench.ps1",
+    " D tools/capture/rebuild_bench.ps1",
+    " D tools/capture/rebuild_bench2.ps1",
+    " M tools/ceepew_diagnose.ps1",
+    " M tools/ceepew_pipeline.py",
+    " M tools/e1_run_mode.py",
+    " M tools/e3_replay_reject.py",
+    " M tools/flash_both.ps1",
+    " M tools/monitor_dual.py",
+    " M tools/prepare_timing_config.py",
+    " M tools/setup_esp_idf.ps1",
+    " M tools/verify_citations.py",
+    "?? data/derived/E2b_forged_rejection_20261018/replay_reject.json",
+    "?? data/derived/E2b_forged_rejection_20261018/replay_reject.md",
+    "?? data/derived/E3_replay_20261019/",
+    "?? data/derived/host_ci_20261018/",
+    "?? data/derived/host_ci_20261019_replay_vectors/",
+    "?? data/derived/wireshark_views/",
+    "?? data/raw/BENCHPRIM_20261019/",
+    "?? data/raw/E1_A_plain_20261019/",
+    "?? data/raw/E3_replay_20261019/",
+    "?? tests/host/test_replay_vectors.c",
+    "?? tools/archive/",
+    "?? tools/capture/wireshark/",
+    "?? tools/p4a_delivery_measurement.py",
+    "?? tools/p4b_fec_ablation.py"
+  ],
+  "idf_version": "v6.0.2",
+  "configured_sdkconfig_sha256": "d6b54f9dc17da7eea471e718c8f55c23cc425a464c907ba18ed7813b7f54e4be",
+  "generated_sdkconfig_sha256": "9d902838b8ee4c0e8d34ccdfed42cac7aa30e754bb9f88dbfd3d948b672e2ec6",
+  "app_binary_sha256": "5d309ed4321f35c74c55faeac6b522d80c877160218cf70822ea65bb249e9aad",
+  "compiled_flags": {
+    "CONFIG_CEEPEW_BENCH_58B": "1",
+    "CONFIG_CEEPEW_CAPTURE": "1",
+    "CONFIG_CEEPEW_CAPTURE_MODE_PLAIN": "1",
+    "CONFIG_CEEPEW_PIN_BUTTON": "19",
+    "CONFIG_CEEPEW_PIN_DIAG_SWITCH": "5",
+    "CONFIG_CEEPEW_PIN_I2C_SCL": "27",
+    "CONFIG_CEEPEW_PIN_I2C_SCL_FALLBACK": "22",
+    "CONFIG_CEEPEW_PIN_I2C_SDA": "26",
+    "CONFIG_CEEPEW_PIN_I2C_SDA_FALLBACK": "21",
+    "CONFIG_CEEPEW_PIN_POT": "33",
+    "CONFIG_CEEPEW_PIN_RGB_BLUE": "23",
+    "CONFIG_CEEPEW_PIN_RGB_GREEN": "18",
+    "CONFIG_CEEPEW_PIN_RGB_RED": "15",
+    "CONFIG_CEEPEW_WIFI_FULL_RESTART": "1",
+    "CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE": "1",
+    "CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL": "2",
+    "CONFIG_COMPILER_OPTIMIZATION_PERF": "1",
+    "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ": "160",
+    "CONFIG_FREERTOS_HZ": "1000",
+    "CONFIG_LOG_DEFAULT_LEVEL": "3"
+  },
+  "build_dir": "build_cap_plain",
+  "build_type": "capture-bench",
+  "capture_mode": "plain",
+  "channel": "1",
+  "distance_cm": "20",
+  "environment": "normal-office-wifi",
+  "hopping": "off",
+  "n_planned": "80",
+  "n_completed": 160,
+  "n_excluded": 0,
+  "exclusion_rule": "None. No frame, ring row, pairing cycle or session excluded; capture-integrity gap (TX frames minus peer-captured ring rows) reported with cause. Failed pairing cycles reported as observations.",
+  "operator": "Rishi Misra",
+  "notes": "hopping OFF, fixed channel 1, 5 s inter-message, BENCH58 58-byte payloads. Retry of E1_A_plain_20261018 after capture-instrument repair: DUT-OUI ring guard restored, single-write row emission, logger row buffer moved to task stack (DRAM link fix), ring payload cap 300->288 B (protocol bound 278 B; no truncation). Toolchain ESP-IDF v6.0.2; sdkconfig byte-identical to sealed 20261018 build. Full pre-registration in RUN_NOTES.md.\nProvenance (pre-seal): flash_COM4.log never existed (manual COM4 flash output console-only); flash_COM3.log holds the failed 460800 idf.py attempts, not the successful manual flash. Manual conversion/analysis command records appended (reconstructed=1: canonical argv; the driver pcap step was skipped because it expects capture_COM3/COM4.log names). See RUN_NOTES.md Results for gate outcomes and classification.\nn_completed unit: one BENCH58 transmission attempt by one board; [BENCH58_DONE] sent=80 on both boards -> 160/160. n_excluded = 0 (rule: None). Outcome: pre-registered acceptance check 2 (literal 0x41 run >=4 on air) fails by construction (message is Huffman-compressed before fragmentation, then Hamming(15,11)-encoded; no literal application bytes can reach the radio) -> classified as APPARATUS/DESIGN FAILURE of the acceptance test, not a protocol result. Check 1 (DUT MAC frame) PASS: 91 peer-DUT frames per pcap. Check 3 verdict recorded verbatim (NOT VISIBLE) but not interpretable as a cleartext-negative. Full evidence + author flags: RUN_NOTES.md Results.",
+  "raw_files": {
+    "RUN_NOTES.md": "1cf87b55c7f239559fd75e468ea8abc74630f86f2b7e1aca5f6a859551ed7f5b",
+    "capture_DEVICE_A.log": "3187db72408fa3675408b575545da6a3a8111b3079e286a5496486e36ff0460d",
+    "capture_DEVICE_A.pcap": "1f3e13e31b37a1eeceb9714789c45c560e74d6f84a8417a377b30eb65d572329",
+    "capture_DEVICE_B.log": "462587d4881c8ff5bb394a5bb7daa9335e670af301a6d3eeecd25b2c13f88285",
+    "capture_DEVICE_B.pcap": "4edfd16859b580579f2ce8eeea0c0d35f5a92126f471fe4c151be8b990f28948",
+    "capture_dual.log": "b2d1d720716f6f412b09ab8a572cf6eda95934fcc8c71a618a5f4c40d7e6b9a4",
+    "flash_COM3.log": "bdcd0dd97c209fa1ade8411da74826e904e76611c5e2d9185afdd7a70204e35e"
+  },
+  "expected_raw_files": [
+    "capture_dual.log",
+    "capture_DEVICE_A.log",
+    "capture_DEVICE_B.log",
+    "capture_DEVICE_A.pcap",
+    "capture_DEVICE_B.pcap",
+    "flash_COM3.log"
+  ],
+  "commands": [
+    {
+      "step": "flash COM3",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "C:\\esp\\v6.0.2\\esp-idf\\tools\\idf.py",
+        "-B",
+        "build_cap_plain",
+        "-DSDKCONFIG=build_cap_plain/sdkconfig",
+        "-p",
+        "COM3",
+        "flash"
+      ],
+      "rc": 2,
+      "log": "data\\raw\\E1_A_plain_20261019\\flash_COM3.log"
+    },
+    {
+      "step": "flash COM3",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "C:\\esp\\v6.0.2\\esp-idf\\tools\\idf.py",
+        "-B",
+        "build_cap_plain",
+        "-DSDKCONFIG=build_cap_plain/sdkconfig",
+        "-p",
+        "COM3",
+        "flash"
+      ],
+      "rc": 2,
+      "log": "data\\raw\\E1_A_plain_20261019\\flash_COM3.log"
+    },
+    {
+      "step": "flash COM3",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "C:\\esp\\v6.0.2\\esp-idf\\tools\\idf.py",
+        "-B",
+        "build_cap_plain",
+        "-DSDKCONFIG=build_cap_plain/sdkconfig",
+        "-p",
+        "COM3",
+        "flash"
+      ],
+      "rc": 2,
+      "log": "data\\raw\\E1_A_plain_20261019\\flash_COM3.log"
+    },
+    {
+      "step": "monitor",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "--port",
+        "COM3",
+        "--port",
+        "COM4",
+        "--baud",
+        "115200",
+        "--duration",
+        "480",
+        "--log",
+        "data\\raw\\E1_A_plain_20261019\\capture_dual.log",
+        "--no-color"
+      ],
+      "rc": 0,
+      "log": "data\\raw\\E1_A_plain_20261019\\capture_dual.log"
+    },
+    {
+      "step": "split_dual_log",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
+        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E1_A_plain_20261019\\capture_dual.log",
+        "--outdir",
+        "data\\raw\\E1_A_plain_20261019",
+        "--prefix",
+        "capture"
+      ],
+      "rc": 0
+    },
+    {
+      "step": "flash COM3 (manual esptool 115200)",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "-m",
+        "esptool",
+        "--chip",
+        "esp32",
+        "-p",
+        "COM3",
+        "-b",
+        "115200",
+        "--before",
+        "default-reset",
+        "--after",
+        "hard-reset",
+        "write-flash",
+        "--flash-mode",
+        "dio",
+        "--flash-freq",
+        "40m",
+        "--flash-size",
+        "4MB",
+        "0x1000",
+        "build_cap_plain/bootloader/bootloader.bin",
+        "0x8000",
+        "build_cap_plain/partition_table/partition-table.bin",
+        "0x10000",
+        "build_cap_plain/ceepew.bin"
+      ],
+      "rc": 0,
+      "log": null,
+      "note": "driver idf.py flash at 460800 failed 3x mid-app-image (rc=2, flash_COM3.log); manual 115200 esptool succeeded; output console-only (not captured to a file)."
+    },
+    {
+      "step": "flash COM4 (manual esptool 115200)",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "-m",
+        "esptool",
+        "--chip",
+        "esp32",
+        "-p",
+        "COM4",
+        "-b",
+        "115200",
+        "--before",
+        "default-reset",
+        "--after",
+        "hard-reset",
+        "write-flash",
+        "--flash-mode",
+        "dio",
+        "--flash-freq",
+        "40m",
+        "--flash-size",
+        "4MB",
+        "0x1000",
+        "build_cap_plain/bootloader/bootloader.bin",
+        "0x8000",
+        "build_cap_plain/partition_table/partition-table.bin",
+        "0x10000",
+        "build_cap_plain/ceepew.bin"
+      ],
+      "rc": 0,
+      "log": null,
+      "note": "manual 115200 esptool succeeded; output console-only (not captured to a file)."
+    },
+    {
+      "step": "serial_to_pcap DEVICE_A",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "tools/capture/serial_to_pcap.py",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_A.log",
+        "-o",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_A.pcap"
+      ],
+      "rc": 0,
+      "manual": true,
+      "reconstructed": true
+    },
+    {
+      "step": "serial_to_pcap DEVICE_B",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "tools/capture/serial_to_pcap.py",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_B.log",
+        "-o",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_B.pcap"
+      ],
+      "rc": 0,
+      "manual": true,
+      "reconstructed": true
+    },
+    {
+      "step": "analyze_pcap DEVICE_A",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "tools/capture/analyze_pcap.py",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_A.pcap",
+        "--hist-csv",
+        "data/derived/E1_A_plain_20261019/hist_DEVICE_A.csv"
+      ],
+      "rc": 0,
+      "manual": true,
+      "reconstructed": true
+    },
+    {
+      "step": "analyze_pcap DEVICE_B",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "tools/capture/analyze_pcap.py",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_B.pcap",
+        "--hist-csv",
+        "data/derived/E1_A_plain_20261019/hist_DEVICE_B.csv"
+      ],
+      "rc": 0,
+      "manual": true,
+      "reconstructed": true
+    },
+    {
+      "step": "mode_report DEVICE_A",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "tools/capture/mode_report.py",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_A.pcap",
+        "--mode",
+        "A plain (no CCMP, no ESL)"
+      ],
+      "rc": 0,
+      "manual": true,
+      "reconstructed": true
+    },
+    {
+      "step": "mode_report DEVICE_B",
+      "cmd": [
+        "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
+        "tools/capture/mode_report.py",
+        "data/raw/E1_A_plain_20261019/capture_DEVICE_B.pcap",
+        "--mode",
+        "A plain (no CCMP, no ESL)"
+      ],
+      "rc": 0,
+      "manual": true,
+      "reconstructed": true
+    }
+  ],
+  "artifacts": {
+    "logs": {
+      "dual": "data/raw/E1_A_plain_20261019/capture_dual.log",
+      "device_a": "data/raw/E1_A_plain_20261019/capture_DEVICE_A.log",
+      "device_b": "data/raw/E1_A_plain_20261019/capture_DEVICE_B.log",
+      "flash_com3": "data/raw/E1_A_plain_20261019/flash_COM3.log"
+    },
+    "pcaps": {
+      "device_a": "data/raw/E1_A_plain_20261019/capture_DEVICE_A.pcap",
+      "device_b": "data/raw/E1_A_plain_20261019/capture_DEVICE_B.pcap"
+    },
+    "hist_csv": {
+      "device_a": "data/derived/E1_A_plain_20261019/hist_DEVICE_A.csv",
+      "device_b": "data/derived/E1_A_plain_20261019/hist_DEVICE_B.csv"
+    },
+    "mode_report": {
+      "device_a": "data/derived/E1_A_plain_20261019/DEVICE_A/",
+      "device_b": "data/derived/E1_A_plain_20261019/DEVICE_B/"
+    }
+  },
+  "monitor_baud": 115200,
+  "monitor_duration_s": 480,
+  "run_completed_utc": "2026-10-19T17:26:23+00:00",
+  "raw_file_count": 7,
+  "sealed_utc": "2026-10-19T17:48:21+00:00",
+  "missing_required_fields": []
+}

@@ -1,15 +1,64 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-10-19T06:36:27+00:00",
+  "updated_utc": "2026-10-19T19:01:48+00:00",
   "project": "CEE-PEW",
   "conference": "IEEE ICITIIT 2027",
   "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
+  "clock_basis": {
+    "measured_mhz": 160,
+    "vendor_reference_mhz": 240,
+    "evidence": "CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=160 with CONFIG_PM_ENABLE unset (no DFS) in 10/10 build directories; logs/pairing_bench_20261017_104256.txt (both ports) and both data/raw/BENCHPRIM_20261019*/capture_DEVICE_*.log print 'cpu_start: cpu freq: 160000000 Hz' on both boards.",
+    "correction_2026_10_20": "Derived cycle counts for THIS WORK were previously computed as cycles = ms x 240 MHz; they are now computed as cycles = ms x 160 MHz, i.e. 2/3 of the earlier figures. Wall-clock milliseconds are unchanged. CYC-VEND-* entries remain at the vendor published 240 MHz and are NOT rescaled. Affected: CYC-X25519 (52.5 -> 35.0 Mcycles), CYC-ED25519 (258.0 -> 172.0), CYC-TOTAL (317.3 -> 211.5), CYC-LITE-CPU / CYC-2.4M (2.40 -> 1.60), CYC-29K (29 -> 19 kcycles), and paper6_main.tex Table tab:hw_benchmarks caption/header 240 -> 160 MHz."
+  },
   "evidence_classes": {
     "M-HW": "Measured on physical ESP32 target hardware with production firmware or on-device timers/logs",
     "M-HOST": "Measured in host C unit-test harness or simulation harness (ASan/UBSan)",
     "C": "Mathematically computed/derived from exact protocol wire budget or 802.11 timing equations",
     "S": "Cited from external vendor datasheet or published literature benchmark",
     "E": "Projection or conservative engineering estimate (bounded scope)"
+  },
+  "device_identity": {
+    "convention_effective": "2026-10-19",
+    "canonical": {
+      "Device A": { "wifi_mac": "8c:94:df:97:d0:c0", "ble_mac": "8c:94:df:97:d0:c2", "port": "COM3", "role": "responder" },
+      "Device B": { "wifi_mac": "1c:c3:ab:c2:52:ac", "ble_mac": "1c:c3:ab:c2:52:ae", "port": "COM4", "role": "initiator (lower BLE MAC)" },
+      "Sniffer": { "mac": "58:2a:bd:d8:80:38", "port": "COM6", "note": "never flashed" }
+    },
+    "log_tag_rule": "DEVICE_A / DEVICE_B appearing inside merged dual-port capture logs are POSITIONAL port-order tags, not device identities, and the tag-to-board mapping FLIPS between sessions. Resolve a run by checking the tag's logged peer_mac (the tag's peer is the other board). Verbatim quoted run output in this registry retains its original tags; where this registry names a board in prose it uses the canonical names above.",
+    "per_session_tag_resolution": {
+      "E1_A_plain_20261018": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "E1_A_plain_20261019": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "E1_B_ccmp_20261017": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "E1_B_ccmp_20261018": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "E1_C_ceepew_20261018": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "E2a_plain_injection_20261018": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "E2b_forged_rejection_20261018": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "E3_replay_20261019": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "E5_sync_pulse_20261018": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "p4a_delivery_20261019_202131": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "p4a_delivery_20261019_202959": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "p4b_fec_on_20261019_211409": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "p4b_fec_off_20261019_215314": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
+      "BENCHPRIM_20261019": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
+      "BENCHPRIM_20261019_R2": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" }
+    },
+    "reference": "docs/analysis/device_identity.md"
+  },
+  "bench_kat_caveat": {
+    "log_signature": "[BENCHKAT] ascon=FAIL x25519=FAIL eddsa=FAIL",
+    "appears_in": [
+      "data/raw/BENCHPRIM_20261019/capture_DEVICE_A.log",
+      "data/raw/BENCHPRIM_20261019/capture_DEVICE_B.log",
+      "data/raw/BENCHPRIM_20261019_R2/capture_DEVICE_A.log",
+      "data/raw/BENCHPRIM_20261019_R2/capture_DEVICE_B.log",
+      "logs/pairing_bench_20261017_104256.txt (both ports)"
+    ],
+    "status": "SOURCE DEFECT IN THE BENCH-BUILD BOOT KAT - NOT A CRYPTO PRIMITIVE FAILURE",
+    "root_cause": "The reference-vector arrays in bench_kat_run() carry one extra brace level, e.g. 'static const uint8_t s_benchkat_ascon_key[16] = {{0x00, 0x01, ...}};' (main/task_session.c:2610-2620). For an array of uint8_t this initialises element 0 from an over-braced scalar and discards the remaining elements as excess, so every byte after the first is zero. Reproduced independently with gcc -O2 on a minimal case: the compiler emits 'braces around scalar initializer' + 'excess elements in scalar initializer' warnings and the array evaluates to all zeros. The key, nonce and all three expected-output vectors are corrupted the same way, which is why all three KATs fail simultaneously.",
+    "why_it_is_not_the_primitives": "The host suite tests the SAME Ascon expected ciphertext (tests/host/test_ascon.c:139 begins 0x77, 0x63, 0xf8, 0xba, 0x6c, 0xe9, 0x1e, 0xd1) and the same X25519 / Ed25519 vectors, and passes. The device and host therefore use identical vectors and differ only in the initialiser defect, not in codegen or toolchain behaviour.",
+    "impact": "Informational only. bench_kat_run() is compile-gated, is documented in-code as 'a log line, never a gate', and gates nothing: no registry value, paper number, or sealed capture depends on its result. The timed BENCHPRIM samples are taken independently and every sample reports err=0.",
+    "reading_rule": "Anyone (human or log pipeline) who flags this line must not read it as an Ascon/X25519/EdDSA failure. No entry in this registry is derived from the boot KAT.",
+    "corrective_action": "Deliberately NOT applied: fixing the initialisers would change the firmware image and therefore the provenance of the already-sealed bench runs (image e1ca1b5a...). Recorded here as a known limitation of the bench builds."
   },
   "entries": [
     {
@@ -274,54 +323,56 @@
     },
     {
       "id": "CYC-X25519",
-      "description": "Host-measured X25519 ECDH duration on ESP32 at 240 MHz (52.5 Mcycles)",
-      "formula": "52.5 Mcycles / 240 MHz",
+      "description": "X25519 ECDH duration on ESP32 at 160 MHz (35.0 Mcycles; the value is a model constant - provenance unsupported, see source.note)",
+      "formula": "35.0 Mcycles / 160 MHz",
       "value": "218.75",
       "unit": "ms",
       "class": "M-HW",
       "n": 53,
       "source": {
         "script": "tools/recompute_paper_numbers.py",
-        "raw_log": "logs/pairing_clean_20260802.txt"
+        "raw_log": "logs/pairing_clean_20260802.txt",
+        "note": "PROVENANCE RESTATED 2026-10-19: the value is a hardcoded literal in tools/recompute_paper_numbers.py (line ~158), not a parsed measurement. The cited raw_log does not exist on disk and contains no X25519 cycle measurement - the only 52.5 hits in logs/pairing_clean_20260802.txt (lines 3140-3142) are timestamps. No surviving artifact substantiates 52.5 Mcycles (.agents/CLAIM_EVIDENCE_COVERAGE.md 1.2 + _VERIFICATION.md). Kept unchanged for paper traceability: paper6_main.tex:500 prints 35.0 Mcycles / 219.0 ms with degenerate IQR 1.0 / CI [219,219], consistent with a derived constant. Fresh on-device counterpart (optimised-build bench, sealed 2026-10-19): BENCHPRIM-X25519 = 147.7 ms median (n=100) - not a like-for-like substitution (different build/config). AUTHOR DECISION REQUIRED."
       }
     },
     {
       "id": "CYC-ED25519",
-      "description": "Ed25519 signing duration on ESP32 at 240 MHz (-Og debug build, 258.0 Mcycles)",
-      "formula": "258.0 Mcycles / 240 MHz",
+      "description": "Ed25519 signing duration on ESP32 at 160 MHz (-Og debug build, 172.0 Mcycles)",
+      "formula": "172.0 Mcycles / 160 MHz",
       "value": "1075",
       "unit": "ms",
       "class": "M-HW",
       "n": 76,
       "source": {
         "script": "tools/recompute_paper_numbers.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "note": "Stage cycle counts not present in logs/bench58_run2.txt (file contains 80 TX records, 0 timing lines). Original artifact not on disk. PROVENANCE RESTATED 2026-10-19: the value is a hardcoded literal in the recompute script; no surviving artifact substantiates 258.0 Mcycles for an -Og build. Kept unchanged for paper traceability: paper6_main.tex:501 prints 172.0 Mcycles / 1075.0 ms (degenerate IQR 1.0 / CI [1075,1075], consistent with a derived constant). Fresh on-device counterparts (optimised-build bench, sealed 2026-10-19): BENCHPRIM-ED25519-SIGN = 331.8 ms median (n=100 emitted; 99 exact + 1 bounded) and BENCHPRIM-ED25519-VERIFY = 662.6 ms (n=100) - a different build; they corroborate BENCH-SIGN-US (332183 us, n=114) and BENCH-EDVERIFY-US (662674 us, n=99) instead. AUTHOR DECISION REQUIRED."
       }
     },
     {
       "id": "CYC-TOTAL",
-      "description": "Full Profile combined crypto CPU time per fragment (317.3 Mcycles)",
-      "formula": "317.3 Mcycles / 240 MHz",
+      "description": "Full Profile combined crypto CPU time per fragment (211.5 Mcycles)",
+      "formula": "211.5 Mcycles / 160 MHz",
       "value": "1322",
       "unit": "ms",
       "class": "M-HW",
       "n": 76,
       "source": {
         "script": "tools/recompute_paper_numbers.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "note": "Stage cycle counts not present in logs/bench58_run2.txt (file contains 80 TX records, 0 timing lines). Original artifact not on disk."
       }
     },
     {
       "id": "CYC-LITE-CPU",
-      "description": "Lite Profile CPU time per fragment (Ascon-128 AEAD, 2.40 Mcycles)",
-      "formula": "2.40 Mcycles / 240 MHz",
+      "description": "Lite Profile CPU time per fragment (Ascon-128 AEAD, 1.60 Mcycles)",
+      "formula": "1.60 Mcycles / 160 MHz",
       "value": "10.0",
       "unit": "ms",
       "class": "M-HW",
       "n": 98,
       "source": {
         "script": "tools/recompute_paper_numbers.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "raw_log": "data/derived/bench58_today_stages.csv",
+        "note": "Ascon timing corpus (n=98, median 327.5 µs) derived from logs/pairing_bench_20261017_104256.txt. logs/bench58_run2.txt contains zero stage timings and cannot support this entry."
       }
     },
     {
@@ -360,7 +411,7 @@
       "n": 80,
       "source": {
         "script": "tools/recompute_paper_numbers.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "note": "Derived from CYC-TOTAL. logs/bench58_run2.txt contains 80 TX records but zero timing lines; original timing artifact not on disk."
       }
     },
     {
@@ -373,7 +424,7 @@
       "n": 76,
       "source": {
         "script": "tools/recompute_paper_numbers.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "note": "Derived from CYC-TOTAL. logs/bench58_run2.txt contains 80 TX records but zero timing lines; original timing artifact not on disk."
       }
     },
     {
@@ -386,7 +437,7 @@
       "n": 76,
       "source": {
         "script": "tools/bench_timing_report.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "note": "Per-frame latency series (total_elapsed/send_trigger) not present in any surviving artifact. logs/bench58_run2.txt lacks these fields; bench58_today_stages.csv has only 4 stage rows."
       }
     },
     {
@@ -399,7 +450,20 @@
       "n": 76,
       "source": {
         "script": "tools/bench_timing_report.py",
-        "raw_log": "logs/bench58_run2.txt"
+        "note": "Per-frame latency series (total_elapsed) not present in any surviving artifact. logs/bench58_run2.txt lacks these fields; bench58_today_stages.csv has only 4 stage rows."
+      }
+    },
+    {
+      "id": "LAT-SUM-NONADDITIVE",
+      "description": "Why the Lite latency components do not sum to the reported total. The 18.0 ms send-callback figure and the 27.0 ms total are both per-trial medians over the same N=76 corpus, so they are on a common footing; the 10.0 ms CPU term is NOT a measured per-trial median but a conversion of the measured 1.60 Mcycles at 160 MHz (see CYC-2.4M). Medians are not additive, so med(CPU)+med(CB)=28.0 ms against a 27.0 ms median total is expected and is NOT an arithmetic error. tools/recompute_paper_numbers.py reports this by construction as its LAT-SUM item and it is the registry's only knowingly-unmatched check.",
+      "formula": "med(total) vs med(cpu_cycles/160MHz) + med(cb)",
+      "value": "med(CPU)=10.0 ms + med(CB)=18.0 ms = 28.0 ms, vs med(total)=27.0 ms (N=76); residual 1.0 ms within the cycle-model-to-latency gap",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 76,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Cross-check ids LAT-LITE-CB, LAT-LITE-TOTAL, CYC-2.4M"
       }
     },
     {
@@ -477,7 +541,8 @@
       "n": 106,
       "source": {
         "script": "tools/bench_timing_report.py",
-        "raw_log": "data/derived/bench58_today_stages.csv"
+        "raw_log": "data/derived/bench58_today_stages.csv",
+        "note": "Count reconciliation 2026-10-19 (flagged only): this entry counts n=106 emitted samples (err=0:96, err=5:10); paper6_main.tex:496 cites N=98 for the same row and the 98-vs-106 difference is UNRESOLVED (an err=0-only rule would give 96, not 98). Medians agree (1458.5 us = 1.47 ms). See EMPIRICAL_UPDATE_NOTES.md sections 2.3 and 5.f; do not change either figure without a definitional ruling."
       }
     },
     {
@@ -490,7 +555,8 @@
       "n": 98,
       "source": {
         "script": "tools/bench_timing_report.py",
-        "raw_log": "data/derived/bench58_today_stages.csv"
+        "raw_log": "data/derived/bench58_today_stages.csv",
+        "note": "Count reconciliation 2026-10-19 (flagged only): this entry counts n=98 emitted samples (err=0:97, err=5:1); paper6_main.tex:497 cites N=97, consistent with an err=0-only rule that is stated in neither place. See docs/paper/icitiit2027/EMPIRICAL_UPDATE_NOTES.md sections 2.3 and 5.f. No value changed."
       }
     },
     {
@@ -510,13 +576,14 @@
       "id": "TEST-HOST-UNIT",
       "description": "Native host C unit test suites passing with AddressSanitizer and UBSan",
       "formula": "count(host_tests_passed) / count(host_tests_total)",
-      "value": "13/13",
+      "value": "15/15",
       "unit": "suites",
       "class": "M-HOST",
-      "n": 13,
+      "n": 15,
       "source": {
         "script": "python tools/ceepew_pipeline.py --mode host",
-        "reference": "tests/host/CMakeLists.txt"
+        "reference": "tests/host/CMakeLists.txt",
+        "note": "15/15 verified 2026-10-19 with tests/host/test_replay_vectors.c included (data/derived/host_ci_20261019_replay_vectors/host_test_log.txt: Passed 15/15); ctest 20/20 including 5 fuzz-smoke targets (same dir, ctest_full_log.txt: 100% passed out of 20). paper6_main.tex states 15 ASan/UBSan host binaries (lines 108 and 345) - consistent with this entry. CORRECTION 2026-10-19: an earlier internal audit note cited 13 binaries at paper6_main.tex:338; a direct grep of the submission shows no such claim (it states 15 at lines 108 and 345). Sanitizer caveat 2026-10-20: MinGW builds do not apply ASan/UBSan (tests/host/CMakeLists.txt guards with if(NOT MINGW)); the sealed 2026-10-19 run is a plain native MinGW run and its README states it must not be described as sanitizer-checked - the ASan/UBSan attribute holds only for non-MinGW GCC/Clang configurations (flagged to the author)."
       }
     },
     {
@@ -529,6 +596,7 @@
       "n": 14,
       "source": {
         "script": "python tools/ceepew_pipeline.py --mode diag",
+        "note": "Diagnostic-report evidence check 2026-10-20: 60 '=== DIAGNOSTIC REPORT ===' hits exist across logs/** - e.g. logs/converge_fix_test.txt:3428 shows an 18/18-subsystem PASS report from an earlier build; logs/hardware/CEEPEW_ICITIIT_HARDWARE_LOGS_PART2.md carries 28 - but no surviving log matches the current 14-check build; 14/14 remains harness-corroborated only until a report is sealed.",
         "reference": "tests/main/integration_test_e2e.c"
       }
     },
@@ -545,20 +613,22 @@
         "raw_log": "data/raw/E1_B_ccmp_20261017/capture_dual.log"
       },
       "superseded_by": "EXP-FORGE-REJECT-MODEC",
-      "note": "Stale: this entry was measured on a Mode A/B (ESL_BYPASS=1) run. In Modes A and B the application authenticator (ESL/Ascon + crypto_box) is bypassed, so forged frames are NOT rejected at an authenticator stage and this count must NOT be cited as a security result. Superseded by the Mode C measurements (EXP-FORGE-REJECT-MODEC), where the full stack is active."
+      "note": "SUPERSEDED: The cited artifact (E1_B, Mode B/ESL_BYPASS=1) contains 4 forged TX and 4 crypto_box-stage rejections, not 10/10. The '10' count appears to be a naive token match for 'armed' (10 occurrences, 6 BLE startup + 4 forge). This entry was measured on a Mode A/B run where the application authenticator is bypassed, so it must NOT be cited as a security result. AUTHORITATIVE: EXP-FORGE-REJECT-MODEC reports 16/16 per Mode-C run, n=32 total (E1-C + E2b), median match 400 ms."
     },
     {
       "id": "EXP-REPLAY-REJECT",
-      "description": "Sliding-window replay rejection under host fault-injection (4 classes x 25)",
+      "description": "Sliding-window replay rejection under host fault-injection (pre-registered 4 classes x 25 vectors)",
       "formula": "rejected_vectors / 100",
       "value": "100/100",
       "unit": "vectors",
       "class": "M-HOST",
       "n": 100,
       "source": {
-        "script": "tests/host/test_replay_window.c",
+        "script": "tests/host/test_replay_vectors.c",
+        "raw_log": "data/derived/host_ci_20261019_replay_vectors/replay_vectors_log.txt",
         "reference": "Section V.A"
-      }
+      },
+      "note": "Campaign artefact added 2026-10-19 (post-dates the original paper text; the claim was previously uncited at this size). Stage split: 75 rejected at the read-only pre-decrypt check (50 in-window bitmap duplicates + 25 aged-out), 25 at the post-AEAD commit re-check (dup-then-confirm); 27/27 positive controls accepted; 0 failures. Sealed in data/derived/host_ci_20261019_replay_vectors/ (SHA-256 in its README). Note: tests/host/test_replay_window.c exercises 4 scenarios / 20 assertions and does not itself contain a 100-vector campaign."
     },
     {
       "id": "MEM-REGION-POOL",
@@ -662,20 +732,20 @@
       "n": 16028,
       "source": {
         "script": "tools/e1_frame_lengths.py",
-        "reference": "RUN_NOTES.md of E1_A_plain_20261018 and E1_B_ccmp_20261018"
+        "reference": "data/derived/E1_A_plain_20261018/frame_lengths.md:45-46 (total 6432, clean 1433, 22.3%) and frame_lengths.json:98-101 (total/clean/clean_pct); data/derived/E1_B_ccmp_20261018/frame_lengths.md:45-46 (total 9596, clean 1404, 14.6%). The E1-B figures are additionally quoted in data/raw/E1_B_ccmp_20261018/RUN_NOTES.md:69. NOTE: the E1-A figures do NOT appear in data/raw/E1_A_plain_20261018/RUN_NOTES.md - an earlier revision of this entry cited 'RUN_NOTES.md of E1_A_plain_20261018 and E1_B_ccmp_20261018', which was correct for E1-B only and left the E1-A value unfindable at the cited location. Corrected 2026-10-19."
       }
     },
     {
       "id": "TEST-HOST-CI",
       "description": "Full native host test suite (core unit tests via ceepew_pipeline --mode host plus PFS auth and fuzz smoke tests via ctest) passing with the uncommitted security-hardening change set applied, under ASan/UBSan",
       "formula": "count(passed)/count(total)",
-      "value": "19/19",
+      "value": "20/20",
       "unit": "tests",
       "class": "M-HOST",
-      "n": 19,
+      "n": 20,
       "source": {
         "script": "ctest in tests/host/build_host",
-        "reference": "session verification 2026-10-18, log in %TEMP%/opencode/ctest_full_log.txt"
+        "reference": "data/derived/host_ci_20261019_replay_vectors/ctest_full_log.txt (sha256 sealed; '100% tests passed out of 20'); companion log data/derived/host_ci_20261019_replay_vectors/host_test_log.txt (sha256 sealed; 15/15 core unit suites). Provenance, capture date and regeneration commands in data/derived/host_ci_20261019_replay_vectors/README.md. Updated 2026-10-19 to reflect current tree (15 unit + 5 fuzz smoke tests)."
       }
     },
     {
@@ -701,7 +771,8 @@
       "n": 480,
       "source": {
         "script": "tools/e1_frame_lengths.py",
-        "reference": "E1_A_plain_20261018, E1_B_ccmp_20261018, E1_C_ceepew_20261018 RUN_NOTES"
+        "reference": "E1_A_plain_20261018, E1_B_ccmp_20261018, E1_C_ceepew_20261018 RUN_NOTES",
+        "note": "Scope guard 2026-10-19: bypass means the ESL/Ascon application-crypto stages only - the payload still passes unconditional Huffman compression and Hamming FEC, so Modes A/B carry NO literal application bytes. Do not cite as cleartext-visible evidence: README.md Mode A: 100% payload visible remains unsupported (all three Mode-A artifacts show 0 literal markers; sealed E1_A_plain_20261019; .agents/MODE_A_CLEARTEXT_AUDIT.md). Author flag raised; no claim changed here."
       }
     },
     {
@@ -752,7 +823,7 @@
     },
     {
       "id": "EXP-E1A-CYCLE1-PANIC",
-      "description": "Root cause of the previously-unexplained E1-A first-cycle post-derive-sync timeout. RESOLVED: the initiator board (DEVICE_A) panicked and rebooted mid-run at host ~14.4-14.5 s, exactly at barrier entry, then had to re-discover and re-pair; the responder stayed in its own barrier until its 30 s timeout expired, so cycle 1 failed and cycle 2 succeeded. NOT an RF, timing, or protocol-barrier defect.",
+      "description": "Root cause of the previously-unexplained E1-A first-cycle post-derive-sync timeout. RESOLVED: the initiator board (canonical Device B; this session's merged log tags it [DEVICE_A]) panicked and rebooted mid-run at host ~14.4-14.5 s, exactly at barrier entry, then had to re-discover and re-pair; the responder stayed in its own barrier until its 30 s timeout expired, so cycle 1 failed and cycle 2 succeeded. NOT an RF, timing, or protocol-barrier defect.",
       "formula": "boot/panic markers per device counted across each sealed capture; device boot clocks used for ordering (treated as unsynchronised across boards)",
       "value": "DEVICE_A: ble_ctx_lock DEADLOCK (held by pair_supp >2000 ms) x2 -> assert failed xTaskPriorityDisinherit tasks.c:5156 -> Backtrace -> Rebooting / rst:0xc (SW_CPU_RESET), host 14.5 s. DEVICE_B: Post-derive sync timed out after 30000 ms at boot 44170; Received sync byte 0xA5 (HELLO) at boot 59558 = 15.4 s AFTER the timeout. Cycle 2 completed: ACK 0x5A received host 60.1 s. Crash occurred in 1 of 4 captured runs (E1_A only; app_init counts 1x/1x and no backtrace in E1_B, E1_C, E2b).",
       "unit": "occurrence (1 of 4 runs)",
@@ -768,14 +839,14 @@
       "id": "BUG-BLE-CTX-LOCK-PANIC",
       "description": "OPEN DEFECT (intermittent): transport_ble BLE context mutex handling can panic the ESP32 and reboot the board during the IDLE-phase entry that immediately precedes the post-derive-sync barrier. The ble_ctx_lock deadlock detector trips when the lock is held by the pair_supp task for >2000 ms, and the following lock timeout leads to a FreeRTOS assertion (xTaskPriorityDisinherit, tasks.c:5156 - disinheriting a mutex not held by the current task). Field symptom: inexplicable ~45 s extra pairing delay followed by success on retry. Observed on the E1-A binary only (1 of 4 captured runs).",
       "formula": "n/a",
-      "value": "1 occurrence in 4 captured runs (E1_A_plain_20261018, DEVICE_A, host 14.5 s)",
+      "value": "1 occurrence in 4 captured runs (E1_A_plain_20261018, canonical Device B = this session's merged-log tag [DEVICE_A], host 14.5 s)",
       "unit": "occurrences",
       "class": "M-HW",
       "n": 4,
       "source": {
         "site": "components/transport/transport_ble.c (ble_ctx_lock / pair_supp, IDLE-phase entry)",
         "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
-        "status": "PARTIALLY FIXED - the illegal mutex release that produced the panic is removed (see FIX-BLE-CTX-LOCK-RELEASE). The >2 s hold that makes the timeout path reachable, and the 26 call sites that proceed unlocked after a timeout, remain open. Fix not yet built, flashed, or observed on hardware."
+        "status": "PARTIALLY ADDRESSED IN TREE (uncommitted, compile-verified; NOT hardware-verified) - 2026-10-19 update. Chain: illegal release removed (FIX-BLE-CTX-LOCK-RELEASE); 26 unguarded call sites hardened (FIX-BLE-LOCK-CALLSITE-HARDENING); >2 s watchdog hold removed (FIX-BLE-ADV-WATCHDOG-LOCK-HOLD); and the lock-held advertising re-arm in the disconnect path (the site independently verified lock-held in .agents/BLE_LOCK_AUDIT_FINDINGS.md 1) now defers via s_adv_restart_pending and drains after unlock through transport_ble_service_pending_adv_restart(). Evidence: sealed E1_A_plain_20261019 rerun (480 s, 160/160 BENCH58 TX) - no panic/abort/assert/watchdog reset; one adv-watchdog W line (advertising down 2473 ms, phase=SIGN_PK_EXCHANGE); the deferral fingerprint had 0 hits (path NOT exercised). Defect remains OPEN pending a hardware run that exercises the path; the remaining start_advertising call sites are not fully audited (.agents/BLE_LOCK_AUDIT_FINDINGS.md 5)."
       }
     },
     {
@@ -807,7 +878,7 @@
     },
     {
       "id": "FIX-BLE-ADV-WATCHDOG-LOCK-HOLD",
-      "description": "Root cause of the >2 s ble_ctx_lock hold that made BUG-BLE-CTX-LOCK-PANIC reachable, found by locating what the holder task actually does while holding the lock. The task named pair_supp is transport_ble_supervisor_task (xTaskCreate at transport_ble.c:4226). Its tick calls transport_ble_supervisor_tick_adv_watchdog(), which took ble_ctx_lock() and then, while still holding it, called transport_ble_start_advertising(). That function reaches the BLE controller synchronously through transport_ble_configure_data_raw_unlocked(): esp_ble_gap_stop_advertising(), esp_ble_gap_config_adv_data_raw() and esp_ble_gap_config_scan_rsp_data_raw() each block until the controller acknowledges. The watchdog only runs when advertising has been down for >=2 s, i.e. precisely when the controller may be unresponsive, so the hold can exceed the 2 s lock timeout - which is what made enter_phase() time out and report the holder as pair_supp. The watchdog now evaluates its condition and updates its state under the lock, releases the lock, and only then performs the re-arm.",
+      "description": "Root cause of the >2 s ble_ctx_lock hold that made BUG-BLE-CTX-LOCK-PANIC reachable, found by locating what the holder task actually does while holding the lock. The task named pair_supp is transport_ble_supervisor_task (xTaskCreate at transport_ble.c:4226). Its tick calls transport_ble_supervisor_tick_adv_watchdog(), which took ble_ctx_lock() and then, while still holding it, called transport_ble_start_advertising(). That function reaches the BLE controller through transport_ble_configure_data_raw_unlocked(): esp_ble_gap_stop_advertising() (components/bt/host/bluedroid/api/esp_gap_ble_api.c:147), esp_ble_gap_config_adv_data_raw() (:618) and esp_ble_gap_config_scan_rsp_data_raw() (:642). CORRECTION (checked against IDF v6.0.3 source, 2026-10-19): an earlier revision of this entry said those calls 'block until the controller acknowledges'. That mechanism description is wrong. They are asynchronous queue posts, not controller-ACK waits: each calls btc_transfer_context() (components/bt/common/btc/core/btc_task.c:372) -> btc_task_post(msg, OSI_THREAD_MAX_TIMEOUT) -> osi_thread_post() (components/bt/common/osi/thread.c:338) -> osi_thead_work_queue_put() (:114), where OSI_THREAD_MAX_TIMEOUT == OSI_SEM_MAX_TIMEOUT == 0xffffffff (components/bt/common/osi/include/osi/semaphore.h:27) selects xQueueSend(wq->queue, item, portMAX_DELAY) at thread.c:122, and thread.h:56 documents that sentinel as 'blocking forever'. The hold is therefore unbounded and gated on BTC work-queue capacity rather than on controller responsiveness - which makes the >2 s hold easier to reach, not harder, and does not change the fix or its location. The watchdog only runs when advertising has been down for >=2 s, i.e. precisely when the controller may be unresponsive, so the hold can exceed the 2 s lock timeout - which is what made enter_phase() time out and report the holder as pair_supp. The watchdog now evaluates its condition and updates its state under the lock, releases the lock, and only then performs the re-arm.",
       "formula": "lock -> read state, decide need_rearm, update s_adv_down_since_ms -> unlock -> transport_ble_start_advertising()",
       "value": "long hold removed from the supervisor/watchdog path; the blocking radio calls now execute with no lock held",
       "unit": "code change",
@@ -816,7 +887,7 @@
       "source": {
         "site": "components/transport/transport_ble.c: transport_ble_supervisor_tick_adv_watchdog() (~line 4098) and transport_ble_configure_data_raw_unlocked() (~line 886)",
         "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
-        "status": "code change applied; compile-verified only. NOT flashed and NOT observed on hardware. The same synchronous-radio-call-under-lock pattern may exist at the other four call sites of transport_ble_start_advertising() (lines 428, 1306, 1798, 3421), which run from GAP/GATTS event handlers - NOT audited here."
+        "status": "code change applied; compile-verified only. NOT flashed and NOT observed on hardware. The same synchronous-radio-call-under-lock pattern may exist at the other four call sites of transport_ble_start_advertising() (lines 428, 1306, 1798, 3421), which run from GAP/GATTS event handlers - NOT audited here. UPDATE 2026-10-19: an additional lock-held re-arm site in the disconnect path (verified lock-held in .agents/BLE_LOCK_AUDIT_FINDINGS.md 1; formerly transport_ble.c:1840) now defers via s_adv_restart_pending and drains after unlock through transport_ble_service_pending_adv_restart(); disclosed in data/raw/E1_A_plain_20261019/RUN_NOTES.md. Not exercised in the sealed rerun (fingerprint 0 hits). The line-number enumeration above is stale relative to the audited set in BLE_LOCK_AUDIT_FINDINGS.md 5."
       }
     },
     {
@@ -907,6 +978,156 @@
         "run_notes": "data/raw/E5_sync_pulse_20261018/RUN_NOTES.md",
         "manifest": "data/raw/E5_sync_pulse_20261018/manifest.json",
         "status": "recorded in the sealed manifest's exclusion_rule field and in RUN_NOTES.md"
+      }
+    },
+    {
+      "id": "E2B-REJECTION-BREAKDOWN",
+      "description": "Authoritative rejection breakdown for the sealed E2b forged-frame run, recorded to stop a working note from being cited as replay evidence. Earlier working notes described E2b as containing '2 replay' rejections among 36. Re-reading the sealed capture shows those two lines are 'ESL transport header/MAC/replay check failed (err=3 len=2)' - a conflated message covering ESL header failure, MAC failure AND the ESL replay sub-check - and it is NOT CEEPEW_ERR_REPLAY. A third line is an ARQ-layer '[ARQ_RX] REPLAY reject', which is Stop-and-Wait duplicate suppression at the link layer and must NOT be counted as a cryptographic replay defence. No err=17 rejection was observed anywhere in E2b.",
+      "formula": "n/a",
+      "value": "err=5: 34 lines; err=3 (conflated ESL header/MAC/replay check): 2 lines; ARQ-layer replay reject: 1 line; replay-window commit rejection (the message \"replay commit rejected\"): 0 lines. A bare substring match for '(err=17)' is NOT a valid detector: it matches exactly 1 line, capture_dual.log:2172, which is the ARQ duplicate-sequence path returning the same error value.",
+      "unit": "log lines",
+      "class": "M-HW",
+      "n": 37,
+      "source": {
+        "raw_log": "data/raw/E2b_forged_rejection_20261018/capture_dual.log",
+        "site": "main/task_session.c:2067 (the err=17 release path) versus the ESL stage's conflated err=3 message",
+        "status": "CORRECTION to an unsealed working note only - no registry entry ever asserted E2b replay rejections, and the forged-frame result (EXP-FORGE-REJECT-MODEC, 16/16 per run) is unaffected. Consequence: E2b does NOT provide on-device replay-rejection evidence; that is what E3 exists to produce. Any future analyzer must not match replay injections on err=17 alone or it will report a false 'defence failed' verdict when the ESL layer catches the replay with err=3. Confirming evidence for that warning, verified 2026-10-19: a bare '(err=17)' text match over the sealed E2b log returns exactly one line - capture_dual.log:2172 '[SECURE_CHAT_RX] ARQ decode failed / duplicate sequence (err=17)' - i.e. the link-layer ARQ path, not the replay window. The zero count stated in \"value\" is therefore a claim about the replay-window commit-rejection message specifically, and must not be paraphrased as 'E2b contains no err=17 lines'."
+      }
+    },
+    {
+      "id": "BENCHPRIM-X25519",
+      "description": "On-device X25519 scalarmult duration (bench build build_bench_prim, image e1ca1b5a...; sdkconfig byte-identical to the sealed E5 capture/timing build). Sealed BENCHPRIM campaign 2026-10-19: 2 devices x 2 runs x 25 samples = 100 timed samples; every sample err=0.",
+      "formula": "median(us) over 100 samples (4 batches of 25)",
+      "value": "147.7",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 100,
+      "source": {
+        "runs": [
+          "data/raw/BENCHPRIM_20261019",
+          "data/raw/BENCHPRIM_20261019_R2"
+        ],
+        "derived": [
+          "data/derived/BENCHPRIM_20261019/benchprim_samples_recovered.csv",
+          "data/derived/BENCHPRIM_20261019_R2/benchprim_samples_recovered.csv"
+        ],
+        "run_notes": [
+          "data/raw/BENCHPRIM_20261019/RUN_NOTES.md",
+          "data/raw/BENCHPRIM_20261019_R2/RUN_NOTES.md"
+        ],
+        "device_scope": "Both canonical devices (Device A + Device B); the headline value is the combined median across 4 batches.",
+        "tag_resolution": "DEVICE_A = Device A (BLE 8c:94:df:97:d0:c2 / Wi-Fi 8c:94:df:97:d0:c0, responder); DEVICE_B = Device B (BLE 1c:c3:ab:c2:52:ae / Wi-Fi 1c:c3:ab:c2:52:ac, initiator). Resolved per run from the GATTS local= line, the role= lines and TX peer_mac cross-references; both manifests' monitor command opened COM3 then COM4 (monitor labels port 1 DEVICE_A). These two runs are NOT tag-flipped (unlike the same-day p4a/p4b runs, which used --port1 COM4).",
+        "per_device_medians_us": {
+          "Device A": { "n_exact": 50, "BENCHPRIM_20261019": 147705, "BENCHPRIM_20261019_R2": 147746, "both_runs": 147729 },
+          "Device B": { "n_exact": 50, "BENCHPRIM_20261019": 147648, "BENCHPRIM_20261019_R2": 147785, "both_runs": 147727 }
+        },
+        "note": "Batch medians (us): attempt-1 A 147705 / B 147648; R2 A 147746 / B 147785. Combined exact n=100, range 147587-148183 us; the four batch medians span 137 us. Attempt 1 is the pre-registered 120 s protocol run executed at 180 s (deviation in RUN_NOTES; margin only, no measurement parameter changed); R2 is a separately pre-registered 120 s confirmation re-capture (reset only, no reflash). R2 does not supersede attempt 1 - both are sealed separately (data/manifests/index.json). BUILD CAVEATS: ESP-IDF v6.0.2 (manifest idf_version); the README badge says v6.0.3 - toolchain skew recorded, and the current paper text (paper6_main.tex:156) also prints ESP-IDF 6.0.2. Image built after the DRAM link fix (capture row buffer moved to task stack; capture ring payload cap 300 -> 288 B) - inert for this bench (no captures taken) but recorded as build provenance. Boot banner cpu freq = 160 MHz, not the 240 MHz assumed in CYC-X25519. DIVERGENCE vs the paper model constant: CYC-X25519 = 218.75 ms (52.5 Mcycles @ 240 MHz; hardcoded literal, provenance unsupported) is 48.1% above this 147.7 ms measurement (equivalently, the measurement is 32.5% below the model constant). NOT like-for-like (different clock/build/config), so this neither reproduces nor refutes the model constant; there is no bench58 X25519 counterpart."
+      }
+    },
+    {
+      "id": "BENCHPRIM-ED25519-SIGN",
+      "description": "On-device Ed25519 signature generation (TX path; bench build build_bench_prim, image e1ca1b5a...). Sealed BENCHPRIM campaign 2026-10-19: 2 devices x 2 runs x 25 samples; every sample err=0.",
+      "formula": "median(us) over 99 exact samples (100 emitted; 1 range-bounded sample, median-insensitive)",
+      "value": "331.8",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 100,
+      "source": {
+        "runs": [
+          "data/raw/BENCHPRIM_20261019",
+          "data/raw/BENCHPRIM_20261019_R2"
+        ],
+        "derived": [
+          "data/derived/BENCHPRIM_20261019/benchprim_samples_recovered.csv",
+          "data/derived/BENCHPRIM_20261019_R2/benchprim_samples_recovered.csv"
+        ],
+        "run_notes": [
+          "data/raw/BENCHPRIM_20261019/RUN_NOTES.md",
+          "data/raw/BENCHPRIM_20261019_R2/RUN_NOTES.md"
+        ],
+        "device_scope": "Both canonical devices (Device A + Device B); the headline value is the combined median across 4 batches (exact n=99 + 1 range-bounded attempt-1 sample).",
+        "tag_resolution": "DEVICE_A = Device A (BLE 8c:94:df:97:d0:c2 / Wi-Fi 8c:94:df:97:d0:c0, responder); DEVICE_B = Device B (BLE 1c:c3:ab:c2:52:ae / Wi-Fi 1c:c3:ab:c2:52:ac, initiator). Resolved per run from the GATTS local= line, the role= lines and TX peer_mac cross-references; both manifests' monitor command opened COM3 then COM4 (monitor labels port 1 DEVICE_A). These two runs are NOT tag-flipped (unlike the same-day p4a/p4b runs, which used --port1 COM4).",
+        "per_device_medians_us": {
+          "Device A": { "n_exact": 50, "BENCHPRIM_20261019": 331811, "BENCHPRIM_20261019_R2": 331792, "both_runs": 331805 },
+          "Device B": { "n_exact": 49, "bounded": 1, "BENCHPRIM_20261019": 331842, "BENCHPRIM_20261019_R2": 331816, "both_runs": 331842 }
+        },
+        "cross_check": "bench58 number cited by the paper: 332.2 ms median (n=114) = BENCH-SIGN-US 332183 us, independently recomputed from logs/pairing_bench_20261017_104256.txt (114 sign_us lines). BENCHPRIM combined median 331826 us (331.8 ms) -> delta -357 us = -0.107%. VERDICT: CORROBORATES (no divergence beyond 0.11%).",
+        "note": "Batch medians (us): attempt-1 A 331811 / B 331842; R2 A 331792 / B 331816. Combined range 331546-333474 us. Attempt-1 row DEVICE_B i=9 was UART-mangled: only the digits 3318 survived, so that sample is bounded to 331800-331899 us and is excluded from the exact median (exact n=99 -> 331.8 ms; midpoint included -> 331.8 ms; bound-included medians 331821/331828/331828 us - median-insensitive). The row is retained in the recovered CSV with status=recovered-partial - no digits were invented. Two further attempt-1 lines were completed from intact digits (i=12 -> 332039 us; i=23 -> 663111 us). R2 retained its outlier max 333474 us (no exclusions). COMPARABILITY CAVEATS: BENCHPRIM build is ESP-IDF v6.0.2 (manifest idf_version) and was built after the DRAM link fix (capture row buffer moved to task stack; capture ring payload cap 300 -> 288 B) - the fix is inert for this bench but is recorded as build provenance. The v6.0.3 toolchain label (README badge) differs from the v6.0.2 BENCHPRIM manifest; the current paper text (paper6_main.tex:156) also prints ESP-IDF 6.0.2, and the bench58 source log is v6.0.2-dirty, so this BENCHPRIM-vs-bench58 comparison is effectively same-version (v6.0.2). BENCHPRIM times a one-shot raw primitive at session-task start (25 samples/device/run, msg_len=58 B) whereas bench58 times the live TX protocol stage (114 contiguous trials); both boot banners report 160 MHz, not the pre-correction 240 MHz label."
+      }
+    },
+    {
+      "id": "BENCHPRIM-ED25519-VERIFY",
+      "description": "On-device Ed25519 signature verification (RX path; bench build build_bench_prim, image e1ca1b5a...). Sealed BENCHPRIM campaign 2026-10-19: 2 devices x 2 runs x 25 samples; every sample err=0.",
+      "formula": "median(us) over 100 samples (4 batches of 25)",
+      "value": "662.6",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 100,
+      "source": {
+        "runs": [
+          "data/raw/BENCHPRIM_20261019",
+          "data/raw/BENCHPRIM_20261019_R2"
+        ],
+        "derived": [
+          "data/derived/BENCHPRIM_20261019/benchprim_samples_recovered.csv",
+          "data/derived/BENCHPRIM_20261019_R2/benchprim_samples_recovered.csv"
+        ],
+        "run_notes": [
+          "data/raw/BENCHPRIM_20261019/RUN_NOTES.md",
+          "data/raw/BENCHPRIM_20261019_R2/RUN_NOTES.md"
+        ],
+        "device_scope": "Both canonical devices (Device A + Device B); the headline value is the combined median across 4 batches.",
+        "tag_resolution": "DEVICE_A = Device A (BLE 8c:94:df:97:d0:c2 / Wi-Fi 8c:94:df:97:d0:c0, responder); DEVICE_B = Device B (BLE 1c:c3:ab:c2:52:ae / Wi-Fi 1c:c3:ab:c2:52:ac, initiator). Resolved per run from the GATTS local= line, the role= lines and TX peer_mac cross-references; both manifests' monitor command opened COM3 then COM4 (monitor labels port 1 DEVICE_A). These two runs are NOT tag-flipped (unlike the same-day p4a/p4b runs, which used --port1 COM4).",
+        "per_device_medians_us": {
+          "Device A": { "n_exact": 50, "BENCHPRIM_20261019": 662532, "BENCHPRIM_20261019_R2": 662686, "both_runs": 662616 },
+          "Device B": { "n_exact": 50, "BENCHPRIM_20261019": 662607, "BENCHPRIM_20261019_R2": 662762, "both_runs": 662700.5 }
+        },
+        "cross_check": "bench58 number cited by the paper: 662.7 ms median (n=99) = BENCH-EDVERIFY-US 662674 us, independently recomputed from logs/pairing_bench_20261017_104256.txt (99 edverify_us lines). BENCHPRIM combined median 662648.5 us (662.6 ms) -> delta -25.5 us = -0.004%. VERDICT: CORROBORATES (no divergence beyond 0.005%).",
+        "note": "Batch medians (us): attempt-1 A 662532 / B 662607; R2 A 662686 / B 662762. Combined exact n=100, range 662176-663305 us; the four batch medians span 230 us. Attempt-1 DEVICE_B i=23 was UART-mangled (us663111, missing '='); the digits were intact and it was recovered exactly (663111 us) - no digits invented; the RECOVERED value is included in n=100. COMPARABILITY CAVEATS: BENCHPRIM build is ESP-IDF v6.0.2 (manifest idf_version) and was built after the DRAM link fix (capture row buffer moved to task stack; capture ring payload cap 300 -> 288 B) - the fix is inert for this bench but is recorded as build provenance. The v6.0.3 toolchain label (README badge) differs from the v6.0.2 BENCHPRIM manifest; the current paper text (paper6_main.tex:156) also prints ESP-IDF 6.0.2, and the bench58 source log is v6.0.2-dirty, so this BENCHPRIM-vs-bench58 comparison is effectively same-version (v6.0.2). BENCHPRIM times a one-shot raw primitive at session-task start (25 samples/device/run, msg_len=58 B) whereas bench58 times the live RX protocol stage (99 contiguous trials); both boot banners report 160 MHz, not the pre-correction 240 MHz label."
+      }
+    },
+    {
+      "id": "EXP-E3-REPLAY-REJECT",
+      "description": "On-device stale-replay injection campaign (E3, sealed 2026-10-19): the node re-injects stored BENCH58 frames (8 per board, 16 total) into the live stream; each injection is one-to-one time-correlation matched to the peer-side rejection.",
+      "formula": "injections matched to a peer rejection / injections armed",
+      "value": "16/16 rejected; all 16 matched at the ESL header/MAC layer (err=3; 18 err=3 lines in the run, 16 matched to injections); 0/16 reached the crypto replay-window commit (err=17 = 0 occurrences). Honest headline: 16/16 stale replays rejected, by the ESL header/MAC layer.",
+      "unit": "injections",
+      "class": "M-HW",
+      "n": 16,
+      "source": {
+        "raw_log": "data/raw/E3_replay_20261019/capture_dual.log",
+        "run_notes": "data/raw/E3_replay_20261019/RUN_NOTES.md",
+        "analysis": "data/derived/E3_replay_20261019/replay_reject.md",
+        "note": "480 s, channel 1, hopping OFF, COM3+COM4 only (sniffer COM6 excluded). Pre-registered expectation ~8 injections; actual 16 (8/board) - deviation recorded. PAIRING_FAILED=2 before ACTIVE. Ring-hex caveat: the on-node 115200-baud ring dump interleaves with the IDF log task (~80% row corruption) -> NO usable pcap is claimed; evidence is serial log markers only. Scope: this run evidences OUTER-LAYER (ESL header/MAC) replay rejection on hardware; it does not exercise the crypto replay-window commit path (the host campaign EXP-REPLAY-REJECT covers that path: 100/100)."
+      }
+    },
+    {
+      "id": "EXP-E1A-PLAIN-20261019",
+      "description": "Mode-A (plain, app-crypto bypassed) OTA capture retry with a repaired capture instrument (ring depth / drain path / promiscuous filter; firmware changes disclosed in RUN_NOTES). Pre-registered acceptance checks: (1) DUT frames captured - PASS; (2) literal 0x41 application marker visible on air - FAIL; (3) mode_report verdict recorded - PASS. Per the pre-registered rule, the check-2 failure is an APPARATUS/DESIGN failure of the acceptance test, not a negative result about the Mode-A claim.",
+      "formula": "pre-registered acceptance checks passed / 3",
+      "value": "2/3. DUT-frame census: A pcap 93 frames = 91 from DUT B + 2 non-DUT; B pcap 94 = 91 from DUT A + 3 non-DUT. Max 0x41 run = 1 byte in every captured frame (both devices). mode_report (both devices): application plaintext is NOT VISIBLE on air in this mode - pooled payload 7953 B (A) / 8083 B (B); entropy 6.7865 / 6.7927 bits/B; printable-ASCII 37.26% / 37.15%; marker hits 0/93 and 0/94. Check 2 is unsatisfiable on the current pipeline: messages are Huffman-compressed unconditionally (main/session_send.c step 1) before FEC, and FEC parity positions are keyed - literal application bytes cannot appear on air.",
+      "unit": "checks",
+      "class": "M-HW",
+      "n": 160,
+      "source": {
+        "raw_log": "data/raw/E1_A_plain_20261019/capture_dual.log",
+        "run_notes": "data/raw/E1_A_plain_20261019/RUN_NOTES.md",
+        "derived": "data/derived/E1_A_plain_20261019/DEVICE_A/mode_report.txt; data/derived/E1_A_plain_20261019/DEVICE_B/mode_report.txt",
+        "note": "Sealed: n_completed=160 (unit = one BENCH58 transmission attempt by one board), n_excluded=0 (exclusion rule declared before results). 480 s dual-port capture, channel 1, hopping OFF, sniffer excluded. Health: no panic/abort/assert/watchdog reset; one adv-watchdog W line (advertising down 2473 ms, phase=SIGN_PK_EXCHANGE); the BLE lock-fix deferral fingerprint had 0 hits. Provenance gaps: flash_COM4.log never captured; flash_COM3.log holds three failed 460800 idf.py attempts (successful manual esptool 115200 flash console-only); 7 DEVICE_B rows failed a strict length re-check (94 of 101 retained; A 93/93); 2 (A) + 3 (B) rows are non-DUT traffic. Does NOT supersede E1A-FRAME-LEN (20261018 census; different build). Established: DUT-frame capture works at scale; cleartext ESL headers are visible on air in control frames; Mode-A data frames are not ESL-wrapped. NOT established: passive recoverability of the Mode-A payload (needs a pre-declared FEC/compression-aware acceptance test). AUTHOR FLAG: README.md Mode A: 100% payload visible remains unsupported (.agents/MODE_A_CLEARTEXT_AUDIT.md)."
+      }
+    },
+    {
+      "id": "EXP-ESL-TAMPER-REJECT",
+      "description": "ESL-header tamper rejection (host): every one of the 24 packed ESL header bytes is mutated one bit at a time and bound as Ascon-128 associated data; all mutations must fail AEAD tag verification, plus explicit seq-jump and refreshed-timestamp variants.",
+      "formula": "mutated headers rejected / ESL_HDR_BYTES",
+      "value": "24/24 rejected",
+      "unit": "vectors",
+      "class": "M-HOST",
+      "n": 24,
+      "source": {
+        "script": "tests/host/test_ascon.c (test_ascon_header_ad_binding)",
+        "raw_log": "logs/p4c_ascon_timing_20261019.txt",
+        "note": "Log line 41: 'cause AEAD tag rejection (24/24 rejected), plus seq/timestamp variant rejection'; the same report records 'Passed: 14 / 14' at that date (pre-replay-vector build). Traceable counterpart of the paper's '24 ESL-header-tamper vectors [HOST]' (paper6_main.tex:345); the neighbouring '207 AEAD-tag vectors' figure has no surviving artifact (see .agents/AUTHOR_FLAGS_20261019.md)."
       }
     }
   ]

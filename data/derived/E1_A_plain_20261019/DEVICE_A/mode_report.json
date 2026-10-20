@@ -1,0 +1,51 @@
+{
+  "mode": "A plain (no CCMP, no ESL)",
+  "pcap": "data/raw/E1_A_plain_20261019/capture_DEVICE_A.pcap",
+  "pcap_linktype": 127,
+  "n_frames": 93,
+  "hw_ack_excluded": 0,
+  "payload_offset_used": [
+    28
+  ],
+  "payload_bytes_total": 7953,
+  "length_histogram": {
+    "52": 1,
+    "56": 8,
+    "118": 47,
+    "121": 3,
+    "122": 34
+  },
+  "entropy_bits_per_byte": 6.7865,
+  "printable_ascii_share": 0.3726,
+  "retry_frames": 1,
+  "cleartext_markers": [
+    {
+      "marker": "bench58_A_run",
+      "pattern": "A{16,}",
+      "frames_matched": 0,
+      "frames_total": 93,
+      "first_frame": null,
+      "first_offset_in_frame": null,
+      "longest_match_bytes": 0
+    },
+    {
+      "marker": "cmd_open_valve",
+      "pattern": "CMD=OPEN_VALVE_04",
+      "frames_matched": 0,
+      "frames_total": 93,
+      "first_frame": null,
+      "first_offset_in_frame": null,
+      "longest_match_bytes": 0
+    },
+    {
+      "marker": "auth_admin",
+      "pattern": "AUTH=ADMIN",
+      "frames_matched": 0,
+      "frames_total": 93,
+      "first_frame": null,
+      "first_offset_in_frame": null,
+      "longest_match_bytes": 0
+    }
+  ],
+  "plaintext_visible_on_air": false
+}

@@ -1,0 +1,313 @@
+{
+  "run_id": "E2b_forged_rejection_20261018",
+  "window_seconds": 2.0,
+  "clock_used": "device",
+  "replay_injections": {
+    "total": 0,
+    "replay_armed": 0,
+    "by_device": {}
+  },
+  "rejections": {
+    "total": 36,
+    "by_kind": {
+      "esl": 2,
+      "ascon": 1,
+      "pipeline": 17,
+      "box": 16
+    },
+    "by_device_kind": {
+      "DEVICE_B": {
+        "esl": 1,
+        "box": 8,
+        "pipeline": 8
+      },
+      "DEVICE_A": {
+        "esl": 1,
+        "ascon": 1,
+        "pipeline": 9,
+        "box": 8
+      }
+    },
+    "err17_total": 0,
+    "err17_by_device": {}
+  },
+  "matching": {
+    "matched_count": 0,
+    "unmatched_count": 0,
+    "matched_by_err": {},
+    "matched_err17_count": 0,
+    "matched_err3_count": 0,
+    "matched_other_count": 0,
+    "median_delta_us": null,
+    "max_abs_delta_us": null,
+    "median_delta_host_s": null
+  },
+  "unexplained_rejections": {
+    "count": 36,
+    "by_kind": {
+      "esl": 2,
+      "ascon": 1,
+      "pipeline": 17,
+      "box": 16
+    },
+    "by_err": {
+      "3": 2,
+      "5": 34
+    }
+  },
+  "match_details": [],
+  "unexplained_details": [
+    {
+      "device": "DEVICE_B",
+      "kind": "esl",
+      "err": 3,
+      "host_ts": 13.9,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "esl",
+      "err": 3,
+      "host_ts": 14.0,
+      "device_ts_us": 13767
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "ascon",
+      "err": 5,
+      "host_ts": 16.9,
+      "device_ts_us": 16742
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 17.0,
+      "device_ts_us": 16750
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 61.6,
+      "device_ts_us": 61351
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 61.6,
+      "device_ts_us": 61359
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 62.7,
+      "device_ts_us": 62502
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 62.7,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 112.1,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 112.1,
+      "device_ts_us": 111936
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 113.5,
+      "device_ts_us": 113344
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 113.6,
+      "device_ts_us": 113352
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 162.7,
+      "device_ts_us": 162528
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 162.7,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 163.9,
+      "device_ts_us": 163718
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 163.9,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 213.3,
+      "device_ts_us": 213115
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 213.3,
+      "device_ts_us": 213122
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 214.6,
+      "device_ts_us": 214393
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 214.6,
+      "device_ts_us": 214401
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 263.9,
+      "device_ts_us": 263702
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 263.9,
+      "device_ts_us": 263710
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 265.2,
+      "device_ts_us": 264969
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 265.2,
+      "device_ts_us": 264977
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 314.4,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 314.4,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 315.5,
+      "device_ts_us": 315347
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 315.6,
+      "device_ts_us": 315355
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 366.2,
+      "device_ts_us": 364660
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 366.2,
+      "device_ts_us": 364667
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 367.9,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 368.0,
+      "device_ts_us": 365964
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 441.2,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 441.2,
+      "device_ts_us": 415242
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "box",
+      "err": 5,
+      "host_ts": 444.2,
+      "device_ts_us": 416539
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 444.2,
+      "device_ts_us": 416546
+    }
+  ]
+}

@@ -1,6 +1,58 @@
 {
-  "updated_utc": "2026-10-19T05:27:22+00:00",
+  "updated_utc": "2026-10-19T19:20:11+00:00",
   "runs": [
+    {
+      "run_id": "BENCHPRIM_20261019",
+      "state": "sealed",
+      "experiment": "CYC",
+      "date_utc": "2026-10-19T16:39:17+00:00",
+      "capture_mode": "n/a",
+      "n_planned": "150 (25 x 3 primitives x 2 devices)",
+      "n_completed": 150,
+      "raw_file_count": 6,
+      "missing_required_fields": [],
+      "notes": "On-device primitive micro-bench at session-task start: X25519 shared secret, Ed25519 sign, Ed25519 verify. N=25 per primitive per device, msg_len=58 bytes 0x41. No UART print inside timed regions. Toolchain ESP-IDF v6.0.2; sdkconfig byte-identical to sealed E5 build_cap_timing (generated 9bdf5de9...). Both images built after the DRAM link fix (row buffer on task stack; ring cap 288 B). Full pre-registration in RUN_NOTES.md.\nSealed 2026-10-19. Flash applied with esptool 115200 (options before write-flash); pre-registered idf.py command not used (see RUN_NOTES). Capture window 180 s vs pre-registered 120 s (margin only; no measurement parameter changed). All 150 timed calls emitted (begin/end on both devices); strict parse 147/150 (3 DEVICE_B lines mangled in 115200 transit); recovery: 2 exact + 1 digit-bounded [331800,331899], median-insensitive; 149 exact values; err=0 for all 150. Pre-reg prose said no BENCH_58B but the config has CONFIG_CEEPEW_BENCH_58B=1 (same as sealed E5 build_cap_timing); the BENCH58 campaign also runs later in the same boot; no session traffic during the timed window. BENCHKAT FAIL line pre-existing since E1_B_ccmp_20261017 (40 files) - separate lane. n_completed=150 (unit: one timed primitive call), n_excluded=0 (rule: None). Confirmation re-capture sealed separately as BENCHPRIM_20261019_R2 (150/150 strict).",
+      "port_map": {
+        "DEVICE_B": {
+          "mac": "1c:c3:ab:c2:52:ac",
+          "canonical": "Device B",
+          "role": "initiator",
+          "source": "GATTS identity"
+        },
+        "DEVICE_A": {
+          "mac": "8c:94:df:97:d0:c0",
+          "canonical": "Device A",
+          "role": "responder",
+          "source": "GATTS identity"
+        }
+      }
+    },
+    {
+      "run_id": "BENCHPRIM_20261019_R2",
+      "state": "sealed",
+      "experiment": "CYC",
+      "date_utc": "2026-10-19T18:04:57+00:00",
+      "capture_mode": "n/a",
+      "n_planned": "150 (25 x 3 primitives x 2 devices)",
+      "n_completed": 150,
+      "raw_file_count": 4,
+      "missing_required_fields": [],
+      "notes": "Confirmation re-capture declared before data collection: attempt 1 (BENCHPRIM_20261019) emitted all 150 samples but the 115200 console mangled 3 DEVICE_B lines (2 recovered exactly, 1 bounded, median-insensitive). Same image e1ca1b5a80efe6d70d8abbf54452e80b63bf95eae9717b6233d83832ff2930ce (no reflash; monitor reset re-boots). Purpose: complete set + reproducibility check. Attempt 1 kept and sealed; R2 does not supersede it. Full pre-registration in RUN_NOTES.md.\nSealed 2026-10-19. Confirmation re-capture (reset-only, no reflash; same image e1ca1b5a80efe6d70d8abbf54452e80b63bf95eae9717b6233d83832ff2930ce). 120 s window as pre-registered. Strict 150/150, completeness PASS, no UART mangling; err=0 for all 150 calls. Medians reproduce BENCHPRIM_20261019 within 155 us. n_completed=150 (unit: one timed primitive call), n_excluded=0 (rule: None).",
+      "port_map": {
+        "DEVICE_A": {
+          "mac": "8c:94:df:97:d0:c0",
+          "canonical": "Device A",
+          "role": "responder",
+          "source": "GATTS identity"
+        },
+        "DEVICE_B": {
+          "mac": "1c:c3:ab:c2:52:ac",
+          "canonical": "Device B",
+          "role": "initiator",
+          "source": "GATTS identity"
+        }
+      }
+    },
     {
       "run_id": "E1_A_plain_20261018",
       "state": "sealed",
@@ -11,7 +63,21 @@
       "n_completed": null,
       "raw_file_count": 4,
       "missing_required_fields": [],
-      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads"
+      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads",
+      "port_map": null
+    },
+    {
+      "run_id": "E1_A_plain_20261019",
+      "state": "sealed",
+      "experiment": "E1",
+      "date_utc": "2026-10-19T16:39:15+00:00",
+      "capture_mode": "plain",
+      "n_planned": "80",
+      "n_completed": 160,
+      "raw_file_count": 7,
+      "missing_required_fields": [],
+      "notes": "hopping OFF, fixed channel 1, 5 s inter-message, BENCH58 58-byte payloads. Retry of E1_A_plain_20261018 after capture-instrument repair: DUT-OUI ring guard restored, single-write row emission, logger row buffer moved to task stack (DRAM link fix), ring payload cap 300->288 B (protocol bound 278 B; no truncation). Toolchain ESP-IDF v6.0.2; sdkconfig byte-identical to sealed 20261018 build. Full pre-registration in RUN_NOTES.md.\nProvenance (pre-seal): flash_COM4.log never existed (manual COM4 flash output console-only); flash_COM3.log holds the failed 460800 idf.py attempts, not the successful manual flash. Manual conversion/analysis command records appended (reconstructed=1: canonical argv; the driver pcap step was skipped because it expects capture_COM3/COM4.log names). See RUN_NOTES.md Results for gate outcomes and classification.\nn_completed unit: one BENCH58 transmission attempt by one board; [BENCH58_DONE] sent=80 on both boards -> 160/160. n_excluded = 0 (rule: None). Outcome: pre-registered acceptance check 2 (literal 0x41 run >=4 on air) fails by construction (message is Huffman-compressed before fragmentation, then Hamming(15,11)-encoded; no literal application bytes can reach the radio) -> classified as APPARATUS/DESIGN FAILURE of the acceptance test, not a protocol result. Check 1 (DUT MAC frame) PASS: 91 peer-DUT frames per pcap. Check 3 verdict recorded verbatim (NOT VISIBLE) but not interpretable as a cleartext-negative. Full evidence + author flags: RUN_NOTES.md Results.",
+      "port_map": null
     },
     {
       "run_id": "E1_B_ccmp_20261017",
@@ -25,7 +91,8 @@
       "missing_required_fields": [
         "notes"
       ],
-      "notes": ""
+      "notes": "",
+      "port_map": null
     },
     {
       "run_id": "E1_B_ccmp_20261018",
@@ -37,7 +104,8 @@
       "n_completed": null,
       "raw_file_count": 6,
       "missing_required_fields": [],
-      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th)"
+      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th)",
+      "port_map": null
     },
     {
       "run_id": "E1_C_ceepew_20261018",
@@ -49,7 +117,8 @@
       "n_completed": null,
       "raw_file_count": 6,
       "missing_required_fields": [],
-      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th), CEE-PEW full (CCMP+ESL+Ed25519)"
+      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th), CEE-PEW full (CCMP+ESL+Ed25519)",
+      "port_map": null
     },
     {
       "run_id": "E2a_plain_injection_20261018",
@@ -61,7 +130,8 @@
       "n_completed": 0,
       "raw_file_count": 5,
       "missing_required_fields": [],
-      "notes": "E2(a) mode-mismatch: plain ESP-NOW frames into a CEE-PEW receiver; expect ESL-stage reject on COM5, 0 frames to app layer | RESULT: 0 BENCH58 frames injected (gate never satisfied), 0 sessions, 0 app messages, 11 post-derive sync timeouts, 25 PAIRING_FAILED, 628 Discard events (DEVICE_A 616: 264 FEC length-trailer + 352 RX decrypt-pipeline; DEVICE_B 12: ESL transport header/MAC/replay check failed). See RUN_NOTES.md."
+      "notes": "E2(a) mode-mismatch: plain ESP-NOW frames into a CEE-PEW receiver; expect ESL-stage reject on COM5, 0 frames to app layer | RESULT: 0 BENCH58 frames injected (gate never satisfied), 0 sessions, 0 app messages, 11 post-derive sync timeouts, 25 PAIRING_FAILED, 628 Discard events (DEVICE_A 616: 264 FEC length-trailer + 352 RX decrypt-pipeline; DEVICE_B 12: ESL transport header/MAC/replay check failed). See RUN_NOTES.md.",
+      "port_map": null
     },
     {
       "run_id": "E2b_forged_rejection_20261018",
@@ -73,7 +143,21 @@
       "n_completed": null,
       "raw_file_count": 4,
       "missing_required_fields": [],
-      "notes": "E2(b) BENCH58 built-in forge path: every 10th frame (seq 9,19,...,79) corrupts one box byte; expect Ascon-128 tag reject (err=5) on RX, 0 forged frames to app layer"
+      "notes": "E2(b) BENCH58 built-in forge path: every 10th frame (seq 9,19,...,79) corrupts one box byte; expect Ascon-128 tag reject (err=5) on RX, 0 forged frames to app layer",
+      "port_map": null
+    },
+    {
+      "run_id": "E3_replay_20261019",
+      "state": "sealed",
+      "experiment": "E3",
+      "date_utc": "2026-10-19T09:09:02+00:00",
+      "capture_mode": "ceepew",
+      "n_planned": "80",
+      "n_completed": null,
+      "raw_file_count": 7,
+      "missing_required_fields": [],
+      "notes": "E3 stale-frame replay rejection. Firmware hook: session_send.c stage_tx_esl_wrap emits the previously saved ESL-wrapped blob verbatim when armed (task_session.c arming at s_bench_sent%10==4), so the injected frame carries a stale ESL header at least 5s old while a fresh ARQ seq is applied downstream, which prevents link-layer duplicate suppression from confounding the crypto replay defence (the E2b confound). Expect about 8 injections and 8 forges per 80-frame campaign. DISCLOSED CAVEATS: (1) Toolchain is ESP-IDF v6.0.2 (C:\\esp\\v6.0.2\\esp-idf, tag v6.0.2), the same version that built E1/E2a/E2b/E5. An earlier draft of this manifest claimed v6.0.3 and asserted that v6.0.2 had been deleted from the machine and could not be restored; that assertion was wrong and is corrected in PREREGISTRATION.md section 8. A build of this exact configuration on v6.0.3 was attempted and failed at link with 'region dram0_0_seg overflowed by 16 bytes', which is why it was abandoned. Compiler identical (xtensa-esp-elf 15.2.0_20251204). This run's generated sdkconfig.h is byte-identical to build_cap_ceepew's, the Mode C capture configuration used for E1-C/E2a/E2b. (2) CONFIG_CEEPEW_BENCH_TIMING is OFF (DRAM pressure at link time), so no BENCH_TIME records exist for this run and no latency claim may be derived from it. (3) Hopping off, channel 1, as pre-registered.",
+      "port_map": null
     },
     {
       "run_id": "E5_sync_pulse_20261018",
@@ -85,7 +169,8 @@
       "n_completed": null,
       "raw_file_count": 6,
       "missing_required_fields": [],
-      "notes": "E5 sync-pulse latency. Both boards pulse AND sense on shared GPIO14 (D14-D14 open-drain jumper). All intervals are SAME-CLOCK only; no cross-board subtraction is performed anywhere. BENCH58: 80 frames/board at 5s spacing. 300 BENCH_TIME records recovered (160 tx, 140 rx)."
+      "notes": "E5 sync-pulse latency. Both boards pulse AND sense on shared GPIO14 (D14-D14 open-drain jumper). All intervals are SAME-CLOCK only; no cross-board subtraction is performed anywhere. BENCH58: 80 frames/board at 5s spacing. 300 BENCH_TIME records recovered (160 tx, 140 rx).",
+      "port_map": null
     }
   ]
 }

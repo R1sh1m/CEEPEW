@@ -1,0 +1,29 @@
+==============================================================================
+MODE REPORT - A plain (no CCMP, no ESL)
+==============================================================================
+pcap                    : data/raw/E1_A_plain_20261019/capture_DEVICE_B.pcap
+frames analysed         : 94
+HW-ACK markers excluded : 0
+ESP-NOW payload offset  : [28]
+payload bytes pooled    : 8083
+
+Frame-length histogram (incl. any FCS the driver left in):
+     45 B :    1  #
+     52 B :    1  #
+     55 B :    1  #
+     56 B :    5  #####
+    117 B :    2  ##
+    118 B :   49  #################################################
+    121 B :    3  ###
+    122 B :   32  ################################
+
+Byte entropy of pooled ESP-NOW payload : 6.7927 bits/B
+Printable-ASCII share of that payload  : 37.15% (3003/8083 B)
+Retry-flagged frames                   : 5/94
+
+Cleartext field inventory (verbatim search in ESP-NOW payload):
+  absent  bench58_A_run    pattern 'A{16,}' in 0/94 frames
+  absent  cmd_open_valve   pattern 'CMD=OPEN_VALVE_04' in 0/94 frames
+  absent  auth_admin       pattern 'AUTH=ADMIN' in 0/94 frames
+
+VERDICT: application plaintext is NOT VISIBLE on air in this mode.

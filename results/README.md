@@ -35,7 +35,7 @@ Every quantitative value in [`results/registry.json`](registry.json) is tagged w
 
 *Note: 249 B exactly satisfies the ESP-NOW v1.0 standard limit of 250 B.*
 
-### B. Hardware Stage Execution Timings (ESP32 DevKit v1 at 240 MHz)
+### B. Hardware Stage Execution Timings (ESP32 DevKit v1 at 160 MHz)
 
 Derived from physical instrumentation (`[BENCHTX]` / `[BENCHRX]` logs in [`data/derived/bench58_today_stages.csv`](../data/derived/bench58_today_stages.csv)):
 
