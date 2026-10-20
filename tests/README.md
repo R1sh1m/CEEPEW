@@ -87,7 +87,7 @@ python tools/ceepew_pipeline.py --mode pairing
 ```
 
 Workflow:
-1. Flashes Device A and Device B sequentially.
+1. Flashes Device B and Device A sequentially.
 2. Launches [`tools/ceepew_monitor.py`](../tools/ceepew_monitor.py) across both serial ports simultaneously.
 3. Observes BLE advertising, commitment exchange, GATT connection, verification PIN matching, and successful handoff to active ESP-NOW communication.
 4. Auto-ingests logs into [`DEVICE_LOG_FINDINGS.md`](../DEVICE_LOG_FINDINGS.md) via [`tools/ceepew_log_pipeline.py`](../tools/ceepew_log_pipeline.py).

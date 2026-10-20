@@ -201,6 +201,17 @@ target_link_libraries(test_replay_window PRIVATE ceepew_portable)
 target_include_directories(test_replay_window PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_replay_window COMMAND test_replay_window)
 
+# test_replay_vectors — pre-registered 4-class x 25-vector replay campaign
+# (100 vectors) against the REAL transport_replay.c. Supplied 2026-10-19 as
+# the traceable artefact for registry entry EXP-REPLAY-REJECT.
+add_executable(test_replay_vectors
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_replay_vectors.c
+    ${COMPONENT_DIR}/components/transport/transport_replay.c
+)
+target_link_libraries(test_replay_vectors PRIVATE ceepew_portable)
+target_include_directories(test_replay_vectors PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_replay_vectors COMMAND test_replay_vectors)
+
 # test_ui_navigator — relative navigator hysteresis, velocity ramp, edge dwell, clamp
 add_executable(test_ui_navigator
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ui_navigator.c
