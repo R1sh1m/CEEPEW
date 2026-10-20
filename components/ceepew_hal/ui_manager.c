@@ -537,6 +537,10 @@ const uint8_t s_font5x7[95][5] = {
    Higher value = slower animation. 60ms gives smooth 10.5s cycle. */
 #define SCROLL_TIME_DIVISOR  60U
 
+/* Marquee separator gap: visible space between primary and wrap copies
+   when text exceeds its container width (prevents glyph-to-glyph adjacency). */
+#define CEEPEW_UI_MARQUEE_GAP_PX  12U  /* 2 characters at 6px each */
+
 /* Render one character at pixel position (x, y). Uses draw_pixel() which
  * calls hal_ui_rect_fill() — known working. Safe: clips to screen bounds.
  * Each character is 5px wide × 7px tall with 1px column gap = 6px advance. */
@@ -628,9 +632,12 @@ static void ui_draw_char_at(int16_t x, uint8_t y, char c)
 }
 
 /* Word-wrapping text renderer for status strings that would otherwise clip.
- * Breaks on spaces when possible and hard-wraps long words within max_width. */
+ * Breaks on spaces when possible and hard-wraps long words within max_width.
+ * 
+ * FIX: Added max_height parameter to bound vertical rendering within a container.
+ * Text will NOT render at or below y + max_height, preventing spill from boxes. */
 static void ui_draw_text_wrapped(uint8_t x, uint8_t y, const char *str,
-                                 uint8_t max_width, uint8_t line_height)
+                                 uint8_t max_width, uint8_t line_height, uint8_t max_height)
 {
     if (str == NULL) {
         return;
@@ -639,9 +646,11 @@ static void ui_draw_text_wrapped(uint8_t x, uint8_t y, const char *str,
     CEEPEW_ASSERT_VOID(y < CEEPEW_OLED_HEIGHT_PX);
     CEEPEW_ASSERT_VOID(max_width > 0U);
     CEEPEW_ASSERT_VOID(line_height > 0U);
+    CEEPEW_ASSERT_VOID(max_height > 0U);
 
     uint8_t cx = x;
     uint8_t cy = y;
+    const uint8_t max_y = (uint8_t)(y + max_height);
 
     while (*str != '\0') {
         while (*str == ' ') {
@@ -661,7 +670,8 @@ static void ui_draw_text_wrapped(uint8_t x, uint8_t y, const char *str,
         if (used_px > 0U && (used_px + needed_px) > max_width) {
             cx = x;
             cy = (uint8_t)(cy + line_height);
-            if ((uint16_t)cy + 7U > 64U) {
+            /* FIX: Check against container max_height bound, not screen edge */
+            if ((uint16_t)cy + 7U > max_y) {
                 return;
             }
         }
@@ -670,7 +680,8 @@ static void ui_draw_text_wrapped(uint8_t x, uint8_t y, const char *str,
             if ((uint16_t)(cx - x) + 5U > max_width) {
                 cx = x;
                 cy = (uint8_t)(cy + line_height);
-                if ((uint16_t)cy + 7U > 64U) {
+                /* FIX: Check against container max_height bound */
+                if ((uint16_t)cy + 7U > max_y) {
                     return;
                 }
             }
@@ -683,7 +694,8 @@ static void ui_draw_text_wrapped(uint8_t x, uint8_t y, const char *str,
             if ((uint16_t)(cx - x) + 6U > max_width) {
                 cx = x;
                 cy = (uint8_t)(cy + line_height);
-                if ((uint16_t)cy + 7U > 64U) {
+                /* FIX: Check against container max_height bound */
+                if ((uint16_t)cy + 7U > max_y) {
                     return;
                 }
             } else {
@@ -796,9 +808,15 @@ static void diag_draw_header(const char *title, uint8_t page_num)
  * Text scrolls at 1 pixel per frame (~50ms per pixel with 50ms frame rate).
  * Wraps around seamlessly: after text exits right edge, it re-enters from left.
  * max_width: maximum pixels to write (clipping boundary on right).
- * base_scroll_px: shared scroll offset for synchronized text (if 0, calculates independently). */
+ * base_scroll_px: shared scroll offset for synchronized text (if 0, calculates independently).
+ * align_left: if true, left-align static text within the window; if false, center it.
+ *             (use true for label+value rows like "BLE: ADV", false for standalone rows)
+ * 
+ * If text fits within max_width, render statically (no scrolling, no duplicate).
+ * When marquee IS needed, insert a visible separator gap between
+ * primary and wrap copies so they never render glyph-to-glyph adjacent. */
 static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
-                                    uint8_t max_width, uint32_t base_scroll_px)
+                                    uint8_t max_width, uint32_t base_scroll_px, bool align_left)
 {
     if (str == NULL) { return; }
 
@@ -812,11 +830,21 @@ static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
 
     if (text_len_px == 0U) { return; }
 
-    /* Cycle over text length so scrolling loops continuously.
-     * A duplicate copy is rendered at text_len_px to the right
-     * so when the primary exits left the duplicate enters from
-     * the right — no blank gap. */
-    uint16_t cycle_px = text_len_px;
+    /* If text fits within max_width, render statically */
+    if (text_len_px <= max_width) {
+        uint8_t offset_x;
+        if (align_left) {
+            offset_x = 0U;  /* Left-align for label+value rows */
+        } else {
+            offset_x = (uint8_t)((max_width - text_len_px) / 2U);  /* Center for standalone */
+        }
+        ui_draw_text((uint8_t)((uint16_t)x + offset_x), y, str);
+        return;
+    }
+
+    /* Marquee mode — insert explicit separator gap using file-scope constant.
+     * Cycle length = text + gap so the two copies can never touch glyph-to-glyph. */
+    uint16_t cycle_px = text_len_px + CEEPEW_UI_MARQUEE_GAP_PX;
 
     /* Use provided scroll offset, or calculate independently if 0 */
     uint32_t scroll_px;
@@ -829,13 +857,14 @@ static void ui_draw_rotating_text(uint8_t x, uint8_t y, const char *str,
     int16_t text_x = (int16_t)x - (int16_t)scroll_px;
 
     /* Render each character twice (primary + wrap copy one cycle right),
-     * clipping to [x .. x+max_width) */
+     * clipping to [x .. x+max_width). The wrap copy is offset by cycle_px
+     * which includes the separator gap, ensuring visible separation. */
     const char *c = str;
     uint8_t char_idx = 0U;
     while (*c != '\0' && char_idx < 128U) {
         int16_t char_x = text_x + (int16_t)(char_idx * 6U);
         int16_t char_x_end = char_x + 5;
-        int16_t wrap_x = (int16_t)(char_x + (int16_t)text_len_px);
+        int16_t wrap_x = (int16_t)(char_x + (int16_t)cycle_px);
         int16_t wrap_x_end = (int16_t)(wrap_x + 5);
 
         if (char_x_end >= (int16_t)x && char_x < (int16_t)(x + max_width)) {
@@ -1402,7 +1431,7 @@ static CeePewErr_t render_discovery(void)
                           peer->peer_mac[3], peer->peer_mac[4],
                           peer->peer_mac[5]);
        }
-       ui_draw_rotating_text(RPANEL_X, Y_PEER_ID, peer_name_disp, RPANEL_WIDTH, shared_scroll_px);
+       ui_draw_rotating_text(RPANEL_X, Y_PEER_ID, peer_name_disp, RPANEL_WIDTH, shared_scroll_px, false);
 
        int16_t rssi_smooth = (int16_t)(g_ble_ctx.peer_rssi_smooth_x8 / 8);
        if (rssi_smooth < -90) { rssi_smooth = -90; }
@@ -1446,7 +1475,7 @@ static CeePewErr_t render_discovery(void)
        }
     } else {
        /* Peer not yet found: show scanning prompt (synchronized with title above) */
-       ui_draw_rotating_text(RPANEL_X, Y_PEER_ID, "Awaiting peer...", RPANEL_WIDTH, shared_scroll_px);
+       ui_draw_rotating_text(RPANEL_X, Y_PEER_ID, "Awaiting peer...", RPANEL_WIDTH, shared_scroll_px, false);
     }
 
     /* ── BLE state indicator (only when peer NOT discovered to avoid clutter) ── */
@@ -1465,7 +1494,7 @@ static CeePewErr_t render_discovery(void)
        /* Draw fixed "BLE: " label, then scroll the state value */
        hal_ui_text(RPANEL_X, Y_BLE_STATE, "BLE: ", HAL_UI_WHITE);
        ui_draw_rotating_text((uint8_t)(RPANEL_X + 30U), Y_BLE_STATE, ble_state_value,
-                             (uint8_t)(RPANEL_WIDTH - 30U), shared_scroll_px);
+                             (uint8_t)(RPANEL_WIDTH - 30U), shared_scroll_px, true);
     }
 
     /* ── Bottom status line ── */
@@ -1479,7 +1508,7 @@ static CeePewErr_t render_discovery(void)
                       (unsigned)g_ble_ctx.scan_hit_count,
                       (unsigned long)(age_ms / 1000U),
                       (unsigned long)((age_ms % 1000U) / 100U));
-       ui_draw_rotating_text(RPANEL_X, Y_STATUS, status_str, RPANEL_WIDTH, shared_scroll_px);
+       ui_draw_rotating_text(RPANEL_X, Y_STATUS, status_str, RPANEL_WIDTH, shared_scroll_px, false);
     } else {
        /* Scanning: show activity summary */
        if (transport_ble_get_state() == BLE_ADVERTISING ||
@@ -1488,7 +1517,7 @@ static CeePewErr_t render_discovery(void)
            char adv_str[20U];
            (void)snprintf(adv_str, sizeof(adv_str), "SCAN S:%lu",
                           (unsigned long)g_ble_ctx.scan_seen_count);
-           ui_draw_rotating_text(RPANEL_X, Y_STATUS, adv_str, RPANEL_WIDTH, shared_scroll_px);
+           ui_draw_rotating_text(RPANEL_X, Y_STATUS, adv_str, RPANEL_WIDTH, shared_scroll_px, false);
        } else {
            static const char *const SCAN_STATES[4] = { "SCAN", "SCAN.", "SCAN..", "SCAN..." };
            uint8_t dot_idx = (uint8_t)((now_ms / 500U) % 4U);
@@ -1756,20 +1785,36 @@ static CeePewErr_t render_pairing_failed(void)
 
     ui_draw_centered_text(13U, reason);
 
-    /* Enlarged detail box: 120px wide, 27px high (y=22 to 49) to hold up to 3 lines cleanly */
-    HalUIRect_t detail_box = { .x = 4U, .y = 22U, .w = 120U, .h = 27U };
+    /* FIX (correction): Enlarged detail box to accommodate worst-case 4-line detail.
+     * Box: 120px wide, 34px high (y=22 to y=55).
+     * Border rows: y=22 (top) and y=55 (bottom). Interior: y=23..54.
+     * Text start: y=24 (2px below top border).
+     * 
+     * Worst-case: "Code 0000 not allowed. Please enter a non-zero code." (54 chars)
+     * Word-wrap analysis (116px max_width ≈ 19 chars/line at 6px/char):
+     *   Line 1: "Code 0000 not" (13 chars) → y=24, glyphs occupy rows 24..30
+     *   Line 2: "allowed. Please" (15 chars) → y=32, glyphs occupy rows 32..38
+     *   Line 3: "enter a non-zero" (16 chars) → y=40, glyphs occupy rows 40..46
+     *   Line 4: "code." (5 chars) → y=48, glyphs occupy rows 48..54
+     * Last glyph row (54) is 1px above bottom border row (55). ✓
+     * 
+     * max_height=31U: max_y = 24 + 31 = 55. Line 4 check: 48+7=55, NOT > 55 → renders.
+     * Line 5 would be at cy=56: 56+7=63 > 55 → rejected. ✓ */
+    HalUIRect_t detail_box = { .x = 4U, .y = 22U, .w = 120U, .h = 34U };
     hal_ui_rect(&detail_box, HAL_UI_WHITE);
-    ui_draw_text_wrapped(6U, 24U, detail, 116U, 8U);
+    ui_draw_text_wrapped(6U, 24U, detail, 116U, 8U, 31U);
 
-    /* Footer: "Press button" + blinking square centered on line 53 */
+    /* Footer: "Press button" + blinking square — positioned below box with 1px gap.
+     * Box bottom border row: 55. Footer y=57 → glyphs occupy rows 57..63.
+     * Gap: row 56 (1px). Screen bottom: row 63 (footer fits exactly). ✓ */
     {
         const char *footer = "Press button";
         uint8_t flen = (uint8_t)strlen(footer);
         uint8_t fx = (uint8_t)(((uint16_t)HAL_UI_WIDTH_PX - (uint16_t)flen * 6U) / 2U);
-        hal_ui_text(fx, 53U, footer, HAL_UI_WHITE);
+        hal_ui_text(fx, 57U, footer, HAL_UI_WHITE);
         /* Blinking filled square aligned after footer text */
         if ((g_ui_ctx.anim.frame_count / 5U) % 2U == 0U) {
-            HalUIRect_t sq = { .x = (uint8_t)(fx + flen * 6U + 4U), .y = 53U, .w = 5U, .h = 5U };
+            HalUIRect_t sq = { .x = (uint8_t)(fx + flen * 6U + 4U), .y = 57U, .w = 5U, .h = 5U };
             hal_ui_rect_fill(&sq, HAL_UI_WHITE);
         }
     }
@@ -1920,8 +1965,9 @@ static CeePewErr_t render_peer_select(void)
         hal_ui_rect_fill(&scroll_bar, HAL_UI_WHITE);
     }
 
-    /* Hint */
-    hal_ui_text(4U, 56U, "BTN=select HOLD=blacklist", HAL_UI_WHITE);
+    /* Hint: two-line format to fit 128px screen (single line = 27 chars = 162px, clipped) */
+    hal_ui_text(4U, 52U, "BTN: select", HAL_UI_WHITE);
+    hal_ui_text(4U, 59U, "HOLD: blacklist", HAL_UI_WHITE);
 
     return CEEPEW_OK;
 }
@@ -2486,9 +2532,11 @@ static CeePewErr_t render_chat_thread(void)
      * a persistent "UNVERIFIED ID" warning at the top of every chat screen.
      * This is functionally analogous to Signal/WhatsApp "safety number
      * changed" banners — the user is reminded that Ed25519 identity
-     * verification is not active for this session. */
+     * verification is not active for this session.
+     * Note: shortened from "! UNVERIFIED IDENTITY !" (23 chars = 138px, clipped)
+     * to "! UNVERIFIED IDENT!" (19 chars = 114px, fits 128px with 7px margins). */
     if (degraded) {
-        ui_draw_centered_text(0U, "! UNVERIFIED IDENTITY !");
+        ui_draw_centered_text(0U, "! UNVERIFIED IDENT!");
     }
     ui_draw_centered_text((uint8_t)(1U + banner_shift), "SECURE CHAT");
     draw_hline(0U, (uint8_t)(11U + banner_shift), 128U);
@@ -2880,9 +2928,9 @@ static CeePewErr_t render_chat_menu(void)
     bool degraded = session_is_identity_degraded();
     uint8_t banner_shift = degraded ? 8U : 0U;
 
-    /* Identity-degraded banner */
+    /* Identity-degraded banner (shortened to fit 128px: 19 chars = 114px) */
     if (degraded) {
-        ui_draw_centered_text(0U, "! UNVERIFIED IDENTITY !");
+        ui_draw_centered_text(0U, "! UNVERIFIED IDENT!");
     }
 
     /* Title */
