@@ -2,7 +2,7 @@
 
 ## Build Setup
 
-See [README.md](README.md#getting-started) for environment setup. The project targets ESP32 with ESP-IDF v6.0.2.
+See [README.md](README.md#getting-started) for environment setup. The project targets ESP32 with ESP-IDF v6.0.3.
 
 ## Development Mode
 

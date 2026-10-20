@@ -1,13 +1,13 @@
 # CEE-PEW Architecture
 
 ## System Overview
-Two devices, symmetric roles. Device A initiates, Device B responds.
+Two devices, symmetric roles. Device B initiates, Device A responds.
 Phases: Discovery → Pairing → Session.
 
 ## Three-Phase Pairing Protocol
 
 **Phase 1: Discovery** — BLE advertisement (manufacturer-specific AD records in scan response).
-Both devices advertise and scan simultaneously. A scans, finds B, extracts public key material from the beacon commitment (truncated SHA-256 of session code + device IDs). The lower-MAC peer becomes the initiator.
+Both devices advertise and scan simultaneously. B scans, finds A, extracts public key material from the beacon commitment (truncated SHA-256 of session code + device IDs). The lower-MAC peer becomes the initiator.
 
 **Phase 2: Pairing** — Commitment exchange and user-confirmed PIN.
 Once both commitments match, the devices enter a GATT-based identity exchange. Each device encrypts its Ed25519 sign_pk + Curve25519 box_pubkey + WiFi MAC using Ascon-128 AEAD with a key derived from the session code + sorted device IDs. The initiator opens a brief GATTC connection to write to the peer's 0xFFF3 characteristic. After successful delivery, both devices display a 4-character PIN. Users confirm the PIN matches on both devices by pressing the button. This provides ~13.3 bits (log2(10^4), numeric) of brute-force resistance against active MITM during the pairing window.

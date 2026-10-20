@@ -10,7 +10,7 @@
 ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE, and encrypted chat over ESP-NOW.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.0.2-orange)](https://idf.espressif.com/)
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.0.3-orange)](https://idf.espressif.com/)
 [![Architecture](https://img.shields.io/badge/xtensa-ESP32-blueviolet)](https://www.espressif.com/)
 
 ---
@@ -58,7 +58,7 @@ Run the native host test suite with GCC/Clang AddressSanitizer and UndefinedBeha
 ```powershell
 python tools/ceepew_pipeline.py --mode host
 ```
-*Verifies: 13/13 test suites (Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC single-bit correction and double-bit non-crashing bounds, 64-bit replay sliding window, and side-channel timing uniformity).*
+*Verifies: 15/15 test suites (Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC single-bit correction and double-bit non-crashing bounds, 64-bit replay sliding window, replay vectors, PFS auth, UI navigator, and side-channel timing uniformity).*
 
 ### 2. Paper Arithmetic & Claim Verification
 Recompute all 45 formulas, wire budgets, airtimes, cycle-to-time conversions, and bounds reported in the paper:
@@ -122,8 +122,10 @@ All quantitative claims and experimental datasets used in the paper are publishe
 | **Ed25519 Sign Duration (TX)** | **332.2 ms** median ($n=114$) | Oryx vendor bench: 28.3 ms | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L2) |
 | **Ascon-128 AEAD Decrypt (RX)** | **0.33 ms** median ($n=98$) | 1.46 ms (XSalsa20 box open) | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L4) |
 | **Ed25519 Verify Duration (RX)**| **662.7 ms** median ($n=99$) | Full verification path | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L5) |
-| **Replay Rejection (Sliding Window)** | **100 / 100** vectors rejected | 95% CI failure bound: 3.0% | `M-HOST` | [`tests/host/test_replay_window.c`](tests/host/test_replay_window.c) |
-| **OTA Forged Frame Rejection** | **10 / 10** rejected (0 reach app) | Ascon tag auth error (err=5) | `M-HW` | [`data/raw/E1_B_ccmp_20261017/`](data/raw/E1_B_ccmp_20261017/) |
+| **Replay Rejection (Sliding Window)** | **100 / 100** vectors rejected | 95% CI failure bound: 3.0% | `M-HOST` | [`tests/host/test_replay_vectors.c`](tests/host/test_replay_vectors.c) + [`data/derived/host_ci_20261019_replay_vectors/`](data/derived/host_ci_20261019_replay_vectors/) |
+| **OTA Forged Frame Rejection** | **16 / 16** rejected per Mode-C run (n=32 across E1-C + E2b) | Ascon tag auth error (err=5) | `M-HW` | [`data/raw/E1_C_ceepew_20261018/`](data/raw/E1_C_ceepew_20261018/), [`data/raw/E2b_forged_rejection_20261018/`](data/raw/E2b_forged_rejection_20261018/) |
+
+**Note:** The "10/10" figure cited in earlier drafts is unsupported by its own artifact (`E1_B_ccmp_20261017` contains 4 forged TX / 4 box rejects in Mode B, which bypasses the full authenticator). The authoritative measurement is 16/16 per Mode-C run, n=32.
 | **Cleartext Air Leakage** | **0 bytes** visible in Mode C | Mode A: 100% payload visible | `M-HW` | [`data/derived/E1_A_plain_20261017/`](data/derived/E1_A_plain_20261017/) |
 | **Application Heap Allocations** | **0 bytes** (48 KB static region) | Standard heap allocators | `M-HW` | [`components/mem/ceepew_region.h`](components/mem/ceepew_region.h) |
 
@@ -133,7 +135,7 @@ All quantitative claims and experimental datasets used in the paper are publishe
 
 ### Prerequisites
 
-- [ESP-IDF v6.0.2](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/)
+- [ESP-IDF v6.0.3](https://docs.espressif.com/projects/esp-idf/en/v6.0.3/esp32/get-started/)
 - Python 3.12+
 - CMake 3.20+ and Ninja
 - Two ESP32 DevKit v1 boards with CP210x UART
@@ -159,7 +161,7 @@ idf.py -p COM5 monitor
 
 ```bash
 # 1. Source ESP-IDF environment
-source ~/esp/v6.0.2/esp-idf/export.sh
+source ~/esp/v6.0.3/esp-idf/export.sh
 
 # 2. Run host verification tests
 python tools/ceepew_pipeline.py --mode host
