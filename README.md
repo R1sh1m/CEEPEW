@@ -152,43 +152,131 @@ Byte-level Shannon entropy comparison across transmission modes. While unencrypt
 
 ### Prerequisites
 
-- [ESP-IDF v6.0.3](https://docs.espressif.com/projects/esp-idf/en/v6.0.3/esp32/get-started/)
-- Python 3.12+
-- CMake 3.20+ and Ninja
-- Two ESP32 DevKit v1 boards with CP210x UART
+- **ESP-IDF**: [v6.0.3](https://docs.espressif.com/projects/esp-idf/en/v6.0.3/esp32/get-started/) (or v6.0.2)
+- **Toolchain**: Python 3.12+, CMake 3.20+, and Ninja
+- **Hardware**: Two ESP32 DevKit v1 boards (Tensilica Xtensa LX6 dual-core) connected via USB (CP210x UART)
 
-### Windows Quickstart
+---
 
-```powershell
-# 1. Initialize ESP-IDF 6.0.2 build environment
-.\tools\setup_esp_idf.ps1
+### 1. Clone the Repository
 
-# 2. Run host verification tests (does not require hardware)
-python tools/ceepew_pipeline.py --mode host
-python tools/recompute_paper_numbers.py
-
-# 3. Build and flash target firmware
-idf.py set-target esp32
-idf.py build
-idf.py -p COM5 flash
-idf.py -p COM5 monitor
-```
-
-### Linux / macOS Quickstart
+Clone the project repository and navigate into the workspace:
 
 ```bash
-# 1. Source ESP-IDF environment
-source ~/esp/v6.0.3/esp-idf/export.sh
+git clone https://github.com/R1sh1m/CEEPEW.git
+cd CEEPEW
+```
 
-# 2. Run host verification tests
+---
+
+### 2. Environment Setup & Host Verification
+
+Initialize your ESP-IDF build environment:
+
+**Windows (PowerShell):**
+```powershell
+.\tools\setup_esp_idf.ps1
+```
+
+**Linux / macOS:**
+```bash
+source ~/esp/v6.0.3/esp-idf/export.sh
+```
+
+Before compiling hardware firmware, verify crypto primitives, Hamming FEC codecs, and Huffman compression natively on your host:
+
+```bash
+# Set target MCU to ESP32
+idf.py set-target esp32
+
+# Run native host unit tests and verify arithmetic model
 python tools/ceepew_pipeline.py --mode host
 python tools/recompute_paper_numbers.py
+```
 
-# 3. Build and flash target firmware
-idf.py set-target esp32
+---
+
+### 3. Firmware Profiles Overview
+
+CEE-PEW supports two primary operational profiles:
+
+| Profile | Key Characteristics | Wire Frame Size ($C_{wire}$) | Wire Efficiency | Typical Use Case |
+| :--- | :--- | :---: | :---: | :--- |
+| **Full Profile** *(Default)* | 7-layer defense stack: Huffman compression, Ascon-128 AEAD, outer `crypto_box` (X25519+XSalsa20), Ed25519 asymmetric signatures, and Hamming(15,11) FEC | **249 B** | **23.3%** | High-security peer authentication, zero-trust environments, production default |
+| **Lite Profile** *(Reduced Overhead)* | Lightweight symmetric streaming: Ascon-128 AEAD payload without asymmetric signature overhead; optional Hamming(15,11) FEC ablation | **138 B** *(with FEC)*<br>**105 B** *(no FEC)* | **42.0%** *(with FEC)*<br>**55.2%** *(no FEC)* | High-throughput streaming, battery-constrained nodes, minimal airtime |
+
+---
+
+### 4. Compiling the Firmware
+
+#### Option A: Compiling Full Profile Firmware (Default)
+
+The standard build compiles the complete 7-layer cryptographic stack with forward security, asymmetric signatures, and Hamming FEC:
+
+```bash
 idf.py build
-idf.py -p /dev/ttyUSB0 flash
-idf.py -p /dev/ttyUSB0 monitor
+```
+The compiled binary will be placed at `build/ceepew.bin`.
+
+#### Option B: Compiling Lite Profile Firmware
+
+To build the optimized Lite profile with FEC disabled for maximum throughput:
+
+```bash
+# Compile into a dedicated build directory (build_lite/) with FEC disabled:
+idf.py -B build_lite -D CONFIG_CEEPEW_FEC_DISABLE=y build
+```
+
+*(Alternatively, run `idf.py menuconfig`, navigate to `CEE-PEW Configuration` &rarr; `Advanced Options`, and enable `Disable Hamming(15,11) FEC`)*.
+
+---
+
+### 5. Flashing Firmware to ESP32 Boards
+
+#### Discover Connected Serial Ports
+
+Enumerate attached ESP32 boards using the pipeline tool:
+
+```bash
+python tools/ceepew_pipeline.py --list-ports
+```
+
+#### Flashing a Single Board
+
+**Full Profile:**
+```bash
+# Windows
+idf.py -p COM5 flash monitor
+
+# Linux / macOS
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+**Lite Profile:**
+```bash
+# Windows
+idf.py -B build_lite -p COM5 flash monitor
+
+# Linux / macOS
+idf.py -B build_lite -p /dev/ttyUSB0 flash monitor
+```
+
+*Note: Press `Ctrl + ]` to exit the ESP-IDF monitor.*
+
+#### Flashing Both Boards for Pairing & Live Testing
+
+Both communicating nodes must run matching firmware profiles. Flash both target boards in parallel:
+
+**Using PowerShell (Windows):**
+```powershell
+# Auto-detects ports or pass explicit port overrides:
+.\tools\flash_both.ps1 -Port1 COM5 -Port2 COM6
+```
+
+**Using the Unified Python Pipeline (Cross-platform):**
+```bash
+# Flash both devices and launch automated pairing supervision:
+python tools/ceepew_pipeline.py --mode pairing --port1 COM5 --port2 COM6
 ```
 
 ---
