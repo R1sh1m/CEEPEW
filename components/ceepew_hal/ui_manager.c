@@ -1943,10 +1943,16 @@ static CeePewErr_t render_peer_select(void)
         HalUIColor_t text_color = is_selected ? HAL_UI_BLACK : HAL_UI_WHITE;
         hal_ui_text(4U, y, mac_str, text_color);
 
-        /* RSSI indicator */
+        /* RSSI indicator — moved to x=78 to clear icon at x=118.
+         * Clamp displayed value to -99..0 dBm before formatting:
+         * values outside this range are meaningless for display and would
+         * exceed the 6-char budget ("-99dBm" = 36px, cols 78..113). */
         char rssi_str[8];
-        (void)snprintf(rssi_str, sizeof(rssi_str), "%ddBm", (int)peer->record.rssi);
-        hal_ui_text(90U, y, rssi_str, text_color);
+        int8_t rssi_disp = peer->record.rssi;
+        if (rssi_disp < -99) { rssi_disp = -99; }
+        if (rssi_disp > 0)   { rssi_disp = 0; }
+        (void)snprintf(rssi_str, sizeof(rssi_str), "%ddBm", (int)rssi_disp);
+        hal_ui_text(78U, y, rssi_str, text_color);
 
         /* Status indicators */
         uint8_t icon_x = 118U;

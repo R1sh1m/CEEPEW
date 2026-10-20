@@ -37,10 +37,10 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
 | **Diagnostic Switch**| GPIO5 (Active LOW) | Hardware push-lock switch enabling on-boot diagnostic test suite |
 | **Status Indicator** | GPIO15 (R), GPIO18 (G), GPIO23 (B) | Common-cathode RGB LED (220 Ω current-limiting resistors to 3.3 V) |
 
-### Engineering Schematic & Block Diagram
+### Circuit Schematic
 
 <p align="center">
-  <img src="assets/hardware_block.svg" alt="CEE-PEW Hardware Block Diagram" width="800">
+  <img src="assets/schematic.png" alt="CEE-PEW Circuit Schematic and Breadboard Wiring" width="800">
 </p>
 
 ---
@@ -125,6 +125,29 @@ All quantitative claims and experimental datasets used in the paper are publishe
 | **Cleartext Air Leakage** | **0 bytes** visible in Mode C | Mode A: 100% payload visible | `M-HW` | [`data/derived/E1_A_plain_20261017/`](data/derived/E1_A_plain_20261017/) |
 | **Application Heap Allocations** | **0 bytes** (48 KB static region) | Standard heap allocators | `M-HW` | [`components/mem/ceepew_region.h`](components/mem/ceepew_region.h) |
 
+### Experimental Evidence & Protocol Dissection
+
+#### 1. Over-the-Air Frame Dissection (Wireshark)
+Live promiscuous 802.11 ESP-NOW capture decoded with the custom CEE-PEW Wireshark dissector ([`tools/capture/wireshark/ceepew_espnow.lua`](tools/capture/wireshark/ceepew_espnow.lua)). Verified sequence numbers, parity nonces, and payload bounds confirm end-to-end authenticated ciphertext without payload cleartext leakage:
+
+<p align="center">
+  <img src="assets/wireshark_frame.png" alt="Wireshark Dissection of Mode-C ESP-NOW Frame" width="800">
+</p>
+
+#### 2. On-Device Cryptographic Benchmarks
+Measured execution durations (median, $N \ge 50$ runs) across cryptographic and error-correction pipeline stages on physical ESP32 hardware running at 240 MHz:
+
+<p align="center">
+  <img src="assets/benchmarks.png" alt="On-Device Crypto Benchmarks on ESP32" width="800">
+</p>
+
+#### 3. Shannon Entropy Verification
+Byte-level Shannon entropy comparison across transmission modes. While unencrypted baseline frames exhibit structured payload entropy ($4.48\text{ bits/byte}$), CEE-PEW encrypted frames achieve near-ideal pseudo-randomness ($7.99\text{ bits/byte}$):
+
+<p align="center">
+  <img src="assets/entropy.png" alt="Byte-Level Entropy Comparison" width="800">
+</p>
+
 ---
 
 ## Getting Started
@@ -176,8 +199,11 @@ idf.py -p /dev/ttyUSB0 monitor
 
 ```
 CEEPEW/
-├── assets/                  Engineering hardware diagrams and system block SVGs
-│   └── hardware_block.svg                 System hardware block diagram and verified pinout (SVG)
+├── assets/                  Circuit schematic, Wireshark captures, and benchmark figures
+│   ├── schematic.png        Hardware circuit schematic and breadboard pinout
+│   ├── wireshark_frame.png  Wireshark OTA packet dissection (Mode C)
+│   ├── benchmarks.png       On-device crypto execution benchmarks
+│   └── entropy.png          Byte-level Shannon entropy comparison
 ├── data/                    Empirical testing datasets, raw captures, derived CSVs
 │   ├── raw/                 Read-only PCAPs, logs, and sealed SHA-256 manifests
 │   ├── derived/             Stage timing benchmarks (CSV), tshark dissections
