@@ -8,13 +8,13 @@
 |------|---------|
 | `ecc_hamming.h/c` | Hamming(15,11) Forward Error Correction. Encodes 11 data bits into 15 bits (4 parity). Corrects any single-bit error, detects double-bit errors. Applied to **every ESP-NOW frame** before transmission. |
 | `ecc_crc32.h/c` | CRC-32 (Castagnoli polynomial 0x1EDB1EDC6F). Used for frame integrity check before FEC decode. |
-| `ecc_arq.c` | Stop-and-Wait ARQ with exponential backoff. Manages retransmissions for unacknowledged ESP-NOW frames. Max 3 retries (`CEEPEW_ARQ_MAX_RETRIES`), base timeout 500ms (`CEEPEW_ARQ_TIMEOUT_MS`). |
+| `ecc_arq.c` | Stop-and-Wait ARQ with exponential backoff. Manages retransmissions for unacknowledged ESP-NOW frames. Max 3 retries (`CEEPEW_ARQ_MAX_RETRIES`), base timeout 600ms (`CEEPEW_ARQ_TIMEOUT_MS`). |
 
 ## How They Work Together (Outbound Frame Pipeline)
 ```
 plaintext
   → PKCS7 pad to 64B
-  → crypto_box (XSalsa20+Poly1305)
+  → crypto_box (XSalsa20 + truncated HMAC-SHA256, 16B tag)
   → Ascon-128 AEAD outer
   → Hamming(15,11) FEC (session-permuted parity positions)
   → CRC-32
@@ -32,9 +32,9 @@ plaintext
 ## ARQ Details
 - **Protocol**: Stop-and-Wait (one frame in flight at a time)
 - **Retries**: 3 maximum (configurable via `CEEPEW_ARQ_MAX_RETRIES`)
-- **Backoff**: Exponential with jitter: 500ms, 1000ms, 2000ms base + random jitter
+- **Backoff**: Exponential with jitter: 600ms, 1000ms, 2000ms base + random jitter
 - **ACK**: Implicit — next expected sequence number acknowledged by successful decrypt of subsequent frame
-- **Timeout**: 500ms base (`CEEPEW_ARQ_TIMEOUT_MS`)
+- **Timeout**: 600ms base (`CEEPEW_ARQ_TIMEOUT_MS`)
 
 ## No malloc
 All state is stack-allocated or in session memory. No dynamic allocation.

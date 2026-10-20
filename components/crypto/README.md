@@ -10,7 +10,7 @@ This component provides all cryptographic primitives for CEE-PEW. Most algorithm
 | `curve25519.h/c` | TweetNaCl Curve25519 scalar multiplication (`crypto_scalarmult`). Used for ECDH key agreement. |
 | `crypto_ecdh.h/c` | Ephemeral ECDH keypair generation and shared secret computation. |
 | `crypto_eddsa.h/c` | Ed25519 signing/verification (port of TweetNaCl). Used for peer identity auth. |
-| `crypto_box_wrap.h/c` | XSalsa20+Poly1305 (NaCl `crypto_box`) wrapper for message encryption. |
+| `crypto_box_wrap.h/c` | XSalsa20 + truncated HMAC-SHA256 (16-byte tag, NaCl `crypto_box`-compatible framing) wrapper for message encryption. |
 | `crypto_ascon.h/c` | Ascon-128 AEAD (NIST LWC finalist). Used for ESP-NOW session encryption + GATT sign_pk encryption. |
 | `crypto_hkdf.h/c` | HKDF-SHA256 (RFC 5869). Key derivation for all session keys, PMK/LMK, GATT keys. |
 | `crypto_hmac.h/c` | HMAC-SHA256. Used for pairing commitment binding. |

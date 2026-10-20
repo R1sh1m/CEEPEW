@@ -7,7 +7,7 @@
 
 **C**ryptographic **E**nd-to-**E**nd **P**eer-to-peer **E**ncrypted **W**ireless Communicator
 
-ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BLE, and encrypted chat over ESP-NOW.
+ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE, and encrypted chat over ESP-NOW.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.0.2-orange)](https://idf.espressif.com/)
@@ -18,9 +18,9 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 ## Features
 
 - **End-to-end encrypted messaging** — 7-layer crypto stack (Curve25519 ECDH, Ed25519 EdDSA, HKDF-SHA256, HMAC-SHA256, Ascon-128 AEAD, digital_sum_mix, nonce counter + expiry)
-- **User-verified PIN pairing** — 4-character one-time PIN provides ~20 bits of brute-force resistance against active MITM during the ~30 s pairing window
+- **User-verified PIN pairing** — 4-character one-time PIN provides ~13.3 bits (log2(10^4), numeric) of brute-force resistance against active MITM during the ~45 s pairing window
 - **Hardware-gated identity handoff** — BLE discovery/pairing, then handoff to ESP-NOW for session transport
-- **Forward error correction** — Hamming(15,11) on every frame; selective-repeat ARQ with exponential backoff
+- **Forward error correction** — Hamming(15,11) on every frame; Stop-and-Wait ARQ with exponential backoff
 - **Zero heap allocation** — 48 KB static region allocator; all session state in compile-time structures
 - **Dual-core FreeRTOS** — UI on Core 0, session crypto on Core 1; IPC via FreeRTOS queues only
 - **Static Huffman compression** — Lossless message compression
@@ -40,7 +40,7 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 
 ![CEE-PEW hardware block diagram](assets/hardware_block.svg)
 
-See the complete [CEE-PEW engineering circuit schematic](CEEPEW_Engineering_Schematic.pdf)
+See the complete [CEE-PEW engineering circuit schematic](assets/CEEPEW_Engineering_Schematic.pdf)
 for the wiring and component-level connections.
 
 ## Getting Started
@@ -171,7 +171,7 @@ The three-phase pairing protocol establishes trust without persistent infrastruc
 
 1. **Discovery (BLE)** — Both devices advertise and scan. Beacon commitment exchange (truncated SHA-256 over session_code + device IDs). Lower-MAC peer becomes initiator.
 
-2. **Pairing (BLE GATT)** — Each device encrypts its Ed25519 sign_pk + Curve25519 box_pubkey + WiFi MAC using Ascon-128 AEAD. Keys derived from the user-entered session code via HKDF. Both devices display a 4-character PIN; the user verifies the PIN matches on both. This provides ~20 bits of brute-force resistance against active MITM during the ~30 s pairing window.
+2. **Pairing (BLE GATT)** — Each device encrypts its Ed25519 sign_pk + Curve25519 box_pubkey + WiFi MAC using Ascon-128 AEAD. Keys derived from the user-entered session code via HKDF. Both devices display a 4-character PIN; the user verifies the PIN matches on both. This provides ~13.3 bits (log2(10^4), numeric) of brute-force resistance against active MITM during the ~45 s pairing window.
 
 3. **Handoff (ESP-NOW)** — BLE torn down, ESP-NOW initialized, peer registered using WiFi MAC exchanged in Phase 2. Session FSM enters ACTIVE state.
 

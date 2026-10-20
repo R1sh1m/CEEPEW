@@ -5,8 +5,8 @@ Report security vulnerabilities via GitHub issue with the "security" label, or e
 
 ## Threat Model
 CEE-PEW is designed to resist:
-- **Passive eavesdropping** — Layered authenticated encryption: Ascon-128 AEAD (inner) + XSalsa20-Poly1305 over X25519 ECDH (outer) for all session traffic
-- **Active MITM during pairing** — EdDSA identity binding + 4-character PIN confirmation (user-verified). The PIN provides approximately 20 bits of brute-force resistance against an active MITM during the pairing window
+- **Passive eavesdropping** — Layered authenticated encryption: Ascon-128 AEAD (inner) + XSalsa20 + truncated HMAC-SHA256 (16B tag) over X25519 ECDH (outer) for all session traffic
+- **Active MITM during pairing** — EdDSA identity binding + 4-character PIN confirmation (user-verified). The 4-digit numeric PIN provides approximately 13.3 bits of brute-force resistance (log2(10^4)) against an active MITM during the pairing window
 - **Replay attacks** — 64-bit nonce counter with WireGuard-style replay window + session expiry at `CEEPEW_NONCE_HARD_LIMIT` (2^56)
 - **Cloning attacks** — Session keys are derived from ephemeral ECDH material and a user-provided session code. No hardware eFuse binding is applied (eFuse HMAC was dropped by design decision); the device identity falls back to SHA-256(MAC || salt), which is deterministic from the public MAC and does not resist cloning on stock dev kits.
 
@@ -17,7 +17,7 @@ CEE-PEW is NOT designed to resist:
 - **Denial of service** — Radio jamming, BLE/ESP-NOW flooding not mitigated
 
 ## Known Limitations
-1. **4-character PIN confirmation** provides approximately 20 bits of brute-force resistance against an active MITM during the pairing window. An attacker with radio access during the ~30 second pairing window could attempt ~1M guesses.
+1. **4-character PIN confirmation** (4-digit numeric: 10^4 = 10,000 combinations, ~13.3 bits) provides brute-force resistance against an active MITM during the pairing window. An attacker with radio access during the ~45 second pairing window could attempt at most ~10K guesses. (Prior drafts quoted ~20 bits / ~1M guesses, which assumed a larger alphabet.)
 2. **No forward secrecy for pairing phase** — The session code is the sole entropy source for Phase 2 key derivation. If the session code is compromised, past pairings can be decrypted.
 3. **ESP-NOW LMK derived from session key** — If the session key is extracted from one device, all past/future ESP-NOW traffic with that peer is decryptable.
 4. **No secure boot / flash encryption** — Production deployments should enable both in `sdkconfig.production`.
@@ -29,7 +29,7 @@ CEE-PEW is NOT designed to resist:
     - The `session_is_identity_degraded()` flag persists for the session duration and is visible to UI, transport, and crypto layers.
     - This mode exists solely as an accessibility/reliability fallback for environments where BLE GATT connections are unreliable (e.g., high RF interference, incompatible BLE controller firmware). It is never the default path and requires active user consent on every occurrence.
 8. **mbedTLS dependency for SHA-256** — SHA-256 and HMAC-SHA256 (and therefore HKDF, commitments, and nonce derivation) delegate the underlying hash to mbedTLS via the ESP-IDF PSA API. This is a mature, well-audited implementation bundled with ESP-IDF, but it means the library's security posture includes mbedTLS as a dependency. The following primitives are standalone (no mbedTLS): Ascon-128 AEAD, X25519 ECDH, XSalsa20 stream cipher.
-9. **Nested AEAD structure** — Session messages pass through two authenticated encryption layers: Ascon-128 AEAD (inner, keyed from the HKDF session key) then XSalsa20-Poly1305 over X25519 ECDH (outer, keyed from a fresh CSPRNG-derived ephemeral keypair). The two layers use independently-derived encryption keys (different HKDF outputs / different ECDH computations), but share the same nonce base (session_id + counter). This layered approach provides defense-in-depth but is not a standard construction; it may be simplified to a single AEAD layer in a future revision.
+9. **Nested AEAD structure** — Session messages pass through two authenticated encryption layers: Ascon-128 AEAD (inner, keyed from the HKDF session key) then XSalsa20 + truncated HMAC-SHA256 (16B tag) over X25519 ECDH (outer, keyed from a fresh CSPRNG-derived ephemeral keypair). The two layers use independently-derived encryption keys (different HKDF outputs / different ECDH computations), but share the same nonce base (session_id + counter). This layered approach provides defense-in-depth but is not a standard construction; it may be simplified to a single AEAD layer in a future revision.
 
 ## Build Security Notes
 - `sdkconfig` is gitignored. Use `sdkconfig.debug` for debug builds, `sdkconfig.production` for releases.

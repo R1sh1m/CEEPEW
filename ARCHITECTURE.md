@@ -10,7 +10,7 @@ Phases: Discovery → Pairing → Session.
 Both devices advertise and scan simultaneously. A scans, finds B, extracts public key material from the beacon commitment (truncated SHA-256 of session code + device IDs). The lower-MAC peer becomes the initiator.
 
 **Phase 2: Pairing** — Commitment exchange and user-confirmed PIN.
-Once both commitments match, the devices enter a GATT-based identity exchange. Each device encrypts its Ed25519 sign_pk + Curve25519 box_pubkey + WiFi MAC using Ascon-128 AEAD with a key derived from the session code + sorted device IDs. The initiator opens a brief GATTC connection to write to the peer's 0xFFF3 characteristic. After successful delivery, both devices display a 4-character PIN. Users confirm the PIN matches on both devices by pressing the button. This provides ~20 bits of brute-force resistance against active MITM during the pairing window.
+Once both commitments match, the devices enter a GATT-based identity exchange. Each device encrypts its Ed25519 sign_pk + Curve25519 box_pubkey + WiFi MAC using Ascon-128 AEAD with a key derived from the session code + sorted device IDs. The initiator opens a brief GATTC connection to write to the peer's 0xFFF3 characteristic. After successful delivery, both devices display a 4-character PIN. Users confirm the PIN matches on both devices by pressing the button. This provides ~13.3 bits (log2(10^4), numeric) of brute-force resistance against active MITM during the pairing window.
 
 **Phase 3: Handoff** — BLE torn down. ESP-NOW peer registered. Session FSM advances.
 Both devices send a "HANDOFF_READY" beacon over BLE and wait for the peer's beacon (synchronization). Once both are received, BLE is fully torn down (controller + bluedroid deinit), WiFi is initialized in STA mode, ESP-NOW is started on a fixed channel (default: 1), and the peer is registered using the **WiFi MAC** (not BLE MAC) exchanged during Phase 2. Session FSM enters ACTIVE state.
@@ -27,7 +27,7 @@ Both devices send a "HANDOFF_READY" beacon over BLE and wait for the peer's beac
 ## Transport Stack
 **BLE (pairing only) → ESP-NOW (session)**
 - FEC: Hamming (15,11) over every ESP-NOW frame (4 parity bits per 11 data bits, ~36% overhead)
-- ARQ: Selective-repeat with exponential backoff (ecc_arq.c, max 3 retries, 600ms base timeout)
+- ARQ: Stop-and-Wait with exponential backoff (ecc_arq.c, max 3 retries, 600ms base timeout)
 - Channel hopping: `transport_hop.c` — PRG-driven Fisher-Yates channel permutation for frequency diversity
 
 ## Memory Model
@@ -58,7 +58,7 @@ Both devices send a "HANDOFF_READY" beacon over BLE and wait for the peer's beac
 │                     transport_replay.c (WireGuard-style bitmap)│
 ├─────────────────────────────────────────────────────────────────┤
 │                      CRYPTOGRAPHIC LAYER                        │
-│  crypto_box_wrap.c (XSalsa20+Poly1305)   crypto_ascon.c (AEAD) │
+│  crypto_box_wrap.c (XSalsa20+HMAC-SHA256, 16B tag)   crypto_ascon.c (AEAD) │
 │  crypto_hkdf.c (RFC5869)                 crypto_eddsa.c        │
 │  crypto_sha256.c                         crypto_rng.c        │
 │  crypto_ctx.c (key derivation orchestrator)                    │
