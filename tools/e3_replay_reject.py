@@ -2,9 +2,11 @@
 """tools/e3_replay_reject.py — end-to-end replay rejection analysis for CEE-PEW.
 
 Parses dual-device capture logs to verify that frames injected by the E3 replay
-hook are rejected by the peer's replay window specifically as replays
-(CEEPEW_ERR_REPLAY, err=17), using time-correlated matching rather than app-level
-sequence accounting.
+hook are rejected by the peer, using time-correlated matching rather than app-level
+sequence accounting. A replayed frame can be caught by an earlier layer (e.g. the
+ESL header/MAC/replay check, err=3) before reaching the replay-window commit
+(transport_replay_commit, err=17), so rejections are matched regardless of err code
+and each match is classified by the layer that caught it.
 
 CRITICAL (evidence class): because ARQ retransmits, a dropped replayed frame can
 be followed by a clean retry of the SAME application sequence number. So app-level
@@ -15,7 +17,8 @@ rejection on the peer device is valid.
 Patterns extracted:
   1. Replay armed (sender):   [BENCH58_REPLAY] armed
   2. Replay injected (sender): [BENCH58_REPLAY] replayed N B with stale esl header (fresh arq seq downstream)
-  3. Replay reject (receiver): Discard: replay commit rejected seq=N (err=17)
+  3. Rejection (receiver): any Discard: line (err=N) — matched regardless of err code;
+     err=17 => replay-window commit (transport_replay_commit), err=3 => ESL header/MAC/replay check
   4. All other Discard: lines (for category breakdown)
 
 Timestamps: lines begin with <seconds>.<frac> (host receive time) and contain the
@@ -296,14 +299,21 @@ class ReplayRejectAnalyzer:
             return -1
 
     def match_replay_to_reject(self, window_seconds: float) -> List[MatchResult]:
-        """Match each replay injection event to the nearest err=17 rejection on the PEER device.
+        """Match each replay injection event to the nearest rejection on the PEER device.
 
-        A replay event from DEVICE_A is matched to an err=17 rejection on DEVICE_B, and vice versa.
+        A replay event from DEVICE_A is matched to a rejection on DEVICE_B, and vice versa.
+        Candidates are ALL rejections on the peer device within the window, regardless of
+        err code: a replayed frame can be caught by an earlier layer (e.g. err=3 ESL
+        header/MAC/replay check) before reaching the replay-window commit (err=17).
         Matching uses HOST timestamps because device timestamps are boot-time (relative to
         each device's boot), not absolute. Host timestamps represent when the log line was
         received and are synchronized across devices.
+
+        One-to-one constraint: each rejection is matched to at most one replay injection
+        (a rejection already claimed by a nearer injection is not available to another).
         """
         results = []
+        used_reject_ids = set()
 
         for replay in self.replay_events:
             # Find peer device
@@ -318,19 +328,15 @@ class ReplayRejectAnalyzer:
                 results.append(MatchResult(replay=replay, reject=None, delta_t_us=None, delta_t_host=None))
                 continue
 
-            # Find candidate err=17 rejections on peer device
-            candidates = [r for r in self.reject_events
-                          if r.device == peer_device and r.err == 17]
-
-            if not candidates:
-                results.append(MatchResult(replay=replay, reject=None, delta_t_us=None, delta_t_host=None))
-                continue
-
-            # Find nearest by host timestamp (the only reliable cross-device clock)
+            # Find candidate rejections on peer device (any err code), not yet used
             best_reject = None
             best_delta_host = float("inf")
 
-            for reject in candidates:
+            for reject in self.reject_events:
+                if id(reject) in used_reject_ids:
+                    continue
+                if reject.device != peer_device:
+                    continue
                 delta_host = reject.host_ts - replay.host_ts
                 delta_abs = abs(delta_host)
                 if delta_abs <= window_seconds:
@@ -339,6 +345,7 @@ class ReplayRejectAnalyzer:
                         best_reject = reject
 
             if best_reject is not None:
+                used_reject_ids.add(id(best_reject))
                 # Compute delta_t for reporting (host-based, converted to microseconds)
                 delta_t_us = int((best_reject.host_ts - replay.host_ts) * 1_000_000)
                 results.append(MatchResult(
@@ -382,6 +389,13 @@ class ReplayRejectAnalyzer:
             else:
                 median_delta_host = sorted_deltas_h[n // 2]
 
+        # Matched rejection err-code distribution (layer classification)
+        matched_rejects = [m.reject for m in matches if m.reject is not None]
+        matched_by_err = Counter(r.err for r in matched_rejects)
+        matched_err17_count = matched_by_err.get(17, 0)
+        matched_err3_count = matched_by_err.get(3, 0)
+        matched_other_count = matched_count - matched_err17_count - matched_err3_count
+
         # Unexplained rejections: rejections not matched to any replay event.
         matched_reject_ids = set(id(m.reject) for m in matches if m.reject is not None)
         unexplained_rejects = [
@@ -424,6 +438,10 @@ class ReplayRejectAnalyzer:
             "matching": {
                 "matched_count": matched_count,
                 "unmatched_count": unmatched_count,
+                "matched_by_err": dict(matched_by_err),
+                "matched_err17_count": matched_err17_count,
+                "matched_err3_count": matched_err3_count,
+                "matched_other_count": matched_other_count,
                 "median_delta_us": median_delta_us,
                 "max_abs_delta_us": max_abs_delta_us,
                 "median_delta_host_s": median_delta_host,
@@ -442,6 +460,7 @@ class ReplayRejectAnalyzer:
                     "reject_kind": m.reject.kind if m.reject else None,
                     "reject_device": m.reject.device if m.reject else None,
                     "reject_err": m.reject.err if m.reject else None,
+                    "reject_layer": reject_layer(m.reject) if m.reject else None,
                     "delta_t_us": m.delta_t_us,
                     "delta_t_host_s": m.delta_t_host,
                 }
@@ -470,6 +489,15 @@ def fmt_us(us: Optional[int]) -> str:
         return "N/A"
     sign = "+" if us >= 0 else ""
     return f"{sign}{us / 1000.0:.2f} ms"
+
+
+def reject_layer(reject: RejectEvent) -> str:
+    """Classify which layer caught a matched rejection, by err code."""
+    if reject.err == 17:
+        return "replay-window commit (transport_replay_commit)"
+    if reject.err == 3:
+        return "ESL header/MAC/replay check"
+    return f"unexpected layer (err={reject.err})"
 
 
 def generate_report(data: Dict[str, Any]) -> str:
@@ -507,8 +535,18 @@ def generate_report(data: Dict[str, Any]) -> str:
 
     # Match summary
     match = data["matching"]
-    lines.append("-- match table (replay injection -> peer err=17 rejection) --")
+    lines.append("-- match table (replay injection -> peer rejection, any err code) --")
     lines.append(f"  MATCHED {match['matched_count']} / {data['replay_injections']['total']}")
+    if match.get("matched_by_err"):
+        err_parts = []
+        for ec in (17, 3):
+            if match["matched_by_err"].get(ec, 0):
+                err_parts.append(f"err={ec}: {match['matched_by_err'][ec]}")
+        for ec in sorted(match["matched_by_err"]):
+            if ec not in (17, 3) and match["matched_by_err"][ec]:
+                err_parts.append(f"err={ec}: {match['matched_by_err'][ec]}")
+        if err_parts:
+            lines.append(f"  matched rejections by err code: {', '.join(err_parts)}")
     if match['median_delta_us'] is not None:
         median_ms = match['median_delta_us'] / 1000.0  # convert us to ms
         max_ms = match['max_abs_delta_us'] / 1000.0
@@ -517,12 +555,13 @@ def generate_report(data: Dict[str, Any]) -> str:
     lines.append("")
 
     # Detailed match table
-    lines.append("  replay_len  replay_dev  ->  reject_kind  reject_dev  reject_err  delta_t(ms)  delta_t(host)")
+    lines.append("  replay_len  replay_dev  ->  reject_layer                      reject_dev  reject_err  delta_t(ms)  delta_t(host)")
     for det in data["match_details"]:
         if det["reject_kind"] is not None:
             delta_ms = det['delta_t_us'] / 1000.0 if det['delta_t_us'] is not None else None
             delta_ms_str = f"{delta_ms:.2f}" if delta_ms is not None else "N/A"
-            lines.append(f"  {det['replay_payload_len']:>10}  {det['replay_device']:<11} ->  {det['reject_kind']:<14}  {det['reject_device']:<10}  {det['reject_err']:<11}  {delta_ms_str:>11} ms  {det['delta_t_host_s']:>+10.3f}s")
+            layer = det['reject_layer'] if det['reject_layer'] else "UNKNOWN"
+            lines.append(f"  {det['replay_payload_len']:>10}  {det['replay_device']:<11} ->  {layer:<30}  {det['reject_device']:<10}  {det['reject_err']:<11}  {delta_ms_str:>11} ms  {det['delta_t_host_s']:>+10.3f}s")
         else:
             lines.append(f"  {det['replay_payload_len']:>10}  {det['replay_device']:<11} ->  UNMATCHED")
     lines.append("")
@@ -544,25 +583,73 @@ def generate_report(data: Dict[str, Any]) -> str:
     # Interpretation
     lines.append("-- INTERPRETATION --")
     lines.append("  This report uses ONE-TO-ONE TIME-CORRELATED matching to verify replay rejection.")
-    lines.append("  For each replay injection event on device A, we find the nearest err=17 rejection on")
-    lines.append("  device B (the peer) within the time window.")
+    lines.append("  For each replay injection event on device A, we find the nearest rejection on")
+    lines.append("  device B (the peer) within the time window, regardless of err code.")
     lines.append("")
     lines.append("  WHY TIME-CORRELATION MATTERS:")
     lines.append("  The E3 replay hook replays a stale ESL header with a fresh ARQ seq downstream, so")
-    lines.append("  the replayed frame passes ARQ as a new frame and reaches the replay window. ARQ")
+    lines.append("  the replayed frame passes ARQ as a new frame and reaches the receiver. ARQ")
     lines.append("  retransmission means a dropped frame can be followed by a clean retry of the same")
     lines.append("  application sequence number, so per-seq accounting would report the exact opposite")
     lines.append("  of the truth (claiming replayed frames were 'accepted').")
     lines.append("")
-    lines.append("  Only time-correlated matching of replay injection events to peer err=17 rejections")
-    lines.append("  provides valid evidence of replay-window rejection.")
+    lines.append("  A replayed frame can be caught by an earlier layer (ESL header/MAC/replay check,")
+    lines.append("  err=3) before reaching the replay-window commit (transport_replay_commit, err=17).")
+    lines.append("  Both are valid replay defences; the layer is reported honestly per match.")
     lines.append("")
-    if match["matched_count"] == data["replay_injections"]["total"]:
-        lines.append(f"  => ALL {match['matched_count']} replayed frames were rejected as replays (err=17) by the peer.")
+    lines.append("  Only time-correlated matching of replay injection events to peer rejections")
+    lines.append("  provides valid evidence of replay rejection.")
+    lines.append("")
+    total_injections = data["replay_injections"]["total"]
+    matched_count = match["matched_count"]
+    unmatched_count = match["unmatched_count"]
+    matched_by_err = match.get("matched_by_err") or {}
+    err17 = matched_by_err.get(17, matched_by_err.get("17", 0))
+    err3 = matched_by_err.get(3, matched_by_err.get("3", 0))
+    matched_other = matched_count - err17 - err3
+
+    if total_injections == 0:
+        lines.append("  => No replay injections found in log; nothing to verify.")
+    elif matched_count == 0:
+        lines.append(
+            f"  => DEFENCE DID NOT TRIGGER: {total_injections} replay injection(s) had no "
+            f"matching rejection on the peer within the {data['window_seconds']}s window "
+            f"(real failure)."
+        )
     else:
-        lines.append(f"  => {match['matched_count']}/{data['replay_injections']['total']} replayed frames matched to peer err=17 rejections.")
-        if match["unmatched_count"] > 0:
-            lines.append(f"     {match['unmatched_count']} replayed frames had no matching err=17 rejection (investigate drops).")
+        parts = []
+        if err17:
+            parts.append(f"{err17}x err=17 (replay-window commit)")
+        if err3:
+            parts.append(f"{err3}x err=3 (ESL header/MAC/replay layer)")
+        if matched_other:
+            parts.append(f"{matched_other}x unexpected err code")
+        breakdown = "; ".join(parts)
+        if err3 == 0 and matched_other == 0:
+            lines.append(
+                f"  => ALL {matched_count} replayed frames were rejected as replays "
+                f"(err=17, replay-window commit) by the peer. [strongest claim]"
+            )
+        else:
+            lines.append(
+                f"  => {matched_count}/{total_injections} replayed frames matched to peer "
+                f"rejections ({breakdown})."
+            )
+            if err3 > 0:
+                lines.append(
+                    f"     {err3} caught at the ESL layer (err=3) — valid replay defence, "
+                    f"earlier layer than the replay-window commit."
+                )
+            if matched_other > 0:
+                lines.append(
+                    f"     {matched_other} matched to an unexpected err code — investigate "
+                    f"(not a replay-window commit)."
+                )
+        if unmatched_count > 0:
+            lines.append(
+                f"     {unmatched_count} replayed frames had no matching rejection "
+                f"(investigate drops)."
+            )
     lines.append("")
 
     return "\n".join(lines)
@@ -607,6 +694,16 @@ def generate_markdown_report(data: Dict[str, Any]) -> str:
     lines.append("")
     match = data["matching"]
     lines.append(f"- **MATCHED {match['matched_count']} / {data['replay_injections']['total']}**")
+    if match.get("matched_by_err"):
+        err_parts = []
+        for ec in (17, 3):
+            if match["matched_by_err"].get(ec, 0):
+                err_parts.append(f"err={ec}: {match['matched_by_err'][ec]}")
+        for ec in sorted(match["matched_by_err"]):
+            if ec not in (17, 3) and match["matched_by_err"][ec]:
+                err_parts.append(f"err={ec}: {match['matched_by_err'][ec]}")
+        if err_parts:
+            lines.append(f"- Matched rejections by err code: {', '.join(err_parts)}")
     if match['median_delta_us'] is not None:
         lines.append(f"- Median Δt: {fmt_us(int(match['median_delta_us']))}")
         lines.append(f"- Max |Δt|: {fmt_us(match['max_abs_delta_us'])}")
@@ -614,15 +711,15 @@ def generate_markdown_report(data: Dict[str, Any]) -> str:
 
     lines.append("### Match Table")
     lines.append("")
-    lines.append("| Replay Len | Replay Dev | Reject Kind | Reject Dev | Reject Err | Δt (us) | Δt (host) |")
-    lines.append("|------------|------------|-------------|------------|------------|---------|-----------|")
+    lines.append("| Replay Len | Replay Dev | Reject Layer | Reject Dev | Reject Err | Δt (us) | Δt (host) |")
+    lines.append("|------------|------------|--------------|------------|------------|---------|-----------|")
     for det in data["match_details"]:
-        reject_kind = det["reject_kind"] if det["reject_kind"] else "UNMATCHED"
+        reject_layer_str = det["reject_layer"] if det["reject_layer"] else "UNMATCHED"
         reject_dev = det["reject_device"] if det["reject_device"] else "-"
         reject_err = det["reject_err"] if det["reject_err"] is not None else "-"
         delta_us = fmt_us(det["delta_t_us"])
         delta_host = f"{det['delta_t_host_s']:+.3f}s" if det["delta_t_host_s"] is not None else "-"
-        lines.append(f"| {det['replay_payload_len']} | {det['replay_device']} | {reject_kind} | {reject_dev} | {reject_err} | {delta_us} | {delta_host} |")
+        lines.append(f"| {det['replay_payload_len']} | {det['replay_device']} | {reject_layer_str} | {reject_dev} | {reject_err} | {delta_us} | {delta_host} |")
     lines.append("")
 
     lines.append("## Unexplained Rejections")
@@ -648,10 +745,50 @@ def generate_markdown_report(data: Dict[str, Any]) -> str:
     lines.append("Therefore **app-level seq accounting** CANNOT be used to test replay rejection — every")
     lines.append("replayed seq will eventually appear committed via its clean retry.")
     lines.append("")
-    if match["matched_count"] == data["replay_injections"]["total"]:
-        lines.append(f"**Result:** All {match['matched_count']} replayed frames were rejected as replays (err=17) by the peer.")
+    total_injections = data["replay_injections"]["total"]
+    matched_count = match["matched_count"]
+    matched_by_err = match.get("matched_by_err") or {}
+    err17 = matched_by_err.get(17, matched_by_err.get("17", 0))
+    err3 = matched_by_err.get(3, matched_by_err.get("3", 0))
+    matched_other = matched_count - err17 - err3
+
+    if total_injections == 0:
+        lines.append("**Result:** No replay injections found in log; nothing to verify.")
+    elif matched_count == 0:
+        lines.append(
+            f"**Result:** DEFENCE DID NOT TRIGGER — {total_injections} replay injection(s) had no "
+            f"matching rejection on the peer within the {data['window_seconds']}s window "
+            f"(real failure)."
+        )
     else:
-        lines.append(f"**Result:** {match['matched_count']}/{data['replay_injections']['total']} replayed frames matched to peer err=17 rejections.")
+        parts = []
+        if err17:
+            parts.append(f"{err17}x err=17 (replay-window commit)")
+        if err3:
+            parts.append(f"{err3}x err=3 (ESL header/MAC/replay layer)")
+        if matched_other:
+            parts.append(f"{matched_other}x unexpected err code")
+        breakdown = "; ".join(parts)
+        if err3 == 0 and matched_other == 0:
+            lines.append(
+                f"**Result:** All {matched_count} replayed frames were rejected as replays "
+                f"(err=17, replay-window commit) by the peer. [strongest claim]"
+            )
+        else:
+            lines.append(
+                f"**Result:** {matched_count}/{total_injections} replayed frames matched to peer "
+                f"rejections ({breakdown})."
+            )
+            if err3 > 0:
+                lines.append(
+                    f"- {err3} caught at the ESL layer (err=3) — valid replay defence, earlier "
+                    f"layer than the replay-window commit."
+                )
+            if matched_other > 0:
+                lines.append(
+                    f"- {matched_other} matched to an unexpected err code — investigate "
+                    f"(not a replay-window commit)."
+                )
     lines.append("")
 
     return "\n".join(lines)
@@ -665,11 +802,14 @@ def run_self_test() -> int:
     """Run the self-test with synthetic data.
 
     Covers:
-    (a) replay injection matched to a peer err=17 rejection 0.4 s later
+    (a) replay injection matched to a peer err=17 rejection 0.4 s later (replay-window commit)
+    (a2) replay injection matched to a peer err=3 rejection 0.4 s later (ESL layer) — must still
+         match and be labelled ESL layer
     (b) an unmatched replay injection (no peer rejection within window)
     (c) a rejection with no replay injection (ordinary RF loss)
-    (d) NEGATIVE CASE: a rejection with err != 17 must NOT be matched to a replay
-    (e) NEGATIVE CASE: a replay injection with no err=17 rejection within window must be unmatched
+    (d) NEGATIVE CASE (one-to-one): two replay injections on the same device close together,
+        a single rejection on the peer; the rejection matches the first injection and must NOT
+        be matched to the second (the rejection "belongs to a different injection")
     """
     import tempfile
 
@@ -683,30 +823,29 @@ def run_self_test() -> int:
         "10.0 [DEVICE_A] I (200010) session_send: [BENCH58_REPLAY] replayed 120 B with stale esl header (fresh arq seq downstream)\n",
         "10.4 [DEVICE_B] E (600000) SESSION: [SECURE_CHAT_RX] Discard: replay commit rejected seq=42 (err=17)\n",
 
+        # (a2) Replay injection from DEVICE_B, matched to DEVICE_A err=3 ESL rejection 0.4s later
+        # (must still match; labelled ESL layer, not replay-window commit)
+        "20.0 [DEVICE_B] I (300000) task_session: [BENCH58_REPLAY] armed\n",
+        "20.0 [DEVICE_B] I (300010) session_send: [BENCH58_REPLAY] replayed 88 B with stale esl header (fresh arq seq downstream)\n",
+        "20.4 [DEVICE_A] E (700000) SESSION: [SECURE_CHAT_RX] Discard: ESL transport header/MAC/replay check failed (err=3 len=2)\n",
+
         # (b) Unmatched replay injection (no peer rejection within window)
         "200.0 [DEVICE_B] I (3000000) task_session: [BENCH58_REPLAY] armed\n",
-        "200.0 [DEVICE_B] I (3000010) session_send: [BENCH58_REPLAY] replayed 88 B with stale esl header (fresh arq seq downstream)\n",
+        "200.0 [DEVICE_B] I (3000010) session_send: [BENCH58_REPLAY] replayed 64 B with stale esl header (fresh arq seq downstream)\n",
         # No rejection follows within window
 
         # (c) Rejection with no replay injection (ordinary RF loss) - at 30s host
         "30.0 [DEVICE_A] E (300000) SESSION: [SECURE_CHAT_RX] Discard: replay commit rejected seq=7 (err=17)\n",
 
-        # (d) NEGATIVE CASE: rejection with err != 17 (e.g. err=5 crypto) must NOT match
+        # (d) NEGATIVE CASE (one-to-one): two replay injections on DEVICE_A close together,
+        # a single rejection on DEVICE_B. The rejection matches the first injection (40.0);
+        # the second injection (40.5) must NOT match to the same rejection (it "belongs to"
+        # a different injection).
         "40.0 [DEVICE_A] I (400000) task_session: [BENCH58_REPLAY] armed\n",
-        "40.0 [DEVICE_A] I (4000010) session_send: [BENCH58_REPLAY] replayed 64 B with stale esl header (fresh arq seq downstream)\n",
-        "40.4 [DEVICE_B] E (700000) SESSION: [SECURE_CHAT_RX] Discard: crypto_box decrypt FAILED (err=5, len=83)\n",
-        # The err=5 rejection must NOT match the replay injection (wrong err code)
-
-        # (e) NEGATIVE CASE: replay injection with only non-17 rejections nearby
-        "50.0 [DEVICE_B] I (800000) task_session: [BENCH58_REPLAY] armed\n",
-        "50.0 [DEVICE_B] I (8000010) session_send: [BENCH58_REPLAY] replayed 96 B with stale esl header (fresh arq seq downstream)\n",
-        "50.4 [DEVICE_A] E (900000) SESSION: [SECURE_CHAT_RX] Discard: crypto_box decrypt FAILED (err=5, len=83)\n",
-        # Only err=5 nearby, no err=17 -> must be unmatched
-
-        # Another matched pair for DEVICE_B -> DEVICE_A
-        "60.0 [DEVICE_B] I (1000000) task_session: [BENCH58_REPLAY] armed\n",
-        "60.0 [DEVICE_B] I (1000010) session_send: [BENCH58_REPLAY] replayed 150 B with stale esl header (fresh arq seq downstream)\n",
-        "60.4 [DEVICE_A] E (1100000) SESSION: [SECURE_CHAT_RX] Discard: replay commit rejected seq=99 (err=17)\n",
+        "40.0 [DEVICE_A] I (4000010) session_send: [BENCH58_REPLAY] replayed 96 B with stale esl header (fresh arq seq downstream)\n",
+        "40.5 [DEVICE_A] I (4000020) task_session: [BENCH58_REPLAY] armed\n",
+        "40.5 [DEVICE_A] I (4000030) session_send: [BENCH58_REPLAY] replayed 48 B with stale esl header (fresh arq seq downstream)\n",
+        "40.4 [DEVICE_B] E (800000) SESSION: [SECURE_CHAT_RX] Discard: replay commit rejected seq=9 (err=17)\n",
     ]
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8") as fh:
@@ -728,20 +867,23 @@ def run_self_test() -> int:
             errors.append(f"replay_armed_count: expected 5, got {analyzer.replay_armed_count}")
 
         # Check rejections
-        if len(analyzer.reject_events) != 5:
-            errors.append(f"reject_events: expected 5, got {len(analyzer.reject_events)}")
+        if len(analyzer.reject_events) != 4:
+            errors.append(f"reject_events: expected 4, got {len(analyzer.reject_events)}")
 
         # Check rejection kinds
         kind_counts = analyzer.reject_counts
         if kind_counts["replay_commit"] != 3:
             errors.append(f"replay_commit rejections: expected 3, got {kind_counts.get('replay_commit', 0)}")
-        if kind_counts["box"] != 2:
-            errors.append(f"box rejections: expected 2, got {kind_counts.get('box', 0)}")
+        if kind_counts["esl"] != 1:
+            errors.append(f"esl rejections: expected 1, got {kind_counts.get('esl', 0)}")
 
-        # Check err=17 count
+        # Check err counts
         err17_count = sum(1 for r in analyzer.reject_events if r.err == 17)
+        err3_count = sum(1 for r in analyzer.reject_events if r.err == 3)
         if err17_count != 3:
             errors.append(f"err=17 rejections: expected 3, got {err17_count}")
+        if err3_count != 1:
+            errors.append(f"err=3 rejections: expected 1, got {err3_count}")
 
         # Run matching with 2.0s window
         matches = analyzer.match_replay_to_reject(window_seconds=2.0)
@@ -750,7 +892,11 @@ def run_self_test() -> int:
         if len(matches) != 5:
             errors.append(f"matches: expected 5, got {len(matches)}")
 
-        # First replay (DEVICE_A, payload 120) should match to DEVICE_B err=17 rejection
+        matched_count = sum(1 for m in matches if m.reject is not None)
+        if matched_count != 3:
+            errors.append(f"matched count: expected 3, got {matched_count}")
+
+        # match[0]: DEVICE_A@10.0 -> DEVICE_B@10.4 err=17 (replay-window commit)
         m0 = matches[0]
         if m0.reject is None:
             errors.append("match[0]: expected reject, got None")
@@ -763,34 +909,50 @@ def run_self_test() -> int:
         elif m0.delta_t_us is None or not (390000 <= m0.delta_t_us <= 410000):
             errors.append(f"match[0]: expected delta_t ~400000 us, got {m0.delta_t_us}")
 
-        # Second replay (DEVICE_B, payload 88) should be UNMATCHED (no peer rejection within window)
+        # match[1]: DEVICE_B@20.0 -> DEVICE_A@20.4 err=3 (ESL layer) — NEW: err=3 must still match
         m1 = matches[1]
-        if m1.reject is not None:
-            errors.append(f"match[1]: expected UNMATCHED, got reject on {m1.reject.device}")
+        if m1.reject is None:
+            errors.append("match[1]: expected reject (err=3 ESL), got None")
+        elif m1.reject.kind != "esl":
+            errors.append(f"match[1]: expected esl reject, got {m1.reject.kind}")
+        elif m1.reject.err != 3:
+            errors.append(f"match[1]: expected err=3, got err={m1.reject.err}")
+        elif m1.reject.device != "DEVICE_A":
+            errors.append(f"match[1]: expected DEVICE_A, got {m1.reject.device}")
+        elif m1.delta_t_us is None or not (390000 <= m1.delta_t_us <= 410000):
+            errors.append(f"match[1]: expected delta_t ~400000 us, got {m1.delta_t_us}")
+        elif reject_layer(m1.reject) != "ESL header/MAC/replay check":
+            errors.append(f"match[1]: expected ESL layer label, got {reject_layer(m1.reject)}")
 
-        # Third replay (DEVICE_A, payload 64) - nearby rejection is err=5, NOT err=17 -> must be UNMATCHED
+        # match[2]: DEVICE_B@200.0 -> UNMATCHED (no peer rejection within window)
         m2 = matches[2]
         if m2.reject is not None:
-            errors.append(f"match[2]: expected UNMATCHED (err=5 nearby, not err=17), got reject on {m2.reject.device} err={m2.reject.err}")
+            errors.append(f"match[2]: expected UNMATCHED, got reject on {m2.reject.device}")
 
-        # Fourth replay (DEVICE_B, payload 96) - nearby rejection is err=5, NOT err=17 -> must be UNMATCHED
+        # match[3]: DEVICE_A@40.0 -> DEVICE_B@40.4 err=17 (replay-window commit)
         m3 = matches[3]
-        if m3.reject is not None:
-            errors.append(f"match[3]: expected UNMATCHED (err=5 nearby, not err=17), got reject on {m3.reject.device} err={m3.reject.err}")
+        if m3.reject is None:
+            errors.append("match[3]: expected reject, got None")
+        elif m3.reject.err != 17:
+            errors.append(f"match[3]: expected err=17, got err={m3.reject.err}")
+        elif m3.reject.device != "DEVICE_B":
+            errors.append(f"match[3]: expected DEVICE_B, got {m3.reject.device}")
 
-        # Fifth replay (DEVICE_B, payload 150) should match to DEVICE_A err=17 rejection
+        # match[4]: DEVICE_A@40.5 -> UNMATCHED (rejection already claimed by match[3];
+        # nearby rejection belongs to a different injection and must NOT match)
         m4 = matches[4]
-        if m4.reject is None:
-            errors.append("match[4]: expected reject, got None")
-        elif m4.reject.kind != "replay_commit":
-            errors.append(f"match[4]: expected replay_commit reject, got {m4.reject.kind}")
-        elif m4.reject.err != 17:
-            errors.append(f"match[4]: expected err=17, got err={m4.reject.err}")
-        elif m4.reject.device != "DEVICE_A":
-            errors.append(f"match[4]: expected DEVICE_A, got {m4.reject.device}")
+        if m4.reject is not None:
+            errors.append(f"match[4]: expected UNMATCHED (one-to-one; rejection claimed by another injection), got reject on {m4.reject.device} err={m4.reject.err}")
 
-        # Check unexplained rejections (should include the err=17 at 30s with no replay, plus the two err=5s)
+        # Check matched err distribution
         data = analyzer.to_dict("test", 2.0)
+        mbe = data["matching"]["matched_by_err"]
+        if mbe.get(17, 0) != 2:
+            errors.append(f"matched err=17 count: expected 2, got {mbe.get(17, 0)}")
+        if mbe.get(3, 0) != 1:
+            errors.append(f"matched err=3 count: expected 1, got {mbe.get(3, 0)}")
+
+        # Check unexplained rejections (should include the err=17 at 30s with no replay)
         unexplained_count = data["unexplained_rejections"]["count"]
         if unexplained_count < 1:
             errors.append(f"unexplained_rejections: expected >= 1, got {unexplained_count}")
@@ -803,10 +965,11 @@ def run_self_test() -> int:
 
         print("[PASS] Self-test passed")
         print("  - 5 replay injections parsed")
-        print("  - 5 rejections parsed (3 err=17 replay_commit, 2 err=5 box)")
-        print("  - Matched: 2/5 replay injections to peer err=17 rejections")
-        print("  - Unmatched: 3/5 (1 out-of-window, 2 negative cases with err!=17 nearby)")
-        print("  - Negative case (err!=17 must not match): VERIFIED")
+        print("  - 4 rejections parsed (3 err=17 replay_commit, 1 err=3 esl)")
+        print("  - Matched: 3/5 replay injections to peer rejections (2x err=17, 1x err=3 ESL layer)")
+        print("  - Unmatched: 2/5 (1 out-of-window, 1 one-to-one negative case)")
+        print("  - err=3 match labelled ESL layer: VERIFIED")
+        print("  - one-to-one negative case (rejection belongs to different injection): VERIFIED")
         return 0
 
     finally:

@@ -73,13 +73,13 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
 $SetupScript = Join-Path $ProjectRoot "tools\setup_esp_idf.ps1"
-$PythonExe  = if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
-    "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+$PythonExe  = if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.3\venv\Scripts\python.exe") {
+    "C:\Espressif\tools\python\v6.0.3\venv\Scripts\python.exe"
 } else {
     throw "ESP-IDF 6.0.2 Python environment was not found."
 }
 $MonitorPy  = Join-Path $PSScriptRoot "ceepew_monitor.py"
-$IdfProfile = "C:\esp\v6.0.2\esp-idf\export.ps1"
+$IdfProfile = "C:\esp\v6.0.3\esp-idf\export.ps1"
 
 # -- Fallback: if TimeoutSec was passed (old diagnose.ps1 convention), use it
 if ($TimeoutSec -gt 0) { $Duration = $TimeoutSec }

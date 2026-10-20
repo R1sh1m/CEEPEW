@@ -143,6 +143,7 @@ def run_host_tests(enable_coverage=False):
         "test_arq_sync",
         "test_arq_fault_injection",
         "test_replay_window",
+        "test_replay_vectors",
         "test_ui_navigator",
         "test_pfs_auth"
     ]

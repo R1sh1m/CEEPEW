@@ -49,9 +49,15 @@ except ImportError:  # pragma: no cover
 # Defaults (overridable via CLI)
 # ---------------------------------------------------------------------------
 
-DEFAULT_TEX = (Path(__file__).resolve().parent.parent
-               / "docs" / "paper" / "ceepew_icitiit2027_overleaf_project"
-               / "main_standalone_no_external_pdfs.tex")
+_repo_root = Path(__file__).resolve().parent.parent
+_candidate_tex = (_repo_root / "docs" / "paper" / "icitiit2027"
+                  / "ceepew_icitiit2027_overleaf_project"
+                  / "main_standalone_no_external_pdfs.tex")
+if not _candidate_tex.exists():
+    _candidate_tex = (_repo_root / "docs" / "paper"
+                      / "ceepew_icitiit2027_overleaf_project"
+                      / "main_standalone_no_external_pdfs.tex")
+DEFAULT_TEX = _candidate_tex
 DEFAULT_OUT = Path(__file__).resolve().parent / "citation_report.md"
 CROSSREF_URL = "https://api.crossref.org/works"
 USER_AGENT = "CEEPEW-citation-check/1.0 (mailto:{mailto})"

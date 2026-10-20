@@ -15,9 +15,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$env:IDF_PATH = "C:\esp\v6.0.2\esp-idf"
+$env:IDF_PATH = "C:\esp\v6.0.3\esp-idf"
 $env:IDF_TOOLS_PATH = "C:\Espressif\tools"
-$env:IDF_PYTHON_ENV_PATH = "C:\Espressif\tools\python\v6.0.2\venv"
+$env:IDF_PYTHON_ENV_PATH = "C:\Espressif\tools\python\v6.0.3\venv"
 $exportScript = Join-Path $env:IDF_PATH "export.ps1"
 
 foreach ($path in @($env:IDF_PATH, $env:IDF_TOOLS_PATH, $env:IDF_PYTHON_ENV_PATH, $exportScript)) {

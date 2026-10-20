@@ -60,9 +60,13 @@ Research/
 
 # Logs & hardware analysis artifacts
 logs/
+logs/**
 *.log
 *log*.*
 *.err
+*.out
+*_output.txt
+host_test_output.txt
 DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
 CEEPEW_ICITIIT_HARDWARE_LOGS*.md
@@ -79,6 +83,7 @@ docs/
 tools/eim_config.toml
 tools/monitor_both_*.txt
 tools/*.txt
+tools/scratch/
 tools/capture/*.txt
 tools/capture/*.log
 tools/_*.ps1
@@ -86,6 +91,7 @@ tools/_*.*
 !tools/cppcheck_suppressions.txt
 tools/citation_report.md
 tools/build_technical_report.py
+tools/archive/build_technical_report.py
 tools/capture/captures/
 *.pcap
 !data/**/*.pcap

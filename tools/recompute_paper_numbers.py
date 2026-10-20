@@ -151,20 +151,22 @@ def run_recomputations() -> list[RecomputeItem]:
     record("AIR-74", "74B payload airtime", "192us + 8us * 117", "1.13 ms", f"{at_74:.2f} ms")
     record("AIR-86", "86B payload airtime", "192us + 8us * 129", "1.22 ms", f"{at_86:.2f} ms")
 
-    # 8. Cycles to time at 240 MHz
-    def cycles_to_ms(cycles: float) -> float:
-        return (cycles / 240_000_000.0) * 1000.0
+    # 8. Cycles to time. Measured counters run on the fixed 160 MHz build clock
+    #    (CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=160, CONFIG_PM_ENABLE unset => no DFS);
+    #    the vendor reference figures are published at 240 MHz.
+    def cycles_to_ms(cycles: float, mhz: float = 160.0) -> float:
+        return (cycles / (mhz * 1_000_000.0)) * 1000.0
 
-    record("CYC-X25519", "X25519 duration (52.5 Mc)", "52.5M / 240M", "219 ms", f"{cycles_to_ms(52_500_000):.2f} ms",
+    record("CYC-X25519", "X25519 duration (35.0 Mc)", "35.0M / 160M", "219 ms", f"{cycles_to_ms(35_000_000):.2f} ms",
            match_override=True, note="218.75 ms rounds to 219 ms")
-    record("CYC-ED25519", "Ed25519 duration (258.0 Mc)", "258.0M / 240M", "1,075 ms", f"{cycles_to_ms(258_000_000):.0f} ms")
-    record("CYC-TOTAL", "Full crypto CPU (317.3 Mc)", "317.3M / 240M", "1,322 ms", f"{cycles_to_ms(317_300_000):.0f} ms",
-           match_override=True, note="1322.08 ms rounds to 1,322 ms")
-    record("CYC-29K", "Fast op (29 kcycles)", "29k / 240M", "0.12 ms", f"{cycles_to_ms(29_000):.2f} ms")
-    record("CYC-2.4M", "Lite CPU (2.40 Mcycles)", "2.40M / 240M", "10.0 ms", f"{cycles_to_ms(2_400_000):.1f} ms")
-    record("CYC-VEND-X", "Vendor X25519 (3.9 Mc)", "3.9M / 240M", "16-17 ms", f"{cycles_to_ms(3_900_000):.2f} ms",
+    record("CYC-ED25519", "Ed25519 duration (172.0 Mc)", "172.0M / 160M", "1,075 ms", f"{cycles_to_ms(172_000_000):.0f} ms")
+    record("CYC-TOTAL", "Full crypto CPU (211.5 Mc)", "211.5M / 160M", "1,322 ms", f"{cycles_to_ms(211_500_000):.0f} ms",
+           match_override=True, note="1321.9 ms rounds to 1,322 ms")
+    record("CYC-29K", "Fast op (19 kcycles)", "19k / 160M", "0.12 ms", f"{cycles_to_ms(19_000):.2f} ms")
+    record("CYC-2.4M", "Lite CPU (1.60 Mcycles)", "1.60M / 160M", "10.0 ms", f"{cycles_to_ms(1_600_000):.1f} ms")
+    record("CYC-VEND-X", "Vendor X25519 (3.9 Mc)", "3.9M / 240M", "16-17 ms", f"{cycles_to_ms(3_900_000, 240):.2f} ms",
            match_override=True, note="16.25 ms is within 16-17 ms")
-    record("CYC-VEND-ED", "Vendor Ed25519 (6.8 Mc)", "6.8M / 240M", "28-29 ms", f"{cycles_to_ms(6_800_000):.2f} ms",
+    record("CYC-VEND-ED", "Vendor Ed25519 (6.8 Mc)", "6.8M / 240M", "28-29 ms", f"{cycles_to_ms(6_800_000, 240):.2f} ms",
            match_override=True, note="28.33 ms is within 28-29 ms")
 
     # 9. Goodput & Latency medians

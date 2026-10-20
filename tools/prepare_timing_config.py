@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare sdkconfig for build_cap_timing with E5 timing instrumentation."""
+"""Prepare sdkconfig for build_cap_timing with E5 timing instrumentation.
+
+NOTE: This is a legacy single-config patcher. For general benchmark
+configuration preparation, see tools/bench_prepare_config.py.
+"""
 import re
 import os
 import sys

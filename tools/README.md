@@ -5,6 +5,7 @@ None are referenced by the firmware build.
 
 ## Contents
 
+### 1. Master Pipeline & Firmware Testing
 | File | Purpose |
 |------|---------|
 | `ceepew_pipeline.py` | **Master Pipeline Driver** — Single command interface for host tests, on-device diagnostics, pairing tests, production audit, and log analysis |
@@ -13,7 +14,44 @@ None are referenced by the firmware build.
 | `ceepew_log_pipeline.py` | Post-hoc log ingestion + signature analysis — tags known failure signatures, tracks across runs, generates findings report |
 | `ceepew_production_check.py` | Audits deployment configuration (eFuse HMAC, Secure Boot v2, Flash Encryption, dev mode) |
 | `flash_both.ps1` | Flash firmware to two ESP32 devices sequentially, then monitor the first |
+| `setup_esp_idf.ps1` | ESP-IDF 6.0.2 environment initialization helper |
+| `run_fuzz_harnesses.sh` | Shell runner for host libFuzzer/AFL target harnesses |
 | `wrap_rsp_in_group.cmake` | CMake helper — wraps linker response files in `--start-group`/`--end-group` |
+
+### 2. Paper Results & Claim Verification
+| File | Purpose |
+|------|---------|
+| `recompute_paper_numbers.py` | **Claim & Arithmetic Verifier** — Recomputes 45 paper claims against formulas and `results/registry.json` |
+| `bench_manifest.py` | **Dataset Provenance Sealer** — Generates and verifies cryptographic SHA-256 manifests for raw test runs |
+| `verify_citations.py` | **Citation Auditor** — Queries Crossref to validate DOIs, author lists, and publication years |
+| `paper_lint.py` | Lints paper text for canonical terminology, banned claims, and IEEE formatting |
+
+### 3. Empirical Experiment Drivers & Analysis
+| File | Purpose |
+|------|---------|
+| `e1_run_mode.py` | Experiment E1 driver: executes baseline vs CCMP vs CEE-PEW framing trials |
+| `e1_frame_lengths.py` | Analyzes airtime, frame length distribution, and overhead ratios |
+| `e2_forge_reject.py` | Experiment E2 driver: analyzes rejection of over-the-air forged frames |
+| `e3_replay_reject.py` | Experiment E3 driver: analyzes rejection of sliding window replay frames |
+| `p4a_delivery_measurement.py` | Evaluates packet delivery rate (PDR), ARQ retry histograms, and channel goodput |
+| `bench_latency_report.py` | Aggregates microsecond-resolution hardware pipeline stage latencies |
+| `bench_timing_report.py` | Summarizes on-device CPU execution timings across crypto operations |
+| `promisc_capture_helper.py` | ESP32 promiscuous mode 802.11 sniffer capture orchestrator |
+
+### 4. Protocol Dissectors & Calculators
+| File | Location | Purpose |
+|------|----------|---------|
+| `ceepew_espnow.lua` | `tools/capture/wireshark/` | Wireshark Lua dissector for CEE-PEW ESL encapsulation |
+| `airtime_calc.py` | `tools/wireshark/` | 802.11 PHY layer airtime and preamble calculation engine |
+| `v2_efficiency.py` | `tools/wireshark/` | ESP-NOW v2.0 wire efficiency and payload packing model |
+
+### 5. Directories & Sub-packages
+| Directory | Purpose |
+|-----------|---------|
+| `tools/archive/` | Historical, completed, or single-use scripts preserved for provenance |
+| `tools/scratch/` | Gitignored local workspace for ad-hoc probe scripts (never commit) |
+| `tools/capture/` | Raw promiscuous sniffer capture tools, analyzers, and Wireshark dissectors |
+| `tools/wireshark/`| Standalone mathematical models for airtime and 802.11 wire budgets |
 
 ---
 
@@ -212,3 +250,40 @@ Standalone CMake helper (not currently included from the root `CMakeLists.txt`).
 Wraps the linker response file in `-Wl,--start-group` / `-Wl,--end-group`
 to prevent one-pass GNU ld from skipping libraries.
 Not intended to be invoked directly.
+
+---
+
+## `recompute_paper_numbers.py`
+
+Automated arithmetic, wire budget, airtime, and goodput checker. Recomputes all 45 quantitative paper claims against the formulas and the single source of truth in `results/registry.json`.
+
+```pwsh
+python tools/recompute_paper_numbers.py
+```
+
+Outputs a comparison table detailing claim status (`MATCH` vs `MISMATCH`).
+
+---
+
+## `bench_manifest.py`
+
+Dataset provenance and integrity sealer for experimental captures in `data/raw/`.
+
+```pwsh
+# Create / seal a manifest for a capture run
+python tools/bench_manifest.py seal --run-id E1_B_ccmp_20261017
+
+# Cryptographically verify all SHA-256 sums in a sealed run
+python tools/bench_manifest.py verify --run-id E1_B_ccmp_20261017
+```
+
+---
+
+## `verify_citations.py`
+
+Adversarial citation verification tool querying Crossref API to confirm publication metadata (DOI, title, authors, publication year).
+
+```pwsh
+python tools/verify_citations.py --bib docs/paper/references.bib
+```
+

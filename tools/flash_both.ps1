@@ -102,8 +102,8 @@ $LogDir        = Join-Path $ProjectRoot "logs"
 $SetupScript    = Join-Path $ProjectRoot "tools\setup_esp_idf.ps1"
 $PythonExe     = $env:CEEPEW_PYTHON
 if (-not $PythonExe) {
-    if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
-        $PythonExe = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.3\venv\Scripts\python.exe") {
+        $PythonExe = "C:\Espressif\tools\python\v6.0.3\venv\Scripts\python.exe"
     } else {
         throw "ESP-IDF 6.0.2 Python environment was not found."
     }
@@ -149,7 +149,7 @@ function Initialize-Environment {
     & $SetupScript
     $env:ESP_IDF_VERSION = "6.0.2"
 
-    $script:PythonExeResolved = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+    $script:PythonExeResolved = "C:\Espressif\tools\python\v6.0.3\venv\Scripts\python.exe"
     if (-not (Test-Path -LiteralPath $script:PythonExeResolved)) {
         $fallback = (Get-Command python -ErrorAction SilentlyContinue).Source
         if ($fallback) {
