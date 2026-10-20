@@ -43,15 +43,6 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
   <img src="assets/hardware_block.svg" alt="CEE-PEW Hardware Block Diagram" width="800">
 </p>
 
-<p align="center">
-  <img src="assets/hardware_schematic.png" alt="CEE-PEW Engineering Circuit Schematic" width="800">
-</p>
-
-For complete component wiring, netlists, and pin mappings:
-- **Direct PDF View / Download**: [CEE-PEW Engineering Circuit Schematic (PDF)](assets/CEEPEW_Engineering_Schematic.pdf?raw=true) *(optimized 83 KB vector PDF; `?raw=true` bypasses GitHub's inline code-block viewer)*
-- **High-Resolution Graphic**: [Circuit Schematic (PNG)](assets/hardware_schematic.png)
-- **Vector Architecture**: [System Hardware Block Diagram (SVG)](assets/hardware_block.svg)
-
 ---
 
 ## Testing Methodologies & Reproduction Guide
@@ -185,10 +176,8 @@ idf.py -p /dev/ttyUSB0 monitor
 
 ```
 CEEPEW/
-├── assets/                  Engineering circuit schematics, hardware diagrams, block SVGs
-│   ├── CEEPEW_Engineering_Schematic.pdf   Complete circuit schematic (vector PDF, 83 KB)
-│   ├── hardware_block.svg                 System hardware block diagram (SVG)
-│   └── hardware_schematic.png             Breadboard circuit schematic and wiring diagram (PNG)
+├── assets/                  Engineering hardware diagrams and system block SVGs
+│   └── hardware_block.svg                 System hardware block diagram and verified pinout (SVG)
 ├── data/                    Empirical testing datasets, raw captures, derived CSVs
 │   ├── raw/                 Read-only PCAPs, logs, and sealed SHA-256 manifests
 │   ├── derived/             Stage timing benchmarks (CSV), tshark dissections
