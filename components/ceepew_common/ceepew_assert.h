@@ -6,6 +6,7 @@
 #ifndef CEEPEW_ASSERT_H
 #define CEEPEW_ASSERT_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "hal_ui_types.h"
