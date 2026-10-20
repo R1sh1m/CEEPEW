@@ -19,7 +19,6 @@
 #include "session_msgstore.h"
 #include "crypto_hkdf.h"
 #include "task_arch.h"
-#include "test_icitiit_benchmarks.h"
 #include <esp_log.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -653,10 +652,6 @@ void integration_tests_run_all(void){
     fail_before = s_tests_failed;
     test_task_arch_handles();
     task_arch_ok = (s_tests_failed == fail_before);
-
-    /* STEP 2 on-device micro-benchmark (ICIT-IIT paper). Self-contained;
-     * restores ESL/ARQ/FEC global state on exit. Runs before the report. */
-    test_icitiit_paper_benchmarks();
 
     /* Update structured report. */
     REPORT_SET("Session FSM",       session_fsm_ok);

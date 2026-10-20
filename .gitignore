@@ -61,6 +61,9 @@ ceepew_log_store.json
 *log*.*
 **/build_fuzz/
 
-# Local-only generated report + generator (not for GitHub)
+# Local-only reports, benchmarks, and paper artifacts
+**/*benchmark*/
+**/*benchmark*.*
+CEEPEW_ICITIIT_HARDWARE_LOGS*.md
 out/
 tools/build_technical_report.py

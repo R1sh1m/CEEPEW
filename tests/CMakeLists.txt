@@ -26,7 +26,6 @@ if(CONFIG_CEEPEW_DEVELOPMENT_MODE)
         "main/test_pairing_convergence.c"
         "main/test_rng_health.c"
         "main/test_arq_negative.c"
-        "main/test_icitiit_benchmarks.c"
         "components/crypto/curve25519_test.c"
         "components/crypto/loworder_test.c"
         "components/ceepew_hal/ui_manager_test.c"
@@ -53,7 +52,6 @@ idf_component_register(
         compress
         transport
         mem
-        tools
         esp_system
         esp_timer
         freertos

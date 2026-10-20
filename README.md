@@ -36,6 +36,13 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 | Diagnostic | Push-lock switch GPIO5 (active LOW) |
 | Indicator | RGB LED GPIO15/R, GPIO18/G, GPIO23/B (220 Ω to 3.3 V) |
 
+### Circuit Schematic
+
+![CEE-PEW hardware block diagram](assets/hardware_block.svg)
+
+See the complete [CEE-PEW engineering circuit schematic](CEEPEW_Engineering_Schematic.pdf)
+for the wiring and component-level connections.
+
 ## Getting Started
 
 ### Prerequisites
