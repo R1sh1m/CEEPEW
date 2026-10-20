@@ -47,7 +47,7 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
 
 ## Testing Methodologies & Reproduction Guide
 
-CEE-PEW enforces a multi-tier testing and verification framework. Anyone checking out this repository can independently reproduce, test, and audit every claim in the paper.
+CEE-PEW enforces a multi-tier testing and verification framework. Anyone can independently reproduce, test, and audit all cryptographic primitives, wire budgets, and system metrics.
 
 ### 1. Host-Side C Unit Tests & Sanitizers (Zero Hardware Required)
 Run the native host test suite with GCC/Clang AddressSanitizer and UndefinedBehaviorSanitizer:
@@ -56,8 +56,8 @@ python tools/ceepew_pipeline.py --mode host
 ```
 *Verifies: 15/15 test suites (Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC single-bit correction and double-bit non-crashing bounds, 64-bit replay sliding window, replay vectors, PFS auth, UI navigator, and side-channel timing uniformity).*
 
-### 2. Paper Arithmetic & Claim Verification
-Recompute all 45 formulas, wire budgets, airtimes, cycle-to-time conversions, and bounds reported in the paper:
+### 2. Protocol Arithmetic & Metric Verification
+Recompute all 45 formulas, wire budgets, airtimes, cycle-to-time conversions, and bounds:
 ```powershell
 python tools/recompute_paper_numbers.py
 ```
@@ -102,7 +102,7 @@ python tools/ceepew_pipeline.py --mode prod
 
 ## Empirical Results & Testing Data
 
-All quantitative claims and experimental datasets used in the paper are published and tracked in this repository:
+All quantitative metrics, benchmarks, and experimental datasets are published and tracked in this repository:
 - **Canonical Results Registry**: [`results/registry.json`](results/registry.json) (every number tagged with an Evidence Class: `M-HW`, `M-HOST`, `C`, `S`, or `E`).
 - **Results Documentation**: [`results/README.md`](results/README.md) (complete results ledger and analysis).
 - **Experimental Datasets**: [`data/`](data/) (raw PCAPs, serial logs, SHA-256 manifests, and derived CSVs).
@@ -120,8 +120,6 @@ All quantitative claims and experimental datasets used in the paper are publishe
 | **Ed25519 Verify Duration (RX)**| **662.7 ms** median ($n=99$) | Full verification path | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L5) |
 | **Replay Rejection (Sliding Window)** | **100 / 100** vectors rejected | 95% CI failure bound: 3.0% | `M-HOST` | [`tests/host/test_replay_vectors.c`](tests/host/test_replay_vectors.c) + [`data/derived/host_ci_20261019_replay_vectors/`](data/derived/host_ci_20261019_replay_vectors/) |
 | **OTA Forged Frame Rejection** | **16 / 16** rejected per Mode-C run (n=32 across E1-C + E2b) | Ascon tag auth error (err=5) | `M-HW` | [`data/raw/E1_C_ceepew_20261018/`](data/raw/E1_C_ceepew_20261018/), [`data/raw/E2b_forged_rejection_20261018/`](data/raw/E2b_forged_rejection_20261018/) |
-
-**Note:** The "10/10" figure cited in earlier drafts is unsupported by its own artifact (`E1_B_ccmp_20261017` contains 4 forged TX / 4 box rejects in Mode B, which bypasses the full authenticator). The authoritative measurement is 16/16 per Mode-C run, n=32.
 | **Cleartext Air Leakage** | **0 bytes** visible in Mode C | Mode A: 100% payload visible | `M-HW` | [`data/derived/E1_A_plain_20261017/`](data/derived/E1_A_plain_20261017/) |
 | **Application Heap Allocations** | **0 bytes** (48 KB static region) | Standard heap allocators | `M-HW` | [`components/mem/ceepew_region.h`](components/mem/ceepew_region.h) |
 
@@ -135,7 +133,7 @@ Live promiscuous 802.11 ESP-NOW capture decoded with the custom CEE-PEW Wireshar
 </p>
 
 #### 2. On-Device Cryptographic Benchmarks
-Measured execution durations (median, $N \ge 50$ runs) across cryptographic and error-correction pipeline stages on physical ESP32 hardware running at 240 MHz:
+Measured execution durations (median, $N \ge 50$ runs) across cryptographic and error-correction pipeline stages on physical ESP32 hardware running at 160 MHz:
 
 <p align="center">
   <img src="assets/benchmarks.png" alt="On-Device Crypto Benchmarks on ESP32" width="800">
@@ -208,7 +206,7 @@ CEEPEW/
 │   ├── raw/                 Read-only PCAPs, logs, and sealed SHA-256 manifests
 │   ├── derived/             Stage timing benchmarks (CSV), tshark dissections
 │   └── manifests/           Master run roll-up index (index.json)
-├── results/                 Canonical paper results registry & single source of truth
+├── results/                 Canonical benchmark results registry & single source of truth
 │   ├── registry.json        Master JSON ledger of all quantitative claims and evidence
 │   └── README.md            Documentation of evidence classes and replication instructions
 ├── main/                    Application entry, FreeRTOS tasks, session FSM
@@ -234,7 +232,7 @@ CEEPEW/
 │   └── components/         Component self-tests
 ├── tools/                   Development, capture, diagnostic, and monitoring tools
 │   ├── ceepew_pipeline.py   Master automated test runner (--mode host/diag/pairing/prod)
-│   ├── recompute_paper_numbers.py  Automated paper arithmetic and claim checker
+│   ├── recompute_paper_numbers.py  Automated wire budget, airtime, and efficiency checker
 │   ├── ceepew_monitor.py   Unified colorized serial monitor (single/dual port)
 │   ├── ceepew_log_pipeline.py      Post-test log ingestion and signature detector
 │   ├── ceepew_diagnose.ps1 Unified PowerShell test driver

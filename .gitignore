@@ -101,5 +101,6 @@ tools/capture/captures/
 # Local-only benchmarks
 **/*benchmark*/
 **/*benchmark*.*
+!assets/**
 .slim/deepwork/
 

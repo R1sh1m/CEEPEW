@@ -2003,8 +2003,12 @@ static CeePewErr_t render_peer_select_blacklist_dialog(void)
     bool y_selected = !g_ui_ctx.peer_select_blacklist_confirm; /* 0=Yes, 1=No */
     uint8_t opt_y = y_selected ? 0U : 1U;
 
-    draw_selected_option_row(16U, 36U, 48U, 16U, "YES", (opt_y == 0U));
-    draw_selected_option_row(64U, 36U, 48U, 16U, "NO",  (opt_y == 1U));
+    /* Prompt "Blacklist this peer?" (20 glyphs = 120px, columns 4..122) inks
+     * rows 30..36. The option boxes start at row 38 so the prompt band and
+     * both box borders (rows 38 and 53) never share a row, and the hint
+     * "BTN=confirm" (rows 56..62) stays clear of the boxes. */
+    draw_selected_option_row(16U, 38U, 48U, 16U, "YES", (opt_y == 0U));
+    draw_selected_option_row(64U, 38U, 48U, 16U, "NO",  (opt_y == 1U));
 
     hal_ui_text(4U, 56U, "BTN=confirm", HAL_UI_WHITE);
 
@@ -2507,21 +2511,27 @@ static void render_new_msg_banner(uint8_t x, uint8_t y)
     if (g_ui_ctx.new_msg_count == 0U) { return; }
     char banner[16U];
     /* Dynamic unread count display: shows actual count up to 99, then "99+" for overflow.
-     * Banner width auto-adjusts: "[!1]" = 24px, "[!99]" = 36px, "[!99+]" = 42px.
-     * Glyph width = 6px, +2px padding for clean rendering. */
+     * Banner geometry is derived from the string, never clipped:
+     * "[!1]" = 4 glyphs = 26px, "[!21]" = 5 glyphs = 32px, "[!99+]" = 7 = 44px.
+     * Text is drawn at bx+1 and inks len*6-1 px, so bg width len*6+2 always
+     * contains it (2px right padding). */
     if (g_ui_ctx.new_msg_count > 99U) {
         (void)snprintf(banner, sizeof(banner), "[!99+]");
     } else {
         (void)snprintf(banner, sizeof(banner), "[!%u]", (unsigned)g_ui_ctx.new_msg_count);
     }
     uint8_t len = (uint8_t)strlen(banner);
-    /* Clamp to display bounds: banner may be 4-7 glyphs (24-44px),
-     * and callers may pass x=90-100, so clamp width to prevent overflow. */
     uint8_t w = (uint8_t)(len * 6U + 2U);
-    if ((uint16_t)x + w > HAL_UI_WIDTH_PX) { w = (uint8_t)(HAL_UI_WIDTH_PX - x); }
-    HalUIRect_t bg = { .x = x, .y = y, .w = w, .h = 9U };
+    /* Right-align from the string length so bg and text always fit:
+     * 4 glyphs -> bx=102, 5 glyphs -> bx=96, both ending at column 127.
+     * The caller's x is the outer right boundary (100 today); it may pull
+     * the banner further left but can never squeeze its background. */
+    uint8_t bx = ((uint16_t)w < (uint16_t)HAL_UI_WIDTH_PX)
+               ? (uint8_t)(HAL_UI_WIDTH_PX - w) : 0U;
+    if (bx > x) { bx = x; }
+    HalUIRect_t bg = { .x = bx, .y = y, .w = w, .h = 9U };
     hal_ui_rect_fill(&bg, HAL_UI_WHITE);
-    hal_ui_text((uint8_t)(x + 1U), (uint8_t)(y + 1U), banner, HAL_UI_BLACK);
+    hal_ui_text((uint8_t)(bx + 1U), (uint8_t)(y + 1U), banner, HAL_UI_BLACK);
 }
 
 static CeePewErr_t render_chat_thread(void)
@@ -2622,7 +2632,11 @@ static CeePewErr_t render_chat_thread(void)
     }
 
     /* Tactical status bar: live ESP-NOW hop channel + last-seen link RSSI.
-     * RSSI is refreshed on every received frame (g_ui_ctx.rssi_dbm). */
+     * RSSI is refreshed on every received frame (g_ui_ctx.rssi_dbm).
+     * The footer never takes the banner shift: its glyph band is rows 54..60
+     * in both modes so it is always fully on-screen. In degraded mode the
+     * shortened list ends at row 46 (bubbles at y=22 and y=36, h=11) and the
+     * scrollbar track ends at row 53, leaving rows 54..60 clear. */
     {
         char status_str[14U];
         uint8_t ch = (g_ui_ctx.current_channel != 0U) ? g_ui_ctx.current_channel : 1U;
@@ -2631,9 +2645,9 @@ static CeePewErr_t render_chat_thread(void)
         } else {
             (void)snprintf(status_str, sizeof(status_str), "CH%u %ddBm", (unsigned)ch, (int)g_ui_ctx.rssi_dbm);
         }
-        hal_ui_text(0U, (uint8_t)(54U + banner_shift), status_str, HAL_UI_WHITE);
+        hal_ui_text(0U, 54U, status_str, HAL_UI_WHITE);
     }
-    hal_ui_text(80U, (uint8_t)(54U + banner_shift), "BTN=menu", HAL_UI_WHITE);
+    hal_ui_text(80U, 54U, "BTN=menu", HAL_UI_WHITE);
 
     return CEEPEW_OK;
 }
@@ -2660,7 +2674,12 @@ static CeePewErr_t render_chat_detail(void)
      * unread badge and per-bubble unread dots update on the next frame. */
     (void)msg_store_mark_read(g_ui_ctx.chat_selected_idx);
 
-    ui_draw_centered_text(1U, "MESSAGE DETAIL");
+    /* Header: left-anchored at x=4 so the title can never reach the
+     * new-message banner. "MESSAGE DETAIL" = 14 glyphs, ink columns 4..86
+     * (rows 1..7). The banner background is right-aligned and starts at
+     * column 100 for a 4-glyph count, column 96 for a 5-glyph count
+     * ("[!21]"), so columns 87..95 stay clear in rows 1..9. */
+    hal_ui_text(4U, 1U, "MESSAGE DETAIL", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
 
     char type_str[32U];
@@ -2956,8 +2975,12 @@ static CeePewErr_t render_chat_menu(void)
     }
     uint8_t sel = g_ui_ctx.chat_menu_selected;
 
+    /* Degraded mode compacts the option stack into the band between the
+     * shifted rule (row 19) and the footer (rows 54..60): boxes occupy rows
+     * 21..34 and 38..51, so the footer band is never touched. Normal mode
+     * keeps the 20px pitch (rows 18..31 and 38..51). */
     for (uint8_t i = 0U; i < 2U; i++) {
-        uint8_t y = (uint8_t)((uint8_t)(18U + banner_shift) + i * 20U);
+        uint8_t y = degraded ? (uint8_t)(21U + i * 17U) : (uint8_t)(18U + i * 20U);
         draw_selected_option_row(8U, y, 112U, 14U, OPTS[i], (i == sel));
     }
 
@@ -2972,11 +2995,21 @@ static CeePewErr_t render_chat_menu(void)
         } else {
             (void)snprintf(badge, sizeof(badge), "[%u msgs]", (unsigned)cnt);
         }
-        hal_ui_text(4U, (uint8_t)(54U + banner_shift), badge, HAL_UI_WHITE);
+        hal_ui_text(4U, 54U, badge, HAL_UI_WHITE);
     }
 
-    hal_ui_text(66U, (uint8_t)(54U + banner_shift), "BTN=select", HAL_UI_WHITE);
-    render_new_msg_banner(100U, 1U);
+    /* Footer fixed at y=54 (rows 54..60) so it is fully visible in both modes;
+     * degraded option row 2 ends at row 51, leaving rows 52..53 clear. */
+    hal_ui_text(66U, 54U, "BTN=select", HAL_UI_WHITE);
+
+    /* Unread banner in normal mode only: the degraded warning
+     * "! UNVERIFIED ID !" inks columns 13..113 in rows 0..6, which a
+     * right-aligned banner (columns 96..127, rows 1..9) would partially
+     * erase. Degraded users still see the live unread count as the "U<n>"
+     * badge on the CHAT screen. */
+    if (!degraded) {
+        render_new_msg_banner(100U, 1U);
+    }
 
     g_ui_ctx.anim.frame_count++;
     return CEEPEW_OK;
@@ -3023,16 +3056,28 @@ static CeePewErr_t render_chat_compose(void)
         hal_ui_text(text_x, 18U, sel_label, HAL_UI_WHITE);
     }
 
-    /* Neighbour hints around current selection (flat, no category wrapping) */
+    /* Neighbour hints anchored to the selection box (columns box_x..box_x+box_w-1)
+     * so they can never land on its border or inside it: 6px clearance per side.
+     * Measured over all 66 choices (box_w is only ever 18/22/28/34): the
+     * leftmost previous hint is "DEL" at x=29 (next to "<-", box_x=53) ending
+     * at column 45, and the rightmost next hint is "SEND" at x=81 ending at
+     * column 103. Either hint is skipped if it cannot fit on the 128px panel. */
     if (choice_idx > 0U) {
         char prev_buf[4U];
         const char *prev = compose_choice_label((uint8_t)(choice_idx - 1U), prev_buf);
-        hal_ui_text(38U, 18U, prev, HAL_UI_WHITE);
+        uint8_t prev_px = (uint8_t)(strlen(prev) * 6U);
+        if ((uint16_t)prev_px + 6U <= (uint16_t)box_x) {
+            hal_ui_text((uint8_t)(box_x - 6U - prev_px), 18U, prev, HAL_UI_WHITE);
+        }
     }
     if (choice_idx + 1U < COMPOSE_TOTAL_CHOICES) {
         char next_buf[4U];
         const char *next = compose_choice_label((uint8_t)(choice_idx + 1U), next_buf);
-        hal_ui_text(76U, 18U, next, HAL_UI_WHITE);
+        uint8_t next_px = (uint8_t)(strlen(next) * 6U);
+        uint16_t next_x = (uint16_t)box_x + (uint16_t)box_w + 6U;
+        if (next_x + (uint16_t)next_px <= (uint16_t)HAL_UI_WIDTH_PX) {
+            hal_ui_text((uint8_t)next_x, 18U, next, HAL_UI_WHITE);
+        }
     }
 
     /* ── Message preview with cursor ─────────────────────────────── */
@@ -3057,7 +3102,12 @@ static CeePewErr_t render_chat_send_confirm(void)
     }
     compose_terminate_buffer();
 
-    ui_draw_centered_text(1U, "SEND MESSAGE");
+    /* Header left-anchored like MESSAGE DETAIL: "SEND MESSAGE" centred would
+     * ink columns 28..98, and the right-aligned new-message banner starts at
+     * column 96 once the unread count reaches 10, so the banner would cover
+     * the final glyph. At x=4 the title inks 4..75 and the header row stays
+     * readable with the banner present. */
+    hal_ui_text(4U, 1U, "SEND MESSAGE", HAL_UI_WHITE);
     draw_hline(0U, 11U, 128U);
     hal_ui_text(4U, 14U, "send message:", HAL_UI_WHITE);
 
@@ -4358,7 +4408,9 @@ static CeePewErr_t render_error(void)
     uint32_t elapsed_ms = (now_ms >= start_ms) ? (now_ms - start_ms) : 0U;
     uint8_t blink_phase = (uint8_t)((elapsed_ms / CEEPEW_RGB_ERROR_BLINK_MS) % 2U);
     if (blink_phase == 0U) {
-        HalUIRect_t blink_box = {.x = 56U, .y = 52U, .w = 16U, .h = 4U};
+        /* Bar sits below the hint text (rows 46..52): bar rows 56..59 leave
+         * rows 53..55 clear, and the bar stays inside the 64-row panel. */
+        HalUIRect_t blink_box = {.x = 56U, .y = 56U, .w = 16U, .h = 4U};
         hal_ui_rect_fill(&blink_box, HAL_UI_WHITE);
     }
 
