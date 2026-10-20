@@ -26,8 +26,6 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
 - **Static Huffman compression** — Lossless message compression
 - **ESP-NOW channel hopping** — Frequency diversity for the session transport
 
-## Hardware Requirements
-
 ## Hardware & Circuit Schematics
 
 | Component | Pin / Interface | Specification |
@@ -46,10 +44,13 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
 </p>
 
 <p align="center">
-  <img src="assets/hardware_schematic.png" alt="CEE-PEW Engineering Circuit Schematic and Assembled Hardware Node" width="800">
+  <img src="assets/hardware_schematic.png" alt="CEE-PEW Engineering Circuit Schematic" width="800">
 </p>
 
-For complete component wiring, netlists, pin mappings, and physical prototype assembly, inspect the publication-grade [CEE-PEW Engineering Circuit Schematic (PDF)](assets/CEEPEW_Engineering_Schematic.pdf).
+For complete component wiring, netlists, and pin mappings:
+- **Direct PDF View / Download**: [CEE-PEW Engineering Circuit Schematic (PDF)](assets/CEEPEW_Engineering_Schematic.pdf?raw=true) *(optimized 83 KB vector PDF; `?raw=true` bypasses GitHub's inline code-block viewer)*
+- **High-Resolution Graphic**: [Circuit Schematic (PNG)](assets/hardware_schematic.png)
+- **Vector Architecture**: [System Hardware Block Diagram (SVG)](assets/hardware_block.svg)
 
 ---
 
@@ -185,9 +186,9 @@ idf.py -p /dev/ttyUSB0 monitor
 ```
 CEEPEW/
 ├── assets/                  Engineering circuit schematics, hardware diagrams, block SVGs
-│   ├── CEEPEW_Engineering_Schematic.pdf   Complete circuit schematic and prototype node (PDF)
+│   ├── CEEPEW_Engineering_Schematic.pdf   Complete circuit schematic (vector PDF, 83 KB)
 │   ├── hardware_block.svg                 System hardware block diagram (SVG)
-│   └── hardware_schematic.png             Circuit pinout and breadboard prototype (PNG)
+│   └── hardware_schematic.png             Breadboard circuit schematic and wiring diagram (PNG)
 ├── data/                    Empirical testing datasets, raw captures, derived CSVs
 │   ├── raw/                 Read-only PCAPs, logs, and sealed SHA-256 manifests
 │   ├── derived/             Stage timing benchmarks (CSV), tshark dissections

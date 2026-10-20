@@ -1870,8 +1870,8 @@ static CeePewErr_t render_pairing_degraded(void)
  * ════════════════════════════════════════════════════════════════════════════════ */
 
 #define PEER_SELECT_VISIBLE_COUNT 3U
-#define PEER_SELECT_ITEM_HEIGHT  16U
-#define PEER_SELECT_LIST_TOP_Y   16U
+#define PEER_SELECT_ITEM_HEIGHT  14U  /* Reduced from 16U to reserve space for hint */
+#define PEER_SELECT_LIST_TOP_Y   12U  /* Reduced from 16U; list now spans y=12..53 */
 
 static CeePewErr_t render_peer_select_blacklist_dialog(void);
 
@@ -1957,17 +1957,17 @@ static CeePewErr_t render_peer_select(void)
         }
     }
 
-    /* Scroll indicator */
+    /* Scroll indicator — track band matches new list geometry (y=12, height=42px) */
     if (count > PEER_SELECT_VISIBLE_COUNT) {
-        uint8_t scroll_bar_h = 48U / count;
-        uint8_t scroll_pos = (scroll_top * (48U - scroll_bar_h)) / (count - PEER_SELECT_VISIBLE_COUNT);
-        HalUIRect_t scroll_bar = { .x = 126U, .y = 16U + scroll_pos, .w = 2U, .h = scroll_bar_h };
+        const uint8_t list_band_height = PEER_SELECT_VISIBLE_COUNT * PEER_SELECT_ITEM_HEIGHT;  /* 42U */
+        uint8_t scroll_bar_h = list_band_height / count;
+        uint8_t scroll_pos = (scroll_top * (list_band_height - scroll_bar_h)) / (count - PEER_SELECT_VISIBLE_COUNT);
+        HalUIRect_t scroll_bar = { .x = 126U, .y = (uint8_t)(PEER_SELECT_LIST_TOP_Y + scroll_pos), .w = 2U, .h = scroll_bar_h };
         hal_ui_rect_fill(&scroll_bar, HAL_UI_WHITE);
     }
 
-    /* Hint: two-line format to fit 128px screen (single line = 27 chars = 162px, clipped) */
-    hal_ui_text(4U, 52U, "BTN: select", HAL_UI_WHITE);
-    hal_ui_text(4U, 59U, "HOLD: blacklist", HAL_UI_WHITE);
+    /* Hint: single line, 20 chars = 120px fits 128px screen (x=4 → 4..123px) */
+    hal_ui_text(4U, 56U, "BTN=select HOLD=blk", HAL_UI_WHITE);
 
     return CEEPEW_OK;
 }
@@ -2533,10 +2533,10 @@ static CeePewErr_t render_chat_thread(void)
      * This is functionally analogous to Signal/WhatsApp "safety number
      * changed" banners — the user is reminded that Ed25519 identity
      * verification is not active for this session.
-     * Note: shortened from "! UNVERIFIED IDENTITY !" (23 chars = 138px, clipped)
-     * to "! UNVERIFIED IDENT!" (19 chars = 114px, fits 128px with 7px margins). */
+     * Copy: "! UNVERIFIED ID !" (17 chars = 102px, centered with 13px margins).
+     * Matches render_pairing_degraded's "UNVERIFIED ID" title terminology. */
     if (degraded) {
-        ui_draw_centered_text(0U, "! UNVERIFIED IDENT!");
+        ui_draw_centered_text(0U, "! UNVERIFIED ID !");
     }
     ui_draw_centered_text((uint8_t)(1U + banner_shift), "SECURE CHAT");
     draw_hline(0U, (uint8_t)(11U + banner_shift), 128U);
@@ -2928,9 +2928,9 @@ static CeePewErr_t render_chat_menu(void)
     bool degraded = session_is_identity_degraded();
     uint8_t banner_shift = degraded ? 8U : 0U;
 
-    /* Identity-degraded banner (shortened to fit 128px: 19 chars = 114px) */
+    /* Identity-degraded banner: "! UNVERIFIED ID !" (17 chars = 102px, fits 128px) */
     if (degraded) {
-        ui_draw_centered_text(0U, "! UNVERIFIED IDENT!");
+        ui_draw_centered_text(0U, "! UNVERIFIED ID !");
     }
 
     /* Title */
