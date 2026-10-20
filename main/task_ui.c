@@ -16,6 +16,7 @@
 #include "task_ui.h"
 #include "task_session.h"
 #include "session_memory.h"
+#include "session_msgstore.h"
 #include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -79,14 +80,12 @@ static CeePewErr_t ui_handle_events(void)
 
         case UI_EVENT_MESSAGE_RECEIVED:
             ESP_LOGI("UI", "Message received");
-            /* Increment unread message counter for the inverted banner notification.
+            /* Sync unread counter dynamically with actual store count.
              * The banner shows "[!N]" when new messages arrive while not in the
-             * chat detail view. Cap at 9 to match render_new_msg_banner logic. */
-            if (g_ui_ctx.new_msg_count < 9U) {
-                g_ui_ctx.new_msg_count++;
-                if (g_ui_ctx.new_msg_first_ts_ms == 0U) {
-                    g_ui_ctx.new_msg_first_ts_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-                }
+             * chat detail view. No artificial cap — displays actual count up to 99+. */
+            g_ui_ctx.new_msg_count = msg_store_unread_count();
+            if (g_ui_ctx.new_msg_first_ts_ms == 0U && g_ui_ctx.new_msg_count > 0U) {
+                g_ui_ctx.new_msg_first_ts_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
             }
             /* If we're in chat, no extra action needed; ui_manager polls msg_store */
             break;

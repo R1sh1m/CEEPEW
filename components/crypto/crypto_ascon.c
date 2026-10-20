@@ -104,6 +104,7 @@ CeePewErr_t crypto_ascon_aead_encrypt(const uint8_t key[16], const uint8_t nonce
         ascon_pad(block, (uint16_t)(ad_len - off));
         for (uint16_t i = 0U; i < (uint16_t)(ad_len - off); i++) { block[i] = ad[off + i]; }
         s[0] ^= load64_be(block);
+        ascon_p(s, 6U);
         s[4] ^= 1U;
     }
     else { s[4] ^= 1U; }
@@ -166,6 +167,7 @@ CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16], const uint8_t nonce
         ascon_pad(block, (uint16_t)(ad_len - off));
         for (uint16_t i = 0U; i < (uint16_t)(ad_len - off); i++) { block[i] = ad[off + i]; }
         s[0] ^= load64_be(block);
+        ascon_p(s, 6U);
         s[4] ^= 1U;
     }
     else { s[4] ^= 1U; }

@@ -9,6 +9,7 @@ idf_component_register(
         "hal_input.c"
         "hal_input_additions.c"
         "hal_radio.c"
+        "bench_timing.c"
         "hal_rgb.c"
         "hal_rng.c"
         "hal_temp.c"

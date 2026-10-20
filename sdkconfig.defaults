@@ -34,7 +34,8 @@ CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 
 # On-node promiscuous OTA capture (Phase 3 debug aid, default off).
 # When enabled, the session task starts transport_capture after BLE teardown.
-CONFIG_CEEPEW_CAPTURE=n
+CONFIG_CEEPEW_CAPTURE=y
+CONFIG_CEEPEW_CAPTURE_MODE_CEEPEW=y
 
 # Crypto hot-path: -O2 (PERF) instead of the default -Og (DEBUG).
 # TweetNaCl X25519/Ed25519 use 64-bit limbs on the 32-bit Xtensa LX6, so

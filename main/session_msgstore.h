@@ -73,8 +73,8 @@ CeePewErr_t msg_store_check_nonce_exhaustion(uint64_t nonce_counter);
 /* Get current message count */
 uint8_t msg_store_count(void);
 
-/* Get number of unread messages (dir == 0 && read == false) */
-uint8_t msg_store_unread_count(void);
+/* Get number of unread messages (dir == 0 && read == false). Returns up to 255. */
+uint16_t msg_store_unread_count(void);
 
 /* Mark a message at index as read. Returns CEEPEW_OK or CEEPEW_ERR_BOUNDS if index invalid. */
 CeePewErr_t msg_store_mark_read(uint8_t index);

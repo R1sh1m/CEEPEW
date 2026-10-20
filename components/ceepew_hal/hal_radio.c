@@ -28,6 +28,7 @@
 
 #include "hal_radio.h"
 #include "ceepew_config.h"
+#include "bench_timing.h"
 #include "ceepew_assert.h"
 #include "ceepew_security_utils.h"
 #include "../transport/transport_hop.h"
@@ -170,6 +171,11 @@ static hal_radio_send_status_cb_t s_send_status_cb = NULL;
 static void radio_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_status_t status){
     CEEPEW_ASSERT_VOID(tx_info != NULL);
 
+#if CONFIG_CEEPEW_BENCH_TIMING
+    /* Record send callback timestamp for E5 timing instrumentation */
+    bench_timing_record_send_cb(0);  /* seq=0: match most recent TX record */
+#endif
+
     #ifdef CEEPEW_DEBUG_SERIAL
     if (status == ESP_NOW_SEND_SUCCESS) {
         ESP_LOGI(TAG, "espnow_send_cb: OK -> %02X:%02X:%02X:%02X:%02X:%02X",
@@ -232,6 +238,11 @@ CeePewErr_t hal_radio_set_send_status_cb(hal_radio_send_status_cb_t cb){
 static void __attribute__((noinline, used)) radio_recv_cb(const esp_now_recv_info_t *esp_now_info, const uint8_t *data, int data_len){
     CEEPEW_ASSERT_VOID(esp_now_info != NULL);
     CEEPEW_ASSERT_VOID(esp_now_info->src_addr != NULL && data != NULL);
+
+#if CONFIG_CEEPEW_BENCH_TIMING
+    /* Record RX callback entry timestamp (E5 instrumentation) */
+    /* Edge timestamp already captured by GPIO ISR */
+#endif
 
     #ifdef CEEPEW_DEBUG_SERIAL
     ESP_LOGI("RADIO-RX", "frame from %02X:%02X:%02X:%02X:%02X:%02X len=%d data[0]=0x%02x",
@@ -746,6 +757,10 @@ CeePewErr_t hal_radio_send(const uint8_t *buf, uint16_t len){
     /* Serialise against concurrent hal_radio_send from the other core
      * (e.g. message send on Core 0 vs PFS retry on Core 1).  The
      * spinlock is held only for the esp_now_send call itself. */
+#if CONFIG_CEEPEW_BENCH_TIMING
+    /* Assert sync pulse right before radio send (E5 instrumentation) */
+    (void)bench_timing_pulse();
+#endif
     taskENTER_CRITICAL(&s_radio_send_mux);
     esp_err_t rc = esp_now_send(peer_mac, buf, (size_t)len);
     taskEXIT_CRITICAL(&s_radio_send_mux);

@@ -188,10 +188,10 @@ uint32_t session_get_last_wipe_ms(void)
     return wipe_s * 1000U;
 }
 
-uint8_t msg_store_unread_count(void)
+uint16_t msg_store_unread_count(void)
 {
     portENTER_CRITICAL(&s_msg_store_mux);
-    uint8_t count = 0U;
+    uint16_t count = 0U;
     for (uint8_t i = 0U; i < g_msg_store.count; i++) {
         uint8_t msg_idx = (g_msg_store.head + i) % CEEPEW_MAX_MESSAGES;
         const StoredMsg_t *msg = &g_msg_store.messages[msg_idx];

@@ -73,3 +73,17 @@ CeePewErr_t crypto_hmac_sha256(const uint8_t *key, uint16_t key_len,
 
     return CEEPEW_OK;
 }
+
+CeePewErr_t crypto_hmac_sha256_trunc(const uint8_t *key, uint16_t key_len,
+                                     const uint8_t *msg, uint32_t msg_len,
+                                     uint8_t *out, uint16_t out_len)
+{
+    CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(out_len > 0U && out_len <= 32U, CEEPEW_ERR_PARAM);
+    uint8_t full[32U];
+    CeePewErr_t err = crypto_hmac_sha256(key, key_len, msg, msg_len, full);
+    if (err != CEEPEW_OK) { return err; }
+    memcpy(out, full, out_len);
+    ceepew_secure_zero(full, sizeof(full));
+    return CEEPEW_OK;
+}

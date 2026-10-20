@@ -1,0 +1,87 @@
+==============================================================================
+MODE REPORT - ccmp
+==============================================================================
+pcap                    : data\raw\E1_B_ccmp_20261017\DEVICE_B.pcap
+frames analysed         : 1237
+HW-ACK markers excluded : 3
+ESP-NOW payload offset  : [28, 36]
+payload bytes pooled    : 1786
+
+Frame-length histogram (incl. any FCS the driver left in):
+     41 B :    1  #
+     42 B :    1  #
+     45 B :    1  #
+     48 B :    1  #
+     53 B :    1  #
+     60 B :    1  #
+     62 B :    1  #
+     70 B :    1  #
+     71 B :    1  #
+     76 B :    1  #
+     77 B :    1  #
+     78 B :   18  ##################
+     79 B :    1  #
+     81 B :    3  ###
+     82 B :   69  ############################################################
+     87 B :    1  #
+     94 B :    6  ######
+    105 B :    1  #
+    116 B :    1  #
+    118 B :    2  ##
+    119 B :    8  ########
+    127 B :    1  #
+    129 B :    1  #
+    137 B :    1  #
+    139 B :    1  #
+    148 B :    1  #
+    151 B :    1  #
+    162 B :    2  ##
+    164 B :    1  #
+    166 B :    1  #
+    168 B :    1  #
+    172 B :    5  #####
+    173 B :    1  #
+    174 B :    1  #
+    175 B :    1  #
+    182 B :    2  ##
+    183 B :    7  #######
+    187 B :    2  ##
+    190 B :    1  #
+    202 B :    1  #
+    205 B :    2  ##
+    207 B :    1  #
+    209 B :    6  ######
+    213 B :    1  #
+    215 B :    1  #
+    227 B :    1  #
+    229 B :   14  ##############
+    232 B :    1  #
+    233 B :    1  #
+    234 B :    1  #
+    242 B :    1  #
+    245 B :    1  #
+    246 B :    6  ######
+    247 B :    8  ########
+    252 B :    1  #
+    255 B :    1  #
+    261 B :    6  ######
+    266 B :    1  #
+    272 B :    1  #
+    273 B :    1  #
+    279 B :    1  #
+    293 B :    1  #
+    297 B :    6  ######
+    298 B :   15  ###############
+    299 B :  125  ############################################################
+    300 B :  880  ############################################################
+
+Byte entropy of pooled ESP-NOW payload : 7.5799 bits/B
+Printable-ASCII share of that payload  : 33.76% (603/1786 B)
+Retry-flagged frames                   : 549/1237
+
+Cleartext field inventory (verbatim search in ESP-NOW payload):
+  absent  bench58_A_run    pattern 'A{16,}' in 0/8 frames
+  absent  cmd_open_valve   pattern 'CMD=OPEN_VALVE_04' in 0/8 frames
+  absent  auth_admin       pattern 'AUTH=ADMIN' in 0/8 frames
+
+VERDICT: application plaintext is NOT VISIBLE on air in this mode.

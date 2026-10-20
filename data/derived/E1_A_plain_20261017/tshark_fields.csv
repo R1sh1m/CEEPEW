@@ -1,0 +1,2 @@
+frame.time_epoch,frame.len,radiotap.channel.freq,radiotap.dbm_antsignal,wlan.fc.retry,wlan.fc.type_subtype,wlan.seq
+"1792269022.047048000","118","2412","-38","False","0x000d","1"

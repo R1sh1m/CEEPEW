@@ -1,0 +1,91 @@
+{
+  "updated_utc": "2026-10-19T05:27:22+00:00",
+  "runs": [
+    {
+      "run_id": "E1_A_plain_20261018",
+      "state": "sealed",
+      "experiment": "E1",
+      "date_utc": "2026-10-18T07:34:20+00:00",
+      "capture_mode": "plain",
+      "n_planned": "80",
+      "n_completed": null,
+      "raw_file_count": 4,
+      "missing_required_fields": [],
+      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads"
+    },
+    {
+      "run_id": "E1_B_ccmp_20261017",
+      "state": "sealed",
+      "experiment": "E1",
+      "date_utc": "2026-10-18T08:21:11+00:00",
+      "capture_mode": "ccmp",
+      "n_planned": "2",
+      "n_completed": null,
+      "raw_file_count": 5,
+      "missing_required_fields": [
+        "notes"
+      ],
+      "notes": ""
+    },
+    {
+      "run_id": "E1_B_ccmp_20261018",
+      "state": "sealed",
+      "experiment": "E1",
+      "date_utc": "2026-10-18T07:34:21+00:00",
+      "capture_mode": "ccmp",
+      "n_planned": "80",
+      "n_completed": null,
+      "raw_file_count": 6,
+      "missing_required_fields": [],
+      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th)"
+    },
+    {
+      "run_id": "E1_C_ceepew_20261018",
+      "state": "sealed",
+      "experiment": "E1",
+      "date_utc": "2026-10-18T07:34:21+00:00",
+      "capture_mode": "ceepew",
+      "n_planned": "80",
+      "n_completed": null,
+      "raw_file_count": 6,
+      "missing_required_fields": [],
+      "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th), CEE-PEW full (CCMP+ESL+Ed25519)"
+    },
+    {
+      "run_id": "E2a_plain_injection_20261018",
+      "state": "sealed",
+      "experiment": "E2",
+      "date_utc": "2026-10-18T17:51:03+00:00",
+      "capture_mode": "plain",
+      "n_planned": "80",
+      "n_completed": 0,
+      "raw_file_count": 5,
+      "missing_required_fields": [],
+      "notes": "E2(a) mode-mismatch: plain ESP-NOW frames into a CEE-PEW receiver; expect ESL-stage reject on COM5, 0 frames to app layer | RESULT: 0 BENCH58 frames injected (gate never satisfied), 0 sessions, 0 app messages, 11 post-derive sync timeouts, 25 PAIRING_FAILED, 628 Discard events (DEVICE_A 616: 264 FEC length-trailer + 352 RX decrypt-pipeline; DEVICE_B 12: ESL transport header/MAC/replay check failed). See RUN_NOTES.md."
+    },
+    {
+      "run_id": "E2b_forged_rejection_20261018",
+      "state": "sealed",
+      "experiment": "E2",
+      "date_utc": "2026-10-18T17:50:43+00:00",
+      "capture_mode": "ceepew",
+      "n_planned": "80",
+      "n_completed": null,
+      "raw_file_count": 4,
+      "missing_required_fields": [],
+      "notes": "E2(b) BENCH58 built-in forge path: every 10th frame (seq 9,19,...,79) corrupts one box byte; expect Ascon-128 tag reject (err=5) on RX, 0 forged frames to app layer"
+    },
+    {
+      "run_id": "E5_sync_pulse_20261018",
+      "state": "sealed",
+      "experiment": "E5",
+      "date_utc": "2026-10-19T05:26:31+00:00",
+      "capture_mode": "ceepew",
+      "n_planned": "80",
+      "n_completed": null,
+      "raw_file_count": 6,
+      "missing_required_fields": [],
+      "notes": "E5 sync-pulse latency. Both boards pulse AND sense on shared GPIO14 (D14-D14 open-drain jumper). All intervals are SAME-CLOCK only; no cross-board subtraction is performed anywhere. BENCH58: 80 frames/board at 5s spacing. 300 BENCH_TIME records recovered (160 tx, 140 rx)."
+    }
+  ]
+}

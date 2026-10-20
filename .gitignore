@@ -1,10 +1,7 @@
 # Build directories & compilation artifacts
 build/
-build_host/
-**/build_host/
-build_host_tmp/
-**/build_host_tmp/
-**/build_fuzz/
+build*/
+**/build*/
 out/
 
 # ESP-IDF runtime configurations & keys
@@ -65,10 +62,15 @@ Research/
 logs/
 *.log
 *log*.*
+*.err
 DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
 CEEPEW_ICITIIT_HARDWARE_LOGS*.md
 drops_report.csv
+# Published test data & paper evidence (unignore data/ contents, re-ignore private scratch/tooling)
+!data/**
+data/raw/_tooling/
+data/raw/**/_tooling/
 
 # Docs — internal design documents, presentations, and paper research
 docs/
@@ -77,15 +79,21 @@ docs/
 tools/eim_config.toml
 tools/monitor_both_*.txt
 tools/*.txt
+tools/capture/*.txt
+tools/capture/*.log
+tools/_*.ps1
+tools/_*.*
 !tools/cppcheck_suppressions.txt
 tools/citation_report.md
 tools/build_technical_report.py
-tools/recompute_paper_numbers.py
 tools/capture/captures/
 *.pcap
+!data/**/*.pcap
 *review_pack*
 *REVIEW_PACK*
 
 # Local-only benchmarks
 **/*benchmark*/
 **/*benchmark*.*
+.slim/deepwork/
+

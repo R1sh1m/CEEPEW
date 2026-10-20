@@ -136,6 +136,86 @@ menu "CEE-PEW Configuration"
                 921600 baud host-side. Debug only — normal builds leave this
                 disabled (default).
 
+        choice CEEPEW_CAPTURE_LINK_MODE
+            prompt "Capture bench link mode (logger build only)"
+            depends on CEEPEW_CAPTURE
+            default CEEPEW_CAPTURE_MODE_CEEPEW
+            help
+                Selects the over-the-air link mode used by the capture bench
+                build. Both bench devices MUST be flashed with the same mode
+                (reflash per mode). Has no effect when CEEPEW_CAPTURE is
+                disabled: the choice is invisible and production behavior
+                (LMK-registered peer + ESL Ascon) is untouched.
+
+            config CEEPEW_CAPTURE_MODE_PLAIN
+                bool "Mode A: plain ESP-NOW (no CCMP, no ESL)"
+                help
+                    Register the peer WITHOUT an LMK (peer.encrypt=false) and
+                    bypass the ESL/Ascon application crypto entirely — the
+                    message payload is on air in cleartext for Wireshark
+                    inspection of the raw ESP-NOW vendor frames.
+
+            config CEEPEW_CAPTURE_MODE_CCMP
+                bool "Mode B: ESP-NOW CCMP only (industry-standard baseline)"
+                help
+                    Register the peer WITH an LMK (peer.encrypt=true) and
+                    bypass the ESL/Ascon application crypto — only the
+                    hardware CCMP layer encrypts the frame (industry-standard
+                    802.11 baseline for the capture comparison).
+
+            config CEEPEW_CAPTURE_MODE_CEEPEW
+                bool "Mode C: CEE-PEW full stack (ESL Ascon, no CCMP)"
+                help
+                    Register the peer WITHOUT an LMK (peer.encrypt=false) and
+                    keep the ESL Ascon stack ACTIVE — pure CEE-PEW over
+                    unencrypted vendor frames (matches the hal_radio.c
+                    peer-registration design comment).
+
+        endchoice
+
+        config CEEPEW_BENCH_58B
+            bool "Enable scripted 58-byte Full-stack TX campaign (bench only)"
+            default n
+            help
+                When enabled, an active headless session emits scripted
+                58-byte Full-stack frames (counter pattern) every 5 s, up to
+                80 frames, tagged [BENCH58_TX]/[BENCH58_DONE] for host-side
+                latency analysis. Used to re-measure Full-mode TX timing
+                (Table VI). Disabled in production (default).
+
+        config CEEPEW_BENCH_TIMING
+            bool "Enable sync-pulse timing instrumentation (E5)"
+            default n
+            depends on CEEPEW_BENCH_58B
+            help
+                Enable microsecond-resolution sync-pulse instrumentation for
+                one-way OTA latency measurement. Uses GPIO14 as a shared wire
+                between both boards (open-drain with pull-up). Both boards
+                transmit AND receive during BENCH58 campaigns.
+
+        config CEEPEW_PIN_SYNC
+            int "Sync pulse GPIO (shared wire, both boards)"
+            default 14
+            range 0 39
+            depends on CEEPEW_BENCH_TIMING
+            help
+                GPIO pin number for the sync pulse wire. Both boards use the
+                same pin (GPIO14 by default) connected directly together.
+                Configured as open-drain with internal pull-up.
+
+        config CEEPEW_FEC_DISABLE
+            bool "Disable Hamming(15,11) FEC (reliability ablation only)"
+            default n
+            help
+                Compile-time FEC ablation switch for the reliability study.
+                Leave DISABLED (default, production): the TX pipeline
+                Hamming-encodes each fragment before appending the inner CRC-32,
+                and the RX pipeline Hamming-decodes (single-bit correction)
+                after the CRC check. Enable to compile FEC OUT: frames then carry
+                the payload + inner CRC-32 only (smaller on air, no error
+                correction). BOTH devices MUST be flashed with the same setting,
+                since the wire framing differs.
+
     endmenu
 
 endmenu

@@ -209,6 +209,15 @@ target_link_libraries(test_ui_navigator PRIVATE ceepew_portable)
 target_include_directories(test_ui_navigator PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_ui_navigator COMMAND test_ui_navigator)
 
+# test_pfs_auth — PFS handshake authentication (HKDF + HMAC-SHA256 trunc)
+add_executable(test_pfs_auth
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pfs_auth.c
+)
+target_link_libraries(test_pfs_auth PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_pfs_auth PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_pfs_auth PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_pfs_auth COMMAND test_pfs_auth)
+
 # ── Fuzz smoke targets ──────────────────────────────────────────────
 # Each harness exports LLVMFuzzerTestOneInput(). fuzz_driver.c provides
 # a deterministic main() that replays the seed corpus plus a PRNG

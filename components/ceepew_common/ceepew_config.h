@@ -40,6 +40,7 @@
 #define CEEPEW_CURVE25519_SK_BYTES       32U
 #define CEEPEW_DEVICE_ID_BYTES           6U     /* MAC address                */
 #define CEEPEW_DEVICE_SIG_BYTES          32U    /* HMAC-SHA256 device sig     */
+#define CEEPEW_PFS_MAC_BYTES             16U    /* truncated HMAC-SHA256 tag authenticating the PFS handshake */
 #define CEEPEW_SESSION_CODE_MIN_LEN      8U
 
 /* Commitment sizes */
@@ -126,7 +127,7 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_SESSION_GRACE_S           30U
 #define CEEPEW_SESSION_TTL_S             3600U
 #define CEEPEW_MSG_TTL_S                 600U   /* 10-minute auto-wipe        */
-#define CEEPEW_MAX_MESSAGES              20U
+#define CEEPEW_MAX_MESSAGES              21U
 #define CEEPEW_PAIRING_TIMEOUT_S         45U
 #define CEEPEW_T_ROUND_S                 8U     /* Phase 2 commitment window  */
 #define CEEPEW_PAIRING_COUNTDOWN_MS      CEEPEW_CONFIRM_VERIFY_TIMEOUT_MS /* UI countdown bar total (ms) */
@@ -138,6 +139,9 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_MESSAGE_TTL_DIAG_S        300U   /* Phase 4: 5 min in DIAG mode */
 #define CEEPEW_KEEPALIVE_INTERVAL_S     15U    /* Active chat ping interval (15s) */
 #define CEEPEW_ACTIVE_SILENT_TIMEOUT_S   600U   /* Phase 4: Return to discovery after 10 min of silence in ACTIVE chat */
+#define CEEPEW_BENCH_58B_LEN             58U    /* Bench campaign payload (matches Table VI 58 B chunk) */
+#define CEEPEW_BENCH_58B_COUNT           80U    /* Bench campaign frame budget */
+#define CEEPEW_BENCH_58B_INTERVAL_MS     5000U  /* Bench campaign TX cadence (one hop epoch) */
 
 /* -------------------------------------------------------------------------- */
 /* Input / UI                                                                  */
@@ -231,6 +235,19 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_HAMMING_DATA_BITS         11U
 #define CEEPEW_HAMMING_CODE_BITS         15U
 
+/* Compile-time FEC toggle for the reliability ablation. The Kconfig switch is a
+ * NEGATIVE bool (CEEPEW_FEC_DISABLE, default n), so the production default is
+ * FEC ON even if a stale sdkconfig lacks the symbol. When the ablation build
+ * selects it, FEC is compiled out: the TX pipeline appends the inner CRC-32
+ * directly to the payload (no Hamming encode) and the RX pipeline verifies the
+ * CRC and passes the payload through (no Hamming decode). TX and RX MUST be
+ * built with the same setting. */
+#if defined(CONFIG_CEEPEW_FEC_DISABLE) && CONFIG_CEEPEW_FEC_DISABLE
+#define CEEPEW_FEC_ENABLED               0
+#else
+#define CEEPEW_FEC_ENABLED               1
+#endif
+
 /* -------------------------------------------------------------------------- */
 /* FreeRTOS                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -310,7 +327,11 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 /* SECURITY: Even when CEEPEW_DEBUG_SERIAL is defined, the following are      */
 /* NEVER printed: key material, plaintext content, peer MAC during pairing.   */
 /* -------------------------------------------------------------------------- */
-#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+/* Dev mode OR capture bench mode may run headless/auto-advance. Capture
+ * bench builds (CONFIG_CEEPEW_CAPTURE=y, compile-gated, never shipped) need
+ * unattended pairing and operational logging but must NOT pull the tests/
+ * suite (DRAM budget); DEV mode remains the only gate for the test suite. */
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE || (defined(CONFIG_CEEPEW_CAPTURE) && CONFIG_CEEPEW_CAPTURE)
 #define CEEPEW_DEBUG_SERIAL
 #define CEEPEW_HEADLESS_MODE 1
 #endif
@@ -345,6 +366,44 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
  *   [0] = major, [1] = minor, [2] = patch,
  *   [3..6] = first 4 bytes of git hash (truncated) */
 #define CEEPEW_VERSION_ADV_BYTES         7U
+
+/* -------------------------------------------------------------------------- */
+/* Capture bench link-mode helpers (main/Kconfig.projbuild choice              */
+/* CEEPEW_CAPTURE_LINK_MODE, depends on CEEPEW_CAPTURE).                       */
+/*                                                                             */
+/* All helpers evaluate to 0 when CONFIG_CEEPEW_CAPTURE is not set, so         */
+/* production behavior (LMK-registered peer + ESL Ascon) compiles in           */
+/* unchanged. Uses defined()-based checks: this project's sdkconfig.h omits    */
+/* unset booleans entirely (verified: unset CONFIG_CEEPEW_CAPTURE produces no  */
+/* define), so #ifdef/#if defined() is the correct compile-out idiom here.     */
+/* -------------------------------------------------------------------------- */
+/* Pull in sdkconfig.h when available (firmware builds expose it on the
+ * include path; host unit tests do not, and skip this safely). */
+#if defined(__has_include)
+#  if __has_include("sdkconfig.h")
+#    include "sdkconfig.h"
+#  endif
+#endif
+
+/* Modes A (PLAIN) and C (CEEPEW): peer registered WITHOUT an LMK so
+ * hal_radio leaves peer.encrypt=false (no hardware CCMP on air). */
+#if defined(CONFIG_CEEPEW_CAPTURE) && \
+    (defined(CONFIG_CEEPEW_CAPTURE_MODE_PLAIN) || defined(CONFIG_CEEPEW_CAPTURE_MODE_CEEPEW))
+#define CEEPEW_CAPTURE_PEER_NO_LMK        1
+#else
+#define CEEPEW_CAPTURE_PEER_NO_LMK        0
+#endif
+
+/* Modes A (PLAIN) and B (CCMP): ESL/Ascon application crypto bypassed on the
+ * session data path — frames leave as cleartext ESP-NOW payloads (Mode A) or
+ * hardware-CCMP-only frames (Mode B). ESL control frames (rendezvous, PFS
+ * handshake) remain ESL-wrapped in every mode. */
+#if defined(CONFIG_CEEPEW_CAPTURE) && \
+    (defined(CONFIG_CEEPEW_CAPTURE_MODE_PLAIN) || defined(CONFIG_CEEPEW_CAPTURE_MODE_CCMP))
+#define CEEPEW_CAPTURE_ESL_BYPASS         1
+#else
+#define CEEPEW_CAPTURE_ESL_BYPASS         0
+#endif
 
 /* -------------------------------------------------------------------------- */
 /* Production Configuration Validation                                       */

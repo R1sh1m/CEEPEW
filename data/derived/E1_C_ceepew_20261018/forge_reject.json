@@ -1,0 +1,274 @@
+{
+  "run_id": "E1_C_ceepew_20261018",
+  "window_seconds": 2.0,
+  "clock_used": "device",
+  "forged_tx": {
+    "total": 16,
+    "forge_armed": 16,
+    "by_device": {
+      "DEVICE_B": {
+        "count": 8,
+        "seqs": [
+          9,
+          19,
+          29,
+          39,
+          49,
+          59,
+          69,
+          79
+        ]
+      },
+      "DEVICE_A": {
+        "count": 8,
+        "seqs": [
+          9,
+          19,
+          29,
+          39,
+          49,
+          59,
+          69,
+          79
+        ]
+      }
+    }
+  },
+  "rejections": {
+    "total": 35,
+    "by_kind": {
+      "replay": 1,
+      "ascon": 1,
+      "pipeline": 17,
+      "box": 16
+    },
+    "by_device_kind": {
+      "DEVICE_A": {
+        "replay": 1,
+        "box": 8,
+        "pipeline": 8
+      },
+      "DEVICE_B": {
+        "ascon": 1,
+        "pipeline": 9,
+        "box": 8
+      }
+    }
+  },
+  "matching": {
+    "matched_count": 16,
+    "unmatched_count": 0,
+    "median_delta_us": 400000.0,
+    "max_abs_delta_us": 500000,
+    "median_delta_host_s": 0.4000000000000057
+  },
+  "unexplained_rejections": {
+    "count": 3,
+    "by_kind": {
+      "replay": 1,
+      "ascon": 1,
+      "pipeline": 1
+    }
+  },
+  "match_details": [
+    {
+      "forged_seq": 9,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 62.5,
+      "forged_device_ts_us": 62387,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.3999999999999986
+    },
+    {
+      "forged_seq": 9,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 63.8,
+      "forged_device_ts_us": 63625,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 19,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 113.0,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 19,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 114.4,
+      "forged_device_ts_us": 114236,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.3999999999999915
+    },
+    {
+      "forged_seq": 29,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 163.4,
+      "forged_device_ts_us": 163322,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 500000,
+      "delta_t_host_s": 0.5
+    },
+    {
+      "forged_seq": 29,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 165.0,
+      "forged_device_ts_us": 164866,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 39,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 213.9,
+      "forged_device_ts_us": 213780,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 39,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 215.6,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 500000,
+      "delta_t_host_s": 0.5
+    },
+    {
+      "forged_seq": 49,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 264.3,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 49,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 266.2,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000341
+    },
+    {
+      "forged_seq": 59,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 315.1,
+      "forged_device_ts_us": 314970,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 59,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 316.8,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 500000,
+      "delta_t_host_s": 0.5
+    },
+    {
+      "forged_seq": 69,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 365.8,
+      "forged_device_ts_us": 365671,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 69,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 367.4,
+      "forged_device_ts_us": 367317,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000341
+    },
+    {
+      "forged_seq": 79,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 416.5,
+      "forged_device_ts_us": 416382,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 79,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 418.1,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    }
+  ],
+  "unexplained_details": [
+    {
+      "device": "DEVICE_A",
+      "kind": "replay",
+      "err": 0,
+      "host_ts": 15.2,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "ascon",
+      "err": 5,
+      "host_ts": 18.4,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 18.4,
+      "device_ts_us": 18239
+    }
+  ]
+}

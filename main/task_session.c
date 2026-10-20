@@ -35,6 +35,7 @@
 #include "freertos/task.h"
 #include "hal_radio.h"
 #include "hal_rgb.h"
+#include "bench_timing.h"
 
 /* ARQ — declared in components/ecc/ecc_arq.c, no header file. */
 extern CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6],
@@ -47,9 +48,7 @@ extern CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len,
 #include "session_msgstore.h"
 #include "transport_ble.h"
 #include "transport_esl.h"
-#ifdef CONFIG_CEEPEW_CAPTURE
 #include "transport_capture.h"
-#endif
 #include "ui_manager.h"
 #include <stdio.h>
 #include <string.h>
@@ -91,6 +90,22 @@ CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16],
                                       uint8_t *pt, uint16_t *pt_len);
 CeePewErr_t crypto_eddsa_verify(const uint8_t pub[32], const uint8_t *msg,
                                 uint16_t msg_len, const uint8_t sig[64]);
+#if CONFIG_CEEPEW_BENCH_58B
+/* Bench-only KAT/RX-timing helpers: declared here (not via component
+ * headers) following this file's existing pattern. */
+CeePewErr_t crypto_ascon_aead_encrypt(const uint8_t key[16],
+                                      const uint8_t nonce[16],
+                                      const uint8_t *ad, uint16_t ad_len,
+                                      const uint8_t *pt, uint16_t pt_len,
+                                      uint8_t *ct, uint16_t *ct_len);
+CeePewErr_t crypto_ecdh_shared_secret(const uint8_t priv[32],
+                                      const uint8_t pub[32],
+                                      uint8_t ss[32]);
+CeePewErr_t crypto_eddsa_seeded_keypair(uint8_t pk[32], uint8_t sk[64],
+                                        const uint8_t seed[32]);
+CeePewErr_t crypto_eddsa_sign(const uint8_t priv[64], const uint8_t *msg,
+                              uint16_t msg_len, uint8_t sig[64]);
+#endif
 
 /* Replay check/commit split (transport_replay.c): the ESL stage admitted
  * this frame via a read-only check; the window advances here, only after
@@ -428,11 +443,16 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
 
           /* Register ARQ hop sync callbacks before starting hopping */
           (void)ecc_arq_init_hop_sync();
+#ifndef CONFIG_CEEPEW_CAPTURE
           hop_err = hal_radio_start_channel_hopping();
           if (hop_err == CEEPEW_OK) {
             ESP_LOGI(TAG, "Channel hopping started (interval=%u ms) after rendezvous sync", CEEPEW_HOP_INTERVAL_MS);
             s_hopping_started = true;
           }
+#else
+          ESP_LOGI(TAG, "Channel hopping suppressed (capture build, locked on ch %d)",
+                   CEEPEW_ESPNOW_CHANNEL);
+#endif
         }
       }
     }
@@ -1054,9 +1074,7 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     /* On-node promiscuous OTA capture (opt-in debug, default off).
      * Started AFTER BLE teardown + WiFi restart, entering ESP-NOW Phase 3.
      * Consume the logger output at 921600 baud host-side. */
-#ifdef CONFIG_CEEPEW_CAPTURE
     (void)transport_capture_start();
-#endif
 
     /* Quick broadcast probe to verify ESP-NOW RX is live after BLE teardown */
     {
@@ -1107,13 +1125,23 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     }
 
     /* Derive ESP-NOW Local Master Key (LMK) for this peer.
-     * LMK is derived from session key + peer WiFi MAC. */
+     * LMK is derived from session key + peer WiFi MAC.
+     * Capture bench Modes A/C (CEEPEW_CAPTURE_PEER_NO_LMK): skip LMK
+     * derivation entirely and register the peer with lmk=NULL so hal_radio
+     * leaves peer.encrypt=false (no hardware CCMP; ESL layer handles
+     * encryption above ESP-NOW). No key material is derived, so no
+     * secure-zero is needed. Mode B (CCMP) and production builds derive
+     * and register the LMK exactly as before. */
+#if CEEPEW_CAPTURE_PEER_NO_LMK
+    uint8_t *lmk = NULL;
+#else
     uint8_t lmk[16];
     peer_err = crypto_espnow_derive_lmk(peer_mac, lmk);
     if (peer_err != CEEPEW_OK) {
         ESP_LOGE(TAG, "Failed to derive ESP-NOW LMK: %d", (int)peer_err);
         return peer_err;
     }
+#endif
 
     /* Retry peer registration with verification — ESP-NOW peer add can
      * fail transiently due to WiFi/BLE coexistence or timing.
@@ -1141,7 +1169,9 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
             vTaskDelay(pdMS_TO_TICKS(peer_retry_delays_ms[attempt]));
         }
     }
+#if !CEEPEW_CAPTURE_PEER_NO_LMK
     ceepew_secure_zero(lmk, sizeof(lmk));
+#endif
     if (peer_err != CEEPEW_OK) {
         ESP_LOGE(TAG, "ESP-NOW peer registration failed after 3 attempts");
         return peer_err;
@@ -1163,11 +1193,13 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
         CeePewErr_t pfs_err = session_pfs_initiate();
         if (pfs_err == CEEPEW_OK) {
             uint8_t local_pfs_pubkey[32U];
-            if (session_get_local_pfs_pubkey(local_pfs_pubkey) == CEEPEW_OK) {
+            uint8_t pfs_auth_key[32U] = {0};
+            if (session_get_local_pfs_pubkey(local_pfs_pubkey) == CEEPEW_OK &&
+                session_pfs_auth_key(pfs_auth_key) == CEEPEW_OK) {
                 uint8_t pfs_frame[CEEPEW_PACKET_MAX_BYTES];
                 uint16_t pfs_len = 0U;
                 if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len, sizeof(pfs_frame),
-                                                      local_pfs_pubkey, true) == CEEPEW_OK) {
+                                                      local_pfs_pubkey, true, pfs_auth_key) == CEEPEW_OK) {
                     CeePewErr_t arq_ret = ecc_arq_send(peer_mac, pfs_frame, pfs_len);
                     if (arq_ret == CEEPEW_OK) {
                         ESP_LOGI(TAG, "Sent PFS_INIT to peer: %02X:%02X:%02X:%02X:%02X:%02X",
@@ -1178,6 +1210,7 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
                     }
                 }
             }
+            ceepew_secure_zero(pfs_auth_key, sizeof(pfs_auth_key));
         } else {
             ESP_LOGW(TAG, "PFS initiate failed: %d", (int)pfs_err);
         }
@@ -1735,6 +1768,26 @@ static CeePewErr_t stage_rx_crc_fec(Region_t *region, const uint8_t *in,
     CEEPEW_ASSERT(region != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(out != NULL && out_len != NULL, CEEPEW_ERR_NULL_PTR);
 
+#if CEEPEW_CAPTURE_ESL_BYPASS
+    /* Capture bench Modes A/B: the trailer is [exact pre-FEC length : 2 B LE]
+     * [CRC-32 : 4 B], and the CRC covers the FEC data plus the length field.
+     * See stage_tx_frame_fec() in session_send.c — the Hamming codec cannot
+     * round-trip an arbitrary length, so the length is carried explicitly and
+     * the decoded output is trimmed back to it below. */
+    if (in_len < 6U) { return CEEPEW_ERR_PARAM; }
+
+    uint16_t exact_len = (uint16_t)((uint16_t)in[in_len - 6U] |
+                                    ((uint16_t)in[in_len - 5U] << 8U));
+    uint32_t rx_inner_crc = 0U;
+    memcpy(&rx_inner_crc, in + in_len - 4U, 4U);
+    uint32_t calc_inner_crc = esp_crc32_le(0U, in, in_len - 4U);
+    if (rx_inner_crc != calc_inner_crc) {
+        ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Inner CRC mismatch! rx=0x%08X, calc=0x%08X",
+                 (unsigned)rx_inner_crc, (unsigned)calc_inner_crc);
+        return CEEPEW_ERR_TRANSPORT;
+    }
+    uint16_t crc_stripped_len = (uint16_t)(in_len - 6U);
+#else
     if (in_len < 4U) { return CEEPEW_ERR_PARAM; }
 
     /* Verify inner CRC at end of data */
@@ -1747,10 +1800,12 @@ static CeePewErr_t stage_rx_crc_fec(Region_t *region, const uint8_t *in,
         return CEEPEW_ERR_TRANSPORT;
     }
     uint16_t crc_stripped_len = (uint16_t)(in_len - 4U);
+#endif /* CEEPEW_CAPTURE_ESL_BYPASS */
 
-    /* Hamming decode */
+    /* Hamming decode (single-bit correction) unless the ablation disables FEC */
     uint8_t fec_local[CEEPEW_FEC_BUF_MAX];
     uint16_t fec_out_len = (uint16_t)sizeof(fec_local);
+#if CEEPEW_FEC_ENABLED
     bool corrected = false;
     CeePewErr_t err = ecc_hamming_decode(in, crc_stripped_len,
                                           fec_local, &fec_out_len, &corrected);
@@ -1765,11 +1820,41 @@ static CeePewErr_t stage_rx_crc_fec(Region_t *region, const uint8_t *in,
     }
     ESP_LOGI("SESSION", "[SECURE_CHAT_RX] CRC & FEC verified: in=%u B -> fec_out=%u B",
              (unsigned)in_len, (unsigned)fec_out_len);
+#else
+    if (crc_stripped_len > (uint16_t)sizeof(fec_local)) { return CEEPEW_ERR_BOUNDS; }
+    memcpy(fec_local, in, crc_stripped_len);
+    fec_out_len = crc_stripped_len;
+    ESP_LOGI("SESSION", "[SECURE_CHAT_RX] CRC verified (FEC off): in=%u B -> out=%u B",
+             (unsigned)in_len, (unsigned)fec_out_len);
+#endif
+
+#if CEEPEW_CAPTURE_ESL_BYPASS
+    /* Trim the Hamming codec's byte-rounding pad back to the exact pre-FEC
+     * payload length carried in the frame trailer (see stage_tx_frame_fec()).
+     * Without this the pad byte is counted as part of the fragment chunk,
+     * which corrupts the Huffman-decompressed length. */
+    if (exact_len > fec_out_len) {
+        ESP_LOGW("SESSION",
+                 "[SECURE_CHAT_RX] Discard: exact_len=%u exceeds decoded FEC len=%u",
+                 (unsigned)exact_len, (unsigned)fec_out_len);
+        return CEEPEW_ERR_BOUNDS;
+    }
+    fec_out_len = exact_len;
+#endif /* CEEPEW_CAPTURE_ESL_BYPASS */
 
     /* Validate minimum size (2-byte len prefix + 1 byte box + 64-byte sig) */
+#if CEEPEW_CAPTURE_ESL_BYPASS
+    /* Capture bench Modes A/B: frames carry the 2-byte fragment header plus
+     * the cleartext chunk — no box framing, so only the frag header is
+     * required. */
+    if (fec_out_len < CEEPEW_FRAG_HEADER_BYTES) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Decoded payload too small (%u bytes, min %u B)",
+                 (unsigned)fec_out_len, (unsigned)CEEPEW_FRAG_HEADER_BYTES);
+#else
     if (fec_out_len < 66U) {
         ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Decoded payload too small (%u bytes, min 66 B)",
                  (unsigned)fec_out_len);
+#endif
         return CEEPEW_ERR_PARAM;
     }
 
@@ -1786,7 +1871,11 @@ static CeePewErr_t stage_rx_crc_fec(Region_t *region, const uint8_t *in,
 
 /* Stage 2: decrypt — crypto_box decrypt → Ascon-128 AEAD decrypt → Ed25519 verify.
  * Output: Ascon-decrypted plaintext (region-allocated).
- * All key material is stack-local and securely zeroed. */
+ * All key material is stack-local and securely zeroed.
+ * Capture bench Modes A/B (CEEPEW_CAPTURE_ESL_BYPASS): the entire stage
+ * compiles out — frames arrive as cleartext and skip straight from the
+ * CRC/FEC stage to fragment reassembly. */
+#if !CEEPEW_CAPTURE_ESL_BYPASS
 static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
                                      uint16_t in_len, uint8_t **out,
                                      uint16_t *out_len, void *stage_ctx)
@@ -1844,10 +1933,17 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
 
     uint8_t local_ascon_ct[CRYPTO_BOX_INNER_MAX_BYTES];
     uint16_t box_decrypted_len = (uint16_t)sizeof(local_ascon_ct);
+#if CONFIG_CEEPEW_BENCH_58B
+    int64_t t_bench_box_us = esp_timer_get_time();
+#endif
     err = crypto_box_decrypt(&g_crypto_ctx, local_nonce,
                              g_crypto_ctx.peer_box_pubkey,
                              local_box_ct, box_ct_len,
                              local_ascon_ct, &box_decrypted_len);
+#if CONFIG_CEEPEW_BENCH_58B
+    ESP_LOGI(TAG, "[BENCHRX] box_us=%lu err=%d",
+             (unsigned long)(esp_timer_get_time() - t_bench_box_us), (int)err);
+#endif
     if (err != CEEPEW_OK) {
         ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: crypto_box decrypt FAILED (err=%d, len=%u)",
                  (int)err, (unsigned)box_ct_len);
@@ -1870,10 +1966,33 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
 
     uint8_t local_plain[CEEPEW_MAX_MSG_BYTES];
     uint16_t plain_len = (uint16_t)sizeof(local_plain);
-    err = crypto_ascon_aead_decrypt(local_ascon_key, ascon_nonce, NULL, 0U,
+
+    /* Fetch the 24-byte ESL header admitted by the read-only replay check and
+     * pass it as Ascon-128 AEAD associated data (mirror of stage_tx_encrypt).
+     * This binds seq/timestamp_s/flags/nonce_counter to the ciphertext: a
+     * header-tampered frame fails tag verification here and can never reach the
+     * replay commit below. */
+    uint8_t rx_hdr_ad[CEEPEW_ESL_HEADER_BYTES];
+    err = transport_esl_get_last_header(rx_hdr_ad);
+    if (err != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: ESL header retrieval failed (err=%d)", (int)err);
+        ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+        ceepew_secure_zero(local_sig, sizeof(local_sig));
+        return err;
+    }
+
+#if CONFIG_CEEPEW_BENCH_58B
+    int64_t t_bench_ascon_us = esp_timer_get_time();
+#endif
+    err = crypto_ascon_aead_decrypt(local_ascon_key, ascon_nonce,
+                                    rx_hdr_ad, CEEPEW_ESL_HEADER_BYTES,
                                     local_ascon_ct, box_decrypted_len,
                                     local_plain, &plain_len);
     ceepew_secure_zero(local_ascon_key, sizeof(local_ascon_key));
+#if CONFIG_CEEPEW_BENCH_58B
+    ESP_LOGI(TAG, "[BENCHRX] ascon_us=%lu err=%d",
+             (unsigned long)(esp_timer_get_time() - t_bench_ascon_us), (int)err);
+#endif
     if (err != CEEPEW_OK) {
         ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: Ascon-128 AEAD auth tag verification FAILED (err=%d)",
                  (int)err);
@@ -1885,13 +2004,48 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
     ESP_LOGD("SESSION", "[SECURE_CHAT_RX] Ascon-128 AEAD decrypt & auth VERIFIED OK (plain_len=%u B, nonce=%llu)",
              (unsigned)plain_len, (unsigned long long)rx_nonce_counter);
 
-    /* Replay commit — WireGuard model. The ESL stage ran a READ-ONLY replay
-     * check pre-decrypt; the window advances only now that the Ascon-128
-     * tag has verified, so forged frames cannot shift last_seq/bitmap.
-     * commit() takes/releases the window spinlock internally — it is never
-     * held across crypto. It re-checks under the lock: a duplicate that
-     * passed check concurrently (dup-then-confirm) fails here and the
-     * frame is discarded. */
+    /* Ed25519 signature verification (skipped in identity-degraded mode) */
+    if (!session_is_identity_degraded()) {
+        uint8_t local_sign_pk[32U];
+        err = session_get_peer_public_key(local_sign_pk);
+        if (err != CEEPEW_OK) {
+            ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: peer sign_pk retrieval failed (err=%d)", (int)err);
+            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+            ceepew_secure_zero(local_sig, sizeof(local_sig));
+            return err;
+        }
+
+#if CONFIG_CEEPEW_BENCH_58B
+        int64_t t_bench_ed_us = esp_timer_get_time();
+#endif
+        err = crypto_eddsa_verify(local_sign_pk, local_box_ct,
+                                  box_ct_orig_len, local_sig);
+        ceepew_secure_zero(local_sign_pk, sizeof(local_sign_pk));
+#if CONFIG_CEEPEW_BENCH_58B
+        ESP_LOGI(TAG, "[BENCHRX] edverify_us=%lu err=%d",
+                 (unsigned long)(esp_timer_get_time() - t_bench_ed_us), (int)err);
+#endif
+        if (err != CEEPEW_OK) {
+            ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: Ed25519 signature verification FAILED (err=%d)", (int)err);
+            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+            ceepew_secure_zero(local_sig, sizeof(local_sig));
+            return err;
+        }
+        ESP_LOGD("SESSION", "[SECURE_CHAT_RX] Ed25519 signature VERIFIED OK");
+    } else {
+        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Ed25519 signature verification SKIPPED (identity-degraded mode active)");
+    }
+
+    /* Replay commit — WireGuard model, after ALL authentication checks. The ESL
+     * stage ran a READ-ONLY replay check pre-decrypt; the window advances only
+     * now that the Ascon-128 tag (which binds the 24-byte ESL header as
+     * associated data) AND the Ed25519 signature have verified, so a frame
+     * failing any authentication check never consumes a bitmap slot. In
+     * identity-degraded mode Ed25519 is skipped and the AD-bound Ascon tag is
+     * the gate. commit() takes/releases the window spinlock internally — it is
+     * never held across crypto. It re-checks under the lock: a duplicate that
+     * passed check concurrently (dup-then-confirm) fails here and the frame is
+     * discarded. */
     {
         uint64_t rx_seq = 0ULL;
         CeePewErr_t seq_err = transport_esl_get_last_seq(&rx_seq);
@@ -1905,6 +2059,10 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
             return (seq_err != CEEPEW_OK) ? seq_err : CEEPEW_ERR_TRANSPORT;
         }
         CeePewErr_t commit_err = transport_replay_commit(rx_seq);
+#if CONFIG_CEEPEW_BENCH_58B
+        ESP_LOGI(TAG, "[BENCHRX] commit seq=%llu err=%d",
+                 (unsigned long long)rx_seq, (int)commit_err);
+#endif
         if (commit_err != CEEPEW_OK) {
             ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: replay commit rejected seq=%llu (err=%d)",
                      (unsigned long long)rx_seq, (int)commit_err);
@@ -1914,31 +2072,6 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
             ceepew_secure_zero(local_ascon_ct, sizeof(local_ascon_ct));
             return commit_err;
         }
-    }
-
-    /* Ed25519 signature verification (skipped in identity-degraded mode) */
-    if (!session_is_identity_degraded()) {
-        uint8_t local_sign_pk[32U];
-        err = session_get_peer_public_key(local_sign_pk);
-        if (err != CEEPEW_OK) {
-            ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: peer sign_pk retrieval failed (err=%d)", (int)err);
-            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
-            ceepew_secure_zero(local_sig, sizeof(local_sig));
-            return err;
-        }
-
-        err = crypto_eddsa_verify(local_sign_pk, local_box_ct,
-                                  box_ct_orig_len, local_sig);
-        ceepew_secure_zero(local_sign_pk, sizeof(local_sign_pk));
-        if (err != CEEPEW_OK) {
-            ESP_LOGE("SESSION", "[SECURE_CHAT_RX] Discard: Ed25519 signature verification FAILED (err=%d)", (int)err);
-            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
-            ceepew_secure_zero(local_sig, sizeof(local_sig));
-            return err;
-        }
-        ESP_LOGD("SESSION", "[SECURE_CHAT_RX] Ed25519 signature VERIFIED OK");
-    } else {
-        ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Ed25519 signature verification SKIPPED (identity-degraded mode active)");
     }
 
     ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
@@ -1957,6 +2090,7 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
     *out_len = plain_len;
     return CEEPEW_OK;
 }
+#endif /* !CEEPEW_CAPTURE_ESL_BYPASS */
 
 /* Stage 3: decompress — Huffman decompress the Ascon-decrypted plaintext.
  * Output: final decompressed plaintext (region-allocated). */
@@ -2008,8 +2142,10 @@ static CeePewErr_t rxd_build_pipeline(void)
     err = pipeline_add_stage(&s_rx_decrypt_pipeline, stage_rx_crc_fec, NULL);
     if (err != CEEPEW_OK) { return err; }
 
+#if !CEEPEW_CAPTURE_ESL_BYPASS
     err = pipeline_add_stage(&s_rx_decrypt_pipeline, stage_rx_decrypt, NULL);
     if (err != CEEPEW_OK) { return err; }
+#endif
 
     s_rx_decrypt_pipeline_built = true;
 
@@ -2045,6 +2181,14 @@ static CeePewErr_t rxd_build_pipeline(void)
  *   CEEPEW_ERR_BOUNDS — Frame length is zero
  */
 static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
+#if CONFIG_CEEPEW_BENCH_TIMING && CONFIG_CEEPEW_BENCH_58B
+  /* E5 instrumentation state. Declared at FUNCTION scope, deliberately not in
+   * the ARQ block below: the RX-callback hook and the frame-accept hook sit in
+   * different block scopes, so a block-local declaration is not visible at the
+   * accept site (this was a compile error). */
+  static uint32_t s_bench_rx_seq = 0;
+  static uint64_t s_bench_rx_cb_us = 0;
+#endif
   CEEPEW_ASSERT(frame != NULL, CEEPEW_ERR_NULL_PTR);
   CEEPEW_ASSERT(frame->payload_len > 0U &&
                     frame->payload_len <= CEEPEW_PACKET_MAX_BYTES,
@@ -2099,12 +2243,38 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
       goto rx_cleanup;
     }
     work_len = arq_dec_len;
+    
+#if CONFIG_CEEPEW_BENCH_TIMING && CONFIG_CEEPEW_BENCH_58B
+    /* Extract sequence number for bench timing (BENCH58 frames have seq as first payload byte) */
+    if (work_len > 0) {
+      s_bench_rx_seq = (uint32_t)local_work_frame[0];
+      s_bench_rx_cb_us = (uint64_t)esp_timer_get_time();
+      bench_timing_record_rx_cb(s_bench_rx_seq, s_bench_rx_cb_us);
+    }
+#endif
   }
 
   uint32_t rx_queue_depth = 0U;
   if (g_session_rx_queue != NULL) {
     rx_queue_depth = (uint32_t)uxQueueMessagesWaiting(g_session_rx_queue);
   }
+#if CEEPEW_CAPTURE_ESL_BYPASS
+  /* Capture bench Modes A/B: session DATA frames carry no ESL header (ESL
+   * wrap bypassed in the TX pipeline), so an ESL failure here simply means a
+   * raw cleartext data frame. The 1-byte ARQ sequence prefix was already
+   * stripped above, so on failure we must fall through with the ARQ-decoded
+   * frame UNCHANGED. Do NOT restore from frame->payload: that still carries
+   * the ARQ prefix and would shift the buffer by one byte, so the inner
+   * CRC-32 checked by stage_rx_crc_fec could never match (this broke the
+   * entire ESP-NOW data path — every DATA frame failed with an inner CRC
+   * mismatch). The ESL ingress pipeline cannot mutate the buffer on a
+   * failure path: the length guard returns before any stage runs and the
+   * only stage that memmoves data (strip) runs last and never fails.
+   * ESL-wrapped CONTROL frames (rendezvous, PFS handshake) still parse via
+   * the success path below. */
+  (void)transport_esl_process_incoming(local_work_frame, &work_len,
+                                       frame->src_mac, rx_queue_depth);
+#else
   err = transport_esl_process_incoming(local_work_frame, &work_len,
                                        frame->src_mac, rx_queue_depth);
   if (err != CEEPEW_OK) {
@@ -2112,20 +2282,29 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
              (int)err, (unsigned)frame->payload_len);
     goto rx_cleanup;
   }
+#endif
 
   /* Check if it is a PFS handshake message (unencrypted control frame wrapped in ESL).
-   * CRITICAL: gate on EXACT payload length (1 type byte + 32-byte PFS pubkey = 33 B),
-   * NOT just msg type. A session DATA frame carries its 2-byte LE box_ct_len as the
-   * first payload byte; when that length's low nibble equals 0x01 or 0x02 (e.g. a 65- or
-   * 66-byte ciphertext → 0x41/0x42), a type-only check would misclassify the encrypted
-   * chat frame as a PFS handshake and swallow it — breaking one-directional chat. */
-  if (work_len == (uint16_t)(1U + 32U)) {
+   * CRITICAL: gate on EXACT payload length (1 type byte + 32-byte PFS pubkey + 16-byte
+   * HMAC tag = 49 B), NOT just msg type. A session DATA frame carries its 2-byte LE
+   * box_ct_len as the first payload byte; when that length's low nibble equals 0x01 or
+   * 0x02, a type-only check would misclassify the encrypted chat frame as a PFS handshake
+   * and swallow it — breaking one-directional chat. The frame is authenticated by a
+   * truncated HMAC-SHA256 tag keyed from the established session secret, so a forged
+   * re-key frame is rejected here before any key material is touched. */
+  if (work_len == (uint16_t)(1U + 32U + CEEPEW_PFS_MAC_BYTES)) {
     uint8_t msg_type = local_work_frame[0] & CEEPEW_ESL_MSG_TYPE_MASK;
     if (msg_type == CEEPEW_ESL_MSG_TYPE_PFS_INIT || msg_type == CEEPEW_ESL_MSG_TYPE_PFS_RESP) {
       ESP_LOGI("SESSION", "[PFS_RX] PFS handshake frame received (type=0x%02X)", msg_type);
-      uint8_t peer_pfs_pubkey[32U];
+      uint8_t pfs_auth_key[32U] = {0};
+      uint8_t peer_pfs_pubkey[32U] = {0};
+      if (session_pfs_auth_key(pfs_auth_key) != CEEPEW_OK) {
+        ESP_LOGW("SESSION", "[PFS_RX] auth-key derivation failed; discarding PFS frame");
+        goto rx_cleanup;
+      }
       CeePewErr_t pfs_err = transport_esl_process_pfs_handshake(local_work_frame, work_len,
-                                                                frame->src_mac, peer_pfs_pubkey);
+                                                                frame->src_mac, pfs_auth_key,
+                                                                peer_pfs_pubkey);
       if (pfs_err == CEEPEW_OK) {
         CeePewErr_t derive_err = session_pfs_process_peer_key(peer_pfs_pubkey);
         if (derive_err == CEEPEW_OK) {
@@ -2136,7 +2315,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
               uint8_t pfs_frame[CEEPEW_PACKET_MAX_BYTES];
               uint16_t pfs_len = 0U;
               if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len, sizeof(pfs_frame),
-                                                    local_pfs_pubkey, false) == CEEPEW_OK) {
+                                                    local_pfs_pubkey, false, pfs_auth_key) == CEEPEW_OK) {
                 (void)ecc_arq_send(frame->src_mac, pfs_frame, pfs_len);
                 ESP_LOGI("SESSION", "[PFS_TX] Sent PFS_RESP to peer: %02X:%02X:%02X:%02X:%02X:%02X",
                          frame->src_mac[0], frame->src_mac[1], frame->src_mac[2],
@@ -2145,8 +2324,11 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
             }
           }
         }
-        ceepew_secure_zero(peer_pfs_pubkey, sizeof(peer_pfs_pubkey));
+      } else {
+        ESP_LOGW("SESSION", "[PFS_RX] PFS handshake rejected (err=%d)", (int)pfs_err);
       }
+      ceepew_secure_zero(peer_pfs_pubkey, sizeof(peer_pfs_pubkey));
+      ceepew_secure_zero(pfs_auth_key, sizeof(pfs_auth_key));
       goto rx_cleanup;
     }
   }
@@ -2377,6 +2559,10 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
                (int)err, (unsigned)decoded_len);
       goto rx_cleanup;
     }
+#if CONFIG_CEEPEW_BENCH_TIMING && CONFIG_CEEPEW_BENCH_58B
+    /* Record frame accept timestamp (E5 instrumentation) */
+    bench_timing_note_accept(s_bench_rx_seq);
+#endif
     /* Trigger RX LED blink (blue blink for 250 ms) */
     task_session_trigger_rgb_blink(RGB_BLUE_BLINK, 250U);
 
@@ -2414,6 +2600,74 @@ rx_cleanup:
 }
 
 /* -------------------------------------------------------------------------- */
+#if CONFIG_CEEPEW_BENCH_58B
+/* Minimal boot KAT (bench builds only): Ascon-128 reference vector,
+ * X25519 RFC7748 TV-1, Ed25519 RFC8032 TEST 1 (empty message).
+ * Expected outputs independently verified (designers reference
+ * implementation + libsodium cross-check). Stack buffers only. */
+static const uint8_t s_benchkat_ascon_key[16] = {{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}};
+static const uint8_t s_benchkat_ascon_nonce[16] = {{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}};
+static const uint8_t s_benchkat_ascon_ad[4] = {{0x00, 0x01, 0x02, 0x03}};
+static const uint8_t s_benchkat_ascon_pt[8] = {{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}};
+static const uint8_t s_benchkat_ascon_exp[24] = {{0x77, 0x63, 0xf8, 0xba, 0x6c, 0xe9, 0x1e, 0xd1, 0xc2, 0xe6, 0xd6, 0xfa, 0x23, 0x09, 0xef, 0x26, 0xd1, 0xe6, 0xdf, 0x20, 0xfa, 0xeb, 0x33, 0xa6}};
+static const uint8_t s_benchkat_x_priv[32] = {{0xa5, 0x46, 0xe3, 0x6b, 0xf0, 0x52, 0x7c, 0x9d, 0x3b, 0x16, 0x15, 0x4b, 0x82, 0x46, 0x5e, 0xdd, 0x62, 0x14, 0x4c, 0x0a, 0xc1, 0xfc, 0x5a, 0x18, 0x50, 0x6a, 0x22, 0x44, 0xba, 0x44, 0x9a, 0xc4}};
+static const uint8_t s_benchkat_x_pub[32] = {{0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb, 0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c, 0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b, 0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c}};
+static const uint8_t s_benchkat_x_exp[32] = {{0xc3, 0xda, 0x55, 0x37, 0x9d, 0xe9, 0xc6, 0x90, 0x8e, 0x94, 0xea, 0x4d, 0xf2, 0x8d, 0x08, 0x4f, 0x32, 0xec, 0xcf, 0x03, 0x49, 0x1c, 0x71, 0xf7, 0x54, 0xb4, 0x07, 0x55, 0x77, 0xa2, 0x85, 0x52}};
+static const uint8_t s_benchkat_ed_seed[32] = {{0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60}};
+static const uint8_t s_benchkat_ed_pub[32] = {{0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a}};
+static const uint8_t s_benchkat_ed_sig[64] = {{0xe5, 0x56, 0x43, 0x00, 0xc3, 0x60, 0xac, 0x72, 0x90, 0x86, 0xe2, 0xcc, 0x80, 0x6e, 0x82, 0x8a, 0x84, 0x87, 0x7f, 0x1e, 0xb8, 0xe5, 0xd9, 0x74, 0xd8, 0x73, 0xe0, 0x65, 0x22, 0x49, 0x01, 0x55, 0x5f, 0xb8, 0x82, 0x15, 0x90, 0xa3, 0x3b, 0xac, 0xc6, 0x1e, 0x39, 0x70, 0x1c, 0xf9, 0xb4, 0x6b, 0xd2, 0x5b, 0xf5, 0xf0, 0x59, 0x5b, 0xbe, 0x24, 0x65, 0x51, 0x41, 0x43, 0x8e, 0x7a, 0x10, 0x0b}};
+/* Minimal boot KAT (bench builds only). Runs once on the session task.
+ * Checks Ascon-128 reference vector, X25519 RFC7748 TV-1, and Ed25519
+ * RFC8032 TEST 1 against independently verified expected outputs.
+ * Stack buffers only; result is a log line, never a gate. */
+static void bench_kat_run(void)
+{
+    bool ascon_ok = false;
+    bool x_ok = false;
+    bool ed_ok = false;
+    {
+        uint8_t ct[32];
+        uint16_t ct_len = (uint16_t)sizeof(ct);
+        if (crypto_ascon_aead_encrypt(s_benchkat_ascon_key,
+                                     s_benchkat_ascon_nonce,
+                                     s_benchkat_ascon_ad, (uint16_t)sizeof(s_benchkat_ascon_ad),
+                                     s_benchkat_ascon_pt, (uint16_t)sizeof(s_benchkat_ascon_pt),
+                                     ct, &ct_len) == CEEPEW_OK &&
+            ct_len == (uint16_t)sizeof(s_benchkat_ascon_exp) &&
+            memcmp(ct, s_benchkat_ascon_exp, sizeof(s_benchkat_ascon_exp)) == 0) {
+            ascon_ok = true;
+        }
+        ceepew_secure_zero(ct, sizeof(ct));
+    }
+    {
+        uint8_t ss[32];
+        if (crypto_ecdh_shared_secret(s_benchkat_x_priv, s_benchkat_x_pub, ss) == CEEPEW_OK &&
+            memcmp(ss, s_benchkat_x_exp, sizeof(s_benchkat_x_exp)) == 0) {
+            x_ok = true;
+        }
+        ceepew_secure_zero(ss, sizeof(ss));
+    }
+    {
+        uint8_t pk[32];
+        uint8_t sk[64];
+        uint8_t sig[64];
+        static const uint8_t empty_msg[1] = { 0U };
+        if (crypto_eddsa_seeded_keypair(pk, sk, s_benchkat_ed_seed) == CEEPEW_OK &&
+            memcmp(pk, s_benchkat_ed_pub, sizeof(s_benchkat_ed_pub)) == 0 &&
+            crypto_eddsa_sign(sk, empty_msg, 0U, sig) == CEEPEW_OK &&
+            memcmp(sig, s_benchkat_ed_sig, sizeof(s_benchkat_ed_sig)) == 0 &&
+            crypto_eddsa_verify(pk, empty_msg, 0U, sig) == CEEPEW_OK) {
+            ed_ok = true;
+        }
+        ceepew_secure_zero(sk, sizeof(sk));
+        ceepew_secure_zero(sig, sizeof(sig));
+    }
+    ESP_LOGI(TAG, "[BENCHKAT] ascon=%s x25519=%s eddsa=%s",
+             ascon_ok ? "PASS" : "FAIL", x_ok ? "PASS" : "FAIL",
+             ed_ok ? "PASS" : "FAIL");
+}
+#endif
+
 /* Task Entry Points                                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -2484,6 +2738,18 @@ void task_session_run(void *pvParameters) {
   CEEPEW_ASSERT_VOID(s_session_task_handle != NULL);
 
   ESP_LOGI(TAG, "Session task started on Core %d", xPortGetCoreID());
+
+#if CONFIG_CEEPEW_BENCH_58B
+  /* One-shot boot KAT (bench builds only): runs before any session traffic,
+   * exercises Ascon/X25519/Ed25519 against reference vectors. */
+  {
+    static bool s_bench_kat_done = false;
+    if (!s_bench_kat_done) {
+      s_bench_kat_done = true;
+      bench_kat_run();
+    }
+  }
+#endif
 
   /* Main loop: drain RX queue and process frames */
   for (;;) {
@@ -2597,6 +2863,68 @@ void task_session_run(void *pvParameters) {
           }
         }
 
+#if CONFIG_CEEPEW_BENCH_58B
+        /* Scripted 58-byte Full-stack TX campaign (bench only, default off).
+         * Emits 58-byte counter-pattern frames every 5 s while the session
+         * is active, up to CEEPEW_BENCH_58B_COUNT frames, for Full-mode
+         * TX timing measurement. Uses the standard session_send_message
+         * path (Full stack: Huffman + Ascon + box + Ed25519 + FEC + ARQ),
+         * so receiver requirements are unchanged. */
+        {
+          static uint64_t s_bench_last_ms = 0U;
+          static uint32_t s_bench_sent = 0U;
+          uint64_t now_ms_bench = (uint64_t)(esp_timer_get_time() / 1000LL);
+          if (session_sync_barrier_cleared() && ttl_err == CEEPEW_OK &&
+              s_bench_sent < CEEPEW_BENCH_58B_COUNT &&
+              (now_ms_bench - s_bench_last_ms >= (uint64_t)CEEPEW_BENCH_58B_INTERVAL_MS)) {
+            s_bench_last_ms = now_ms_bench;
+            /* Compressible payload (58 x 'A' with a sequence tag byte):
+             * static Huffman shrinks this well under the single-fragment
+             * budget, exercising the paper's 58 B -> 249 B single-frame
+             * Full path. (A counter pattern is adversarial to Huffman:
+             * 58 B expands to 59 B, fragments in two, and sustained
+             * two-fragment traffic exhausts the receiver region
+             * count cap -- see logs/bench58_run1.txt err=9 discards.) */
+            uint8_t bench_plain[CEEPEW_BENCH_58B_LEN];
+            memset(bench_plain, 0x41U, sizeof(bench_plain));
+            bench_plain[0] = (uint8_t)(s_bench_sent & 0xFFU);
+            uint8_t bench_mac[6] = {0U};
+            uint8_t bench_pk[32] = {0U};
+            if (session_get_peer_wifi_mac(bench_mac) == CEEPEW_OK &&
+                session_get_peer_public_key(bench_pk) == CEEPEW_OK) {
+              ESP_LOGI(TAG, "[BENCH58_TX] seq=%lu len=%u", (unsigned long)s_bench_sent,
+                       (unsigned)CEEPEW_BENCH_58B_LEN);
+              if ((s_bench_sent % 10U) == 9U) {
+                session_send_bench_forge_next();
+                ESP_LOGI(TAG, "[BENCH58_TX] seq=%lu forged (tag byte will be corrupted)",
+                         (unsigned long)s_bench_sent);
+              }
+              if ((s_bench_sent % 10U) == 4U) {
+                session_send_bench_replay_next();
+                ESP_LOGI(TAG, "[BENCH58_REPLAY] armed");
+              }
+#if CONFIG_CEEPEW_BENCH_TIMING
+              /* Record TX submission timestamp (E5 instrumentation) */
+              uint64_t t_submit_us = (uint64_t)esp_timer_get_time();
+              bench_timing_record_tx(s_bench_sent, t_submit_us);
+#endif
+              (void)session_send_message(bench_plain, (uint16_t)sizeof(bench_plain),
+                                         bench_mac, bench_pk);
+              ceepew_secure_zero(bench_plain, sizeof(bench_plain));
+              ceepew_secure_zero(bench_pk, sizeof(bench_pk));
+              s_bench_sent++;
+              if (s_bench_sent >= CEEPEW_BENCH_58B_COUNT) {
+                ESP_LOGI(TAG, "[BENCH58_DONE] sent=%lu", (unsigned long)s_bench_sent);
+#if CONFIG_CEEPEW_BENCH_TIMING
+                /* Dump timing records after campaign completes */
+                bench_timing_dump();
+#endif
+              }
+            }
+          }
+        }
+#endif
+
         /* Check for peer radio silence: if the sync barrier is cleared
          * (steady-state chat) and no frames have been exchanged for
          * CEEPEW_ACTIVE_SILENT_TIMEOUT_S, return to discovery. */
@@ -2645,19 +2973,23 @@ void task_session_run(void *pvParameters) {
           if (pfs_elapsed >= CEEPEW_PFS_RETRY_INTERVAL_MS) {
             s_last_pfs_retry_ms = now_pfs - (pfs_elapsed % CEEPEW_PFS_RETRY_INTERVAL_MS);
             uint8_t local_pfs_pubkey[32U];
-            if (session_get_local_pfs_pubkey(local_pfs_pubkey) == CEEPEW_OK) {
-              uint8_t pfs_frame[CEEPEW_PACKET_MAX_BYTES];
-              uint16_t pfs_len = 0U;
-              if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len,
-                      sizeof(pfs_frame), local_pfs_pubkey, true) == CEEPEW_OK) {
-                uint8_t peer_mac[6];
-                if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK) {
-                  (void)ecc_arq_send(peer_mac, pfs_frame, pfs_len);
-                  ESP_LOGI(TAG, "PFS retry: sent PFS_INIT to %02X:%02X:%02X:%02X:%02X:%02X (t=%llu ms)",
-                           peer_mac[0], peer_mac[1], peer_mac[2],
-                           peer_mac[3], peer_mac[4], peer_mac[5], now_pfs);
+            uint8_t pfs_auth_key[32U];
+            if (session_pfs_auth_key(pfs_auth_key) == CEEPEW_OK) {
+              if (session_get_local_pfs_pubkey(local_pfs_pubkey) == CEEPEW_OK) {
+                uint8_t pfs_frame[CEEPEW_PACKET_MAX_BYTES];
+                uint16_t pfs_len = 0U;
+                if (transport_esl_build_pfs_handshake(pfs_frame, &pfs_len,
+                        sizeof(pfs_frame), local_pfs_pubkey, true, pfs_auth_key) == CEEPEW_OK) {
+                  uint8_t peer_mac[6];
+                  if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK) {
+                    (void)ecc_arq_send(peer_mac, pfs_frame, pfs_len);
+                    ESP_LOGI(TAG, "PFS retry: sent PFS_INIT to %02X:%02X:%02X:%02X:%02X:%02X (t=%llu ms)",
+                             peer_mac[0], peer_mac[1], peer_mac[2],
+                             peer_mac[3], peer_mac[4], peer_mac[5], now_pfs);
+                  }
                 }
               }
+              ceepew_secure_zero(pfs_auth_key, sizeof(pfs_auth_key));
             }
           }
         }

@@ -7,12 +7,17 @@
  *   2. MAC lock → Constant-time peer MAC verification
  *   3. CRC-32 validation (returns NACK if failed — transport error, not attack)
  *   4. FEC decode (single-bit correction, returns NACK on uncorrectable errors)
- *   5. Timestamp check (±15s, silent fail — timing attack mitigation)
- *   6. WireGuard replay window (64-bit bitmap, silent fail)
+ *   5. Timestamp check (±CEEPEW_TIMESTAMP_SLACK_S, silent fail — timing mitigation)
+ *   6. WireGuard replay window — READ-ONLY check (64-bit bitmap, silent fail). The
+ *      window is COMMITTED in task_session stage_rx_decrypt only after BOTH the
+ *      Ascon-128 AEAD tag AND the Ed25519 signature verify.
  *   7. crypto_box decrypt (silent fail)
- *   8. Ascon-128 AEAD decrypt + tag verify (silent fail — must not produce response)
+ *   8. Ascon-128 AEAD decrypt + tag verify. The 24-byte ESL header
+ *      (magic/version/flags/timestamp_s/seq/nonce_counter) is bound as AEAD
+ *      associated data, so tampering with seq or timestamp_s fails the tag and is
+ *      silently discarded (never consuming a replay-window slot).
  *   9. Ed25519 signature verification (silent fail — no diagnostic response)
- *   10. Deliver to session layer
+ *  10. Replay-window commit, then deliver to session layer
  *
  * Steps 5–9 produce NO response on failure — silent discard only.
  * This prevents timing leaks and MITM attacks on authentication.
@@ -57,6 +62,13 @@ static uint64_t s_last_nonce_counter = 0ULL;
  * from the task_session decrypt path after the Ascon-128 tag verifies.
  * Same snapshot pattern as s_last_nonce_counter (no lock — single RX path). */
 static uint64_t s_last_seq = 0ULL;
+/* Raw 24-byte header of the last frame admitted by the read-only replay check
+ * (snapshotted in transport_esl_process_incoming before stage_esl_strip
+ * overwrites it). The task_session decrypt path fetches these bytes and passes
+ * them as Ascon-128 AEAD associated data, binding seq/timestamp_s/flags/
+ * nonce_counter to the ciphertext so any header tampering fails tag
+ * verification. Same snapshot pattern as s_last_seq (no lock — single RX path). */
+static uint8_t s_last_header[CEEPEW_ESL_HEADER_BYTES] = {0};
 static EslMacCheckFn s_mac_cb = NULL;
 static EslNonceFn s_nonce_cb = NULL;
 static bool s_esl_callbacks_registered = false;
@@ -79,7 +91,11 @@ typedef struct __attribute__((packed)) {
     uint64_t nonce_counter;
 } EslHeader_t;
 
-#define CEEPEW_ESL_HEADER_BYTES      ((uint16_t)sizeof(EslHeader_t))
+/* The wire header is a packed 24-byte struct. CEEPEW_ESL_HEADER_BYTES is the
+ * shared contract exposed in transport_esl.h (used to size the AEAD associated
+ * data on both the TX and RX paths); assert the two agree. */
+_Static_assert(sizeof(EslHeader_t) == CEEPEW_ESL_HEADER_BYTES,
+               "EslHeader_t size must equal CEEPEW_ESL_HEADER_BYTES");
 #define CEEPEW_ESL_FLAG_COOKIE_REQ   0x01U
 #define CEEPEW_ESL_FLAG_HAS_COOKIE   0x02U
 
@@ -264,9 +280,11 @@ static CeePewErr_t stage_esl_timestamp(Region_t *region, const uint8_t *in,
 /* Stage 6: Replay check — READ-ONLY (WireGuard model, silent fail).
  * transport_replay_check() never mutates the window; it only admits or
  * rejects. The window advances via transport_replay_commit(), called from
- * the task_session decrypt path after the Ascon-128 AEAD tag verifies, so
- * forged frames cannot shift last_seq/bitmap. The admitted seq is
- * snapshotted to s_last_seq for the commit call. */
+ * the task_session decrypt path only after ALL authentication succeeds —
+ * the Ascon-128 AEAD tag (which binds this header as associated data) AND
+ * the Ed25519 signature — so forged or header-tampered frames cannot shift
+ * last_seq/bitmap. The admitted seq is snapshotted to s_last_seq for the
+ * commit call. */
 static CeePewErr_t stage_esl_replay(Region_t *region, const uint8_t *in,
                                      uint16_t in_len, uint8_t **out,
                                      uint16_t *out_len, void *stage_ctx)
@@ -468,14 +486,9 @@ static CeePewErr_t dos_verify_cookie(const uint8_t sender_mac[6], uint32_t times
 /* Outgoing (TX) Wrapper                                                       */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
-CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len, uint64_t nonce_counter) {
-    CEEPEW_ASSERT(frame != NULL && len != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= CEEPEW_PACKET_MAX_BYTES, CEEPEW_ERR_BOUNDS);
-    CEEPEW_ASSERT(max_len >= (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES), CEEPEW_ERR_BOUNDS);
-    CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= max_len, CEEPEW_ERR_BOUNDS);
-
-    uint16_t payload_len = *len;
-    memmove(frame + CEEPEW_ESL_HEADER_BYTES, frame, payload_len);
+CeePewErr_t transport_esl_prepare_header(uint8_t hdr_out[CEEPEW_ESL_HEADER_BYTES],
+                                         uint64_t nonce_counter) {
+    CEEPEW_ASSERT(hdr_out != NULL, CEEPEW_ERR_NULL_PTR);
 
     EslHeader_t hdr = {
         .magic0    = CEEPEW_ESL_MAGIC0,
@@ -486,12 +499,38 @@ CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16
         .seq       = s_tx_seq++,
         .nonce_counter = nonce_counter,
     };
-    memcpy(frame, &hdr, sizeof(hdr));
+    memcpy(hdr_out, &hdr, sizeof(hdr));
+    return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_process_outgoing_with_header(uint8_t *frame, uint16_t *len,
+                                                       uint16_t max_len,
+                                                       const uint8_t hdr[CEEPEW_ESL_HEADER_BYTES]) {
+    CEEPEW_ASSERT(frame != NULL && len != NULL && hdr != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= CEEPEW_PACKET_MAX_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(max_len >= (uint16_t)(CEEPEW_ESL_HEADER_BYTES + CEEPEW_ESL_CRC_BYTES), CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT((uint32_t)(*len) + (uint32_t)CEEPEW_ESL_HEADER_BYTES + (uint32_t)CEEPEW_ESL_CRC_BYTES <= max_len, CEEPEW_ERR_BOUNDS);
+
+    uint16_t payload_len = *len;
+    memmove(frame + CEEPEW_ESL_HEADER_BYTES, frame, payload_len);
+    memcpy(frame, hdr, CEEPEW_ESL_HEADER_BYTES);
 
     uint32_t crc = esp_crc32_le(0U, frame, (size_t)(CEEPEW_ESL_HEADER_BYTES + payload_len));
     memcpy(frame + CEEPEW_ESL_HEADER_BYTES + payload_len, &crc, sizeof(crc));
     *len = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + payload_len + CEEPEW_ESL_CRC_BYTES);
     return CEEPEW_OK;
+}
+
+CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len, uint64_t nonce_counter) {
+    /* Convenience wrapper: prepare a fresh header, then wrap. Callers that
+     * bind the header as AEAD associated data must instead call
+     * transport_esl_prepare_header() (before encryption) followed by
+     * transport_esl_process_outgoing_with_header() (after encryption). */
+    CEEPEW_ASSERT(frame != NULL && len != NULL, CEEPEW_ERR_NULL_PTR);
+    uint8_t hdr[CEEPEW_ESL_HEADER_BYTES];
+    CeePewErr_t err = transport_esl_prepare_header(hdr, nonce_counter);
+    if (err != CEEPEW_OK) { return err; }
+    return transport_esl_process_outgoing_with_header(frame, len, max_len, hdr);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -508,13 +547,16 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len,
 
     if (!s_dos_ctx_initialized) { dos_init(); }
 
-    /* Extract nonce_counter from header before pipeline stages process it.
-     * The stage_esl_strip stage moves payload data which would overwrite the
-     * header bytes, so we snapshot this here while the header is intact. */
+    /* Extract nonce_counter and the full 24-byte header before pipeline stages
+     * process it. The stage_esl_strip stage moves payload data which would
+     * overwrite the header bytes, so we snapshot both here while the header is
+     * intact. s_last_header is the AEAD associated data used by the decrypt
+     * path; s_last_nonce_counter seeds the crypto nonce. */
     {
         EslHeader_t tmp;
         memcpy(&tmp, frame, sizeof(tmp));
         s_last_nonce_counter = tmp.nonce_counter;
+        memcpy(s_last_header, frame, CEEPEW_ESL_HEADER_BYTES);
     }
 
     /* Build ESL pipeline on first use */
@@ -562,6 +604,16 @@ CeePewErr_t transport_esl_get_last_seq(uint64_t *seq_out)
     return CEEPEW_OK;
 }
 
+/* Copy the 24-byte header of the last frame admitted by the read-only replay
+ * check. The task_session decrypt path passes these bytes as Ascon-128 AEAD
+ * associated data. Zero if no frame admitted yet. */
+CeePewErr_t transport_esl_get_last_header(uint8_t hdr_out[CEEPEW_ESL_HEADER_BYTES])
+{
+    CEEPEW_ASSERT(hdr_out != NULL, CEEPEW_ERR_NULL_PTR);
+    memcpy(hdr_out, s_last_header, CEEPEW_ESL_HEADER_BYTES);
+    return CEEPEW_OK;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* PFS Handshake Support                                                       */
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -584,10 +636,13 @@ CeePewErr_t transport_esl_peek_msg_type(const uint8_t *frame, uint16_t len, uint
 
 CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *payload, uint16_t len,
                                                  const uint8_t peer_mac[6],
+                                                 const uint8_t auth_key[32],
                                                  uint8_t peer_pfs_pubkey_out[32])
 {
-    CEEPEW_ASSERT(payload != NULL && peer_pfs_pubkey_out != NULL, CEEPEW_ERR_NULL_PTR);
-    if (len < 1U + 32U) {
+    CEEPEW_ASSERT(payload != NULL && peer_pfs_pubkey_out != NULL && auth_key != NULL, CEEPEW_ERR_NULL_PTR);
+    
+    /* Require exact payload length: 1 byte type + 32 bytes pubkey + 16 bytes MAC = 49 bytes */
+    if (len != (uint16_t)(1U + 32U + CEEPEW_PFS_MAC_BYTES)) {
         return CEEPEW_ERR_BOUNDS;
     }
 
@@ -597,21 +652,46 @@ CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *payload, uint16_t
         return CEEPEW_ERR_PARAM;
     }
 
-    /* Extract 32-byte PFS public key */
+    /* Fetch the 24-byte ESL header from the last frame processed */
+    uint8_t hdr[CEEPEW_ESL_HEADER_BYTES];
+    CeePewErr_t err = transport_esl_get_last_header(hdr);
+    if (err != CEEPEW_OK) { return err; }
+
+    /* Build auth_data = header(24) || type(1) || pubkey(32) = 57 bytes */
+    uint8_t auth_data[CEEPEW_ESL_HEADER_BYTES + 1U + 32U];
+    memcpy(auth_data, hdr, CEEPEW_ESL_HEADER_BYTES);
+    memcpy(auth_data + CEEPEW_ESL_HEADER_BYTES, payload, 1U + 32U);
+
+    /* Compute HMAC-SHA256 tag over auth_data */
+    uint8_t tag[CEEPEW_PFS_MAC_BYTES];
+    err = crypto_hmac_sha256_trunc(auth_key, 32U, auth_data,
+                                   (uint32_t)(CEEPEW_ESL_HEADER_BYTES + 1U + 32U),
+                                   tag, CEEPEW_PFS_MAC_BYTES);
+    if (err != CEEPEW_OK) { return err; }
+
+    /* Constant-time comparison with received tag */
+    if (!ceepew_ct_equal(tag, payload + 1U + 32U, CEEPEW_PFS_MAC_BYTES)) {
+        ceepew_secure_zero(tag, sizeof(tag));
+        return CEEPEW_ERR_AUTH_FAIL;
+    }
+    ceepew_secure_zero(tag, sizeof(tag));
+
+    /* MAC verified: extract 32-byte PFS public key */
     memcpy(peer_pfs_pubkey_out, payload + 1U, 32U);
 
-    ESP_LOGI("ESL", "PFS handshake received: type=%u", (unsigned)msg_type);
+    ESP_LOGI("ESL", "PFS handshake verified: type=%u", (unsigned)msg_type);
     return CEEPEW_OK;
 }
 
 CeePewErr_t transport_esl_build_pfs_handshake(uint8_t *frame, uint16_t *len, uint16_t max_len,
-                                               const uint8_t pfs_pubkey[32], bool is_initiator)
+                                               const uint8_t pfs_pubkey[32], bool is_initiator,
+                                               const uint8_t auth_key[32])
 {
-    CEEPEW_ASSERT(frame != NULL && len != NULL && pfs_pubkey != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(max_len >= CEEPEW_ESL_HEADER_BYTES + 1U + 32U + CEEPEW_ESL_CRC_BYTES, CEEPEW_ERR_BOUNDS);
+    CEEPEW_ASSERT(frame != NULL && len != NULL && pfs_pubkey != NULL && auth_key != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(max_len >= CEEPEW_ESL_HEADER_BYTES + 1U + 32U + CEEPEW_PFS_MAC_BYTES + CEEPEW_ESL_CRC_BYTES, CEEPEW_ERR_BOUNDS);
 
     uint8_t msg_type = is_initiator ? CEEPEW_ESL_MSG_TYPE_PFS_INIT : CEEPEW_ESL_MSG_TYPE_PFS_RESP;
-    uint16_t payload_len = 1U + 32U;  /* 1 byte type + 32 bytes pubkey */
+    uint16_t payload_len = 1U + 32U + CEEPEW_PFS_MAC_BYTES;  /* 1 byte type + 32 bytes pubkey + 16 bytes MAC */
 
     EslHeader_t hdr = {
         .magic0       = CEEPEW_ESL_MAGIC0,
@@ -627,6 +707,16 @@ CeePewErr_t transport_esl_build_pfs_handshake(uint8_t *frame, uint16_t *len, uin
     frame[CEEPEW_ESL_HEADER_BYTES] = msg_type;
     memcpy(frame + CEEPEW_ESL_HEADER_BYTES + 1U, pfs_pubkey, 32U);
 
+    /* Compute HMAC-SHA256 tag over header(24) || type(1) || pubkey(32) = 57 bytes */
+    uint8_t tag[CEEPEW_PFS_MAC_BYTES];
+    CeePewErr_t err = crypto_hmac_sha256_trunc(auth_key, 32U, frame,
+                                               (uint32_t)(CEEPEW_ESL_HEADER_BYTES + 1U + 32U),
+                                               tag, CEEPEW_PFS_MAC_BYTES);
+    if (err != CEEPEW_OK) { return err; }
+    memcpy(frame + CEEPEW_ESL_HEADER_BYTES + 1U + 32U, tag, CEEPEW_PFS_MAC_BYTES);
+    ceepew_secure_zero(tag, sizeof(tag));
+
+    /* CRC-32 over header + payload (including MAC) */
     uint32_t crc = esp_crc32_le(0U, frame, (size_t)(CEEPEW_ESL_HEADER_BYTES + payload_len));
     memcpy(frame + CEEPEW_ESL_HEADER_BYTES + payload_len, &crc, sizeof(crc));
     *len = (uint16_t)(CEEPEW_ESL_HEADER_BYTES + payload_len + CEEPEW_ESL_CRC_BYTES);

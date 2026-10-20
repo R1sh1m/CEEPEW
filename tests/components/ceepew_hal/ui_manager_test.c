@@ -230,7 +230,7 @@ void ui_manager_selftest_run(void) {
     /* Test 10: Test ui_chat_show_bubble() with mock messages */
     if (msg_store_count() == 0U) {
         /* Add a test message for display */
-        uint8_t test_payload[21] = "Hello from peer!    ";
+        uint8_t test_payload[21] = "1. Hello from peer! ";
         (void)msg_store_add(test_payload, 20U, 0U);  /* RX message */
     }
     

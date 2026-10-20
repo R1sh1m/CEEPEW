@@ -270,6 +270,22 @@ static inline void ble_ctx_unlock(void) {
   if (s_ble_ctx_mutex == NULL) {
     return;
   }
+  /* CRITICAL: never release a mutex this task does not hold.
+   *
+   * ble_ctx_lock() returns false when its 2 s take times out, and most call
+   * sites ignore that return value and still call ble_ctx_unlock(). An
+   * unconditional xSemaphoreGive on a mutex the current task never acquired
+   * asks FreeRTOS to priority-disinherit a mutex it did not inherit, which
+   * trips xTaskPriorityDisinherit (tasks.c:5156) and reboots the board.
+   *
+   * Observed on real hardware: ble_ctx_lock DEADLOCK (held by pair_supp
+   * >2000 ms) -> enter_phase(IDLE) lock timeout -> assert failed ->
+   * rst:0xc (SW_CPU_RESET). It destroyed a pairing cycle and presents in the
+   * field as an inexplicable ~45 s pairing delay. Release only as the recorded
+   * owner; a timing-out caller correctly becomes a no-op here. */
+  if (s_ble_ctx_lock_owner != xTaskGetCurrentTaskHandle()) {
+    return;
+  }
   s_ble_ctx_lock_owner = NULL;
   s_ble_ctx_lock_held_since_ms = 0U;
   xSemaphoreGive(s_ble_ctx_mutex);
@@ -500,13 +516,19 @@ static void transport_ble_clear_discovery_peer_state_unlocked(void) {
 }
 
 void transport_ble_clear_discovery_peer_state(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_clear_discovery_peer_state: ble_ctx_lock timed out - skipping");
+    return;
+  }
   transport_ble_clear_discovery_peer_state_unlocked();
   ble_ctx_unlock();
 }
 
 void transport_ble_clear_pending_commitment(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_clear_pending_commitment: ble_ctx_lock timed out - skipping");
+    return;
+  }
   g_ble_ctx.peer_commitment_pending = false;
   g_ble_ctx.pending_peer_commitment_len = 0U;
   ceepew_secure_zero(g_ble_ctx.pending_peer_commitment,
@@ -594,14 +616,20 @@ static void peer_cache_upsert(const uint8_t mac[6], int8_t rssi,
 }
 
 void transport_ble_peer_cache_clear(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_peer_cache_clear: ble_ctx_lock timed out - skipping");
+    return;
+  }
   memset(g_ble_ctx.peer_cache, 0U, sizeof(g_ble_ctx.peer_cache));
   g_ble_ctx.peer_cache_count = 0U;
   ble_ctx_unlock();
 }
 
 void transport_ble_peer_cache_expire_ttl(uint32_t now_ms) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_peer_cache_expire_ttl: ble_ctx_lock timed out - skipping");
+    return;
+  }
   uint8_t write_idx = 0U;
   for (uint8_t i = 0U; i < g_ble_ctx.peer_cache_count; i++) {
     if (now_ms - g_ble_ctx.peer_cache[i].cached_at_ms <
@@ -617,7 +645,10 @@ void transport_ble_peer_cache_expire_ttl(uint32_t now_ms) {
 }
 
 CeePewErr_t transport_ble_set_selected_peer(uint8_t cache_index) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_set_selected_peer: ble_ctx_lock timed out - skipping");
+    return CEEPEW_ERR_BUSY;
+  }
   if (cache_index >= g_ble_ctx.peer_cache_count) {
     ble_ctx_unlock();
     return CEEPEW_ERR_BOUNDS;
@@ -649,7 +680,10 @@ CeePewErr_t transport_ble_set_selected_peer(uint8_t cache_index) {
 }
 
 uint8_t transport_ble_get_peer_cache_count(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_get_peer_cache_count: ble_ctx_lock timed out - skipping");
+    return 0U;
+  }
   uint8_t count = 0U;
   for (uint8_t i = 0U; i < g_ble_ctx.peer_cache_count; i++) {
     if (!g_ble_ctx.peer_cache[i].blacklisted) {
@@ -661,7 +695,10 @@ uint8_t transport_ble_get_peer_cache_count(void) {
 }
 
 const CachedPeer_t *transport_ble_get_peer_cache_entry(uint8_t index) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_get_peer_cache_entry: ble_ctx_lock timed out - skipping");
+    return NULL;
+  }
   if (index >= g_ble_ctx.peer_cache_count) {
     ble_ctx_unlock();
     return NULL;
@@ -683,7 +720,10 @@ const CachedPeer_t *transport_ble_get_peer_cache_entry(uint8_t index) {
 }
 
 void transport_ble_peer_cache_blacklist(uint8_t cache_index) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_peer_cache_blacklist: ble_ctx_lock timed out - skipping");
+    return;
+  }
   if (cache_index < g_ble_ctx.peer_cache_count) {
     g_ble_ctx.peer_cache[cache_index].blacklisted = true;
   }
@@ -1021,7 +1061,10 @@ CeePewErr_t transport_ble_set_commitment_beacon(const uint8_t *commitment,
     return CEEPEW_ERR_BUSY;
   }
 
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_set_commitment_beacon: ble_ctx_lock timed out - skipping");
+    return CEEPEW_ERR_BUSY;
+  }
   CeePewErr_t err =
       transport_ble_set_commitment_beacon_unlocked(commitment, len);
   ble_ctx_unlock();
@@ -1069,7 +1112,10 @@ CeePewErr_t transport_ble_send_handoff_ready_beacon(void) {
   if (!s_ble_initialised) {
     return CEEPEW_ERR_BUSY;
   }
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_send_handoff_ready_beacon: ble_ctx_lock timed out - skipping");
+    return CEEPEW_ERR_BUSY;
+  }
   CeePewErr_t err = transport_ble_send_handoff_ready_beacon_unlocked();
   ble_ctx_unlock();
   return err;
@@ -1625,7 +1671,10 @@ transport_ble_verify_commitment_unlocked(const uint8_t *peer_digest,
 
 CeePewErr_t transport_ble_verify_commitment(const uint8_t *peer_digest,
                                             uint8_t len) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_verify_commitment: ble_ctx_lock timed out - skipping");
+    return CEEPEW_ERR_BUSY;
+  }
   CeePewErr_t err = transport_ble_verify_commitment_unlocked(peer_digest, len);
   ble_ctx_unlock();
   return err;
@@ -1712,14 +1761,20 @@ static CeePewErr_t transport_ble_verify_pending_commitment_unlocked(void) {
 }
 
 CeePewErr_t transport_ble_verify_pending_commitment(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_verify_pending_commitment: ble_ctx_lock timed out - skipping");
+    return CEEPEW_ERR_BUSY;
+  }
   CeePewErr_t err = transport_ble_verify_pending_commitment_unlocked();
   ble_ctx_unlock();
   return err;
 }
 
 bool transport_ble_handoff_ready(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_handoff_ready: ble_ctx_lock timed out - skipping");
+    return false;
+  }
   bool ready = g_ble_ctx.handoff_ready && g_ble_ctx.commitment_verified;
   ble_ctx_unlock();
   return ready;
@@ -1732,7 +1787,10 @@ static void transport_ble_set_ready_for_chat_unlocked(void) {
 }
 
 void transport_ble_set_ready_for_chat(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_set_ready_for_chat: ble_ctx_lock timed out - skipping");
+    return;
+  }
   transport_ble_set_ready_for_chat_unlocked();
   ble_ctx_unlock();
 }
@@ -2189,7 +2247,10 @@ CeePewErr_t transport_ble_retry_scan_if_needed(void) {
   if (g_ble_ctx.is_scanning || g_ble_ctx.state == BLE_SCANNING ||
       g_ble_ctx.state == BLE_ADVERTISING_AND_SCANNING) {
 
-    ble_ctx_lock();
+    if (!ble_ctx_lock()) {
+      ESP_LOGW(TAG, "transport_ble_retry_scan_if_needed: ble_ctx_lock timed out - skipping");
+      return CEEPEW_ERR_BUSY;
+    }
     uint32_t seen = g_ble_ctx.scan_seen_count;
     bool discovered = g_ble_ctx.discovered;
     ble_ctx_unlock();
@@ -2301,7 +2362,10 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     ESP_LOGI(TAG, "SCAN_RSP_DATA_SET_COMPLETE (adv_data_ready=%u)",
              s_adv_data_set);
 
-    ble_ctx_lock();
+    if (!ble_ctx_lock()) {
+      ESP_LOGW(TAG, "gap_event_handler: ble_ctx_lock timed out - skipping");
+      return;
+    }
     if (g_ble_ctx.local_commitment_len > 0U) {
       g_ble_ctx.commitment_beacon_active = true;
       ESP_LOGI(TAG, "Commitment beacon now active in scan response");
@@ -2751,7 +2815,10 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
 
         bool nonce_ok = false;
         bool new_max = false;
-        ble_ctx_lock();
+        if (!ble_ctx_lock()) {
+          ESP_LOGW(TAG, "gap_event_handler: ble_ctx_lock timed out - skipping");
+          return;
+        }
         if (peer_counter > g_ble_ctx.beacon_nonce_peer_counter_max) {
           g_ble_ctx.beacon_nonce_peer_counter_max = peer_counter;
           new_max = true;
@@ -3298,7 +3365,10 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
 
     {
       uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-      ble_ctx_lock();
+      if (!ble_ctx_lock()) {
+        ESP_LOGW(TAG, "gattc_event_handler: ble_ctx_lock timed out - skipping");
+        return;
+      }
       if (g_ble_ctx.gatt_connected_since_ms != 0U) {
         uint32_t delta = (now_ms > g_ble_ctx.gatt_connected_since_ms)
                              ? (now_ms - g_ble_ctx.gatt_connected_since_ms)
@@ -3441,7 +3511,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     break;
 
   case ESP_GATTS_DISCONNECT_EVT:
-    ble_ctx_lock();
+    if (!ble_ctx_lock()) {
+      ESP_LOGW(TAG, "gatts_event_handler: ble_ctx_lock timed out - skipping");
+      return;
+    }
     g_ble_ctx.gatts_connected = false;
     g_ble_ctx.gattc_connected = false;
     g_ble_ctx.connecting = false;
@@ -3729,7 +3802,10 @@ uint32_t transport_ble_get_peer_age_ms(void) {
   uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
   uint32_t age_ms = 0U;
 
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_get_peer_age_ms: ble_ctx_lock timed out - skipping");
+    return 0U;
+  }
   uint32_t disc_start_ts = g_ble_ctx.discovery_start_ts;
   bool discovered = g_ble_ctx.discovered;
   ble_ctx_unlock();
@@ -3744,7 +3820,10 @@ uint32_t transport_ble_get_peer_age_ms(void) {
 }
 
 void transport_ble_reset_accumulated_conn_ms(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_reset_accumulated_conn_ms: ble_ctx_lock timed out - skipping");
+    return;
+  }
   g_ble_ctx.accumulated_conn_ms = 0U;
   ble_ctx_unlock();
 }
@@ -3862,7 +3941,10 @@ void transport_ble_enter_phase(PairingPhase_t phase) {
  * Pushes a phase-timeout event so the supervisor re-evaluates the current
  * pairing phase (the BLE link drop typically means sign_pk GATT failed). */
 void transport_ble_handle_connection_lost(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_handle_connection_lost: ble_ctx_lock timed out - skipping");
+    return;
+  }
   g_ble_ctx.gattc_connected = false;
   g_ble_ctx.gatts_connected = false;
   g_ble_ctx.connecting = false;
@@ -4022,7 +4104,10 @@ static void transport_ble_supervisor_task(void *arg) {
       PairingPhase_t phase = transport_ble_get_phase();
       if (phase == PAIRING_PHASE_GATT_IDENTITY ||
           phase == PAIRING_PHASE_SIGN_PK_EXCHANGE) {
-        ble_ctx_lock();
+        if (!ble_ctx_lock()) {
+          ESP_LOGW(TAG, "transport_ble_supervisor_task: ble_ctx_lock timed out - skipping");
+          return;
+        }
         ESP_LOGI(TAG,
                  "GATT Metrics: phase=%s open=%u mtu=%u write=%u disc=%u "
                  "reason=0x%02X "
@@ -4052,7 +4137,10 @@ static void transport_ble_supervisor_check_stall(void) {
   if (s_supervisor_recovering) {
     return;
   }
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_supervisor_check_stall: ble_ctx_lock timed out - skipping");
+    return;
+  }
   PairingPhase_t phase = s_pairing_ctx.phase;
   uint32_t entered = s_pairing_ctx.phase_entered_ms;
   ble_ctx_unlock();
@@ -4080,7 +4168,10 @@ static void transport_ble_supervisor_check_stall(void) {
  * advertising (stuck adv=0). Also runs during GATT connections in
  * pairing phases to ensure the GATT-ready beacon continues broadcasting. */
 static void transport_ble_supervisor_tick_adv_watchdog(void) {
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_supervisor_tick_adv_watchdog: ble_ctx_lock timed out - skipping");
+    return;
+  }
   bool ble_init = s_ble_initialised;
   BleState_t state = g_ble_ctx.state;
   bool adv = g_ble_ctx.is_advertising;
@@ -4104,6 +4195,7 @@ static void transport_ble_supervisor_tick_adv_watchdog(void) {
   bool in_pairing_phase = (phase == PAIRING_PHASE_GATT_IDENTITY ||
                            phase == PAIRING_PHASE_SIGN_PK_EXCHANGE);
 
+  bool need_rearm = false;
   if (adv) {
     s_adv_down_since_ms = 0U;
   } else if (state == BLE_SCANNING || state == BLE_IDLE ||
@@ -4118,10 +4210,28 @@ static void transport_ble_supervisor_tick_adv_watchdog(void) {
                transport_ble_phase_name(phase),
                transport_ble_state_name(state));
       s_adv_down_since_ms = now_ms; /* prevent spam */
-      (void)transport_ble_start_advertising();
+      need_rearm = true;
     }
   }
   ble_ctx_unlock();
+
+  /* Re-arm with the lock RELEASED. transport_ble_start_advertising() reaches
+   * the controller synchronously through transport_ble_configure_data_raw_
+   * unlocked() - esp_ble_gap_stop_advertising(), esp_ble_gap_config_adv_data_raw()
+   * and esp_ble_gap_config_scan_rsp_data_raw() all wait for the controller to
+   * acknowledge - and this watchdog runs precisely when the controller is not
+   * advertising. Holding ble_ctx_lock across those calls stalls every other BLE
+   * state user until its 2 s take times out, with the holder reported as
+   * "pair_supp" (this task): the exact DEADLOCK signature observed on hardware,
+   * and the timeout path that panicked the board. Keep the slow radio work
+   * outside the lock.
+   *
+   * The other callers of transport_ble_start_advertising() (lines 428, 1306,
+   * 1798, 3421) already invoke it without the lock, so this does not change the
+   * function's contract; it removes one long hold rather than adding one. */
+  if (need_rearm) {
+    (void)transport_ble_start_advertising();
+  }
 }
 
 static void transport_ble_supervisor_tick_recovery(void) {
@@ -4253,7 +4363,10 @@ RgbPattern_t transport_ble_phase_to_rgb(PairingPhase_t phase) {
 
 PairingPhase_t transport_ble_get_phase(void) {
   PairingPhase_t phase;
-  ble_ctx_lock();
+  if (!ble_ctx_lock()) {
+    ESP_LOGW(TAG, "transport_ble_get_phase: ble_ctx_lock timed out - skipping");
+    return PAIRING_PHASE_IDLE;
+  }
   phase = s_pairing_ctx.phase;
   ble_ctx_unlock();
   return phase;

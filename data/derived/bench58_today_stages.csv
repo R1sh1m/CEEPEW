@@ -1,0 +1,5 @@
+stage,label,n,median_us,p25_us,p75_us,p95_us,p99_us,min_us,max_us,err_histogram
+sign_us,Ed25519 sign (TX),114,332183.0,332067.5,332280.0,332392.0,332460.1,331861.0,332475.0,err0:114
+box_us,XSalsa20/HMAC box open (RX),106,1458.5,1321.2,1548.0,1673.8,1877.4,1158.0,1992.0,err0:96;err5:10
+ascon_us,Ascon-128 AEAD decrypt+verify (RX),98,327.5,313.2,402.8,476.1,525.2,17.0,530.0,err0:97;err5:1
+edverify_us,Ed25519 verify (RX),99,662674.0,662604.0,662738.0,662863.4,662943.0,662432.0,662990.0,err0:99

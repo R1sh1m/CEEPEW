@@ -28,20 +28,106 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
 
 ## Hardware Requirements
 
-| Component | Specification |
-|-----------|--------------|
-| MCU | ESP32 DevKit v1 (CP210x UART) |
-| Display | SSD1306 128×64 OLED (I2C, SDA=GPIO26, SCL=GPIO27) |
-| Input | Rotary potentiometer GPIO33, click button GPIO19 |
-| Diagnostic | Push-lock switch GPIO5 (active LOW) |
-| Indicator | RGB LED GPIO15/R, GPIO18/G, GPIO23/B (220 Ω to 3.3 V) |
+## Hardware & Circuit Schematics
 
-### Circuit Schematic
+| Component | Pin / Interface | Specification |
+|-----------|-----------------|--------------|
+| **MCU** | ESP32 DevKit v1 | 240 MHz dual-core Tensilica Xtensa LX6, 4 MB SPI Flash, CP210x UART |
+| **Display** | I2C (SDA=GPIO26, SCL=GPIO27) | SSD1306 128×64 Monochrome OLED (400 kHz Fast-Mode I2C) |
+| **Navigation Input** | ADC1_CH5 (GPIO33) | 10 kΩ rotary potentiometer with moving-average filtering |
+| **Action Button** | GPIO19 (Active LOW) | Momentary click switch with 20 ms software debouncing |
+| **Diagnostic Switch**| GPIO5 (Active LOW) | Hardware push-lock switch enabling on-boot diagnostic test suite |
+| **Status Indicator** | GPIO15 (R), GPIO18 (G), GPIO23 (B) | Common-cathode RGB LED (220 Ω current-limiting resistors to 3.3 V) |
 
-![CEE-PEW hardware block diagram](assets/hardware_block.svg)
+### Engineering Schematic & Block Diagram
 
-See the complete [CEE-PEW engineering circuit schematic](assets/CEEPEW_Engineering_Schematic.pdf)
-for the wiring and component-level connections.
+<p align="center">
+  <img src="assets/hardware_block.svg" alt="CEE-PEW Hardware Block Diagram" width="700">
+</p>
+
+For complete component wiring, netlists, decoupling capacitors, and pull-up resistor specifications, inspect the publication-grade [CEE-PEW Engineering Circuit Schematic (PDF)](assets/CEEPEW_Engineering_Schematic.pdf).
+
+---
+
+## Testing Methodologies & Reproduction Guide
+
+CEE-PEW enforces a multi-tier testing and verification framework. Anyone checking out this repository can independently reproduce, test, and audit every claim in the paper.
+
+### 1. Host-Side C Unit Tests & Sanitizers (Zero Hardware Required)
+Run the native host test suite with GCC/Clang AddressSanitizer and UndefinedBehaviorSanitizer:
+```powershell
+python tools/ceepew_pipeline.py --mode host
+```
+*Verifies: 13/13 test suites (Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC single-bit correction and double-bit non-crashing bounds, 64-bit replay sliding window, and side-channel timing uniformity).*
+
+### 2. Paper Arithmetic & Claim Verification
+Recompute all 45 formulas, wire budgets, airtimes, cycle-to-time conversions, and bounds reported in the paper:
+```powershell
+python tools/recompute_paper_numbers.py
+```
+*Directly validates: Wire budgets (249 B Full, 138 B Lite), efficiencies (23.3%, 42.0%, 55.2%), 802.11 airtimes (2.528 ms MPDU, 0.304 ms ACK), and entropy bounds.*
+
+### 3. On-Device Boot Diagnostics (Single ESP32)
+Enable diagnostic mode to run the 14-subsystem boot self-test on physical hardware:
+```powershell
+python tools/ceepew_pipeline.py --mode diag
+```
+*Verifies: 14/14 subsystems print `PASS` in the `=== DIAGNOSTIC REPORT ===` (FSM transitions, 2^56 nonce hard-limit enforcement, memory pool ownership, PRG channel hopping synchronization, OLED facade, and internal temp sensor).*
+
+### 4. Two-Device Pairing & Protocol Integration Test
+Flash both target boards and monitor end-to-end BLE discovery, PIN verification, and ESP-NOW session transport:
+```powershell
+python tools/ceepew_pipeline.py --mode pairing
+```
+*Captures: Three-phase pairing sequence, BLE GATT handoff, rendezvous clock-offset calibration, and active bidirectional encrypted chat.*
+
+### 5. Automated Log Pipeline & Bug Signature Detection
+Ingest device monitor logs to detect anomalies and cross-reference against known failure signatures:
+```powershell
+python tools/ceepew_log_pipeline.py ingest logs/pairing_*.txt --report
+```
+*Generates: Cross-run anomaly tracking and structured findings in `DEVICE_LOG_FINDINGS.md`.*
+
+### 6. Over-the-Air Capture Rig & PCAP Analysis
+Verify OTA wire behavior, Shannon entropy, and cleartext absence using promiscuous mode packet captures:
+```powershell
+# Analyze captured 802.11 ESP-NOW frames from data/raw/
+python tools/capture/mode_report.py data/raw/E1_B_ccmp_20261017/DEVICE_A.pcap --mode "CCMP"
+```
+
+### 7. Production Readiness Audit
+Audit firmware security flags before deployment:
+```powershell
+python tools/ceepew_pipeline.py --mode prod
+```
+*Checks: Secure Boot v2, Flash Encryption, dev mode disabled, and flash partition sizing.*
+
+---
+
+## Empirical Results & Testing Data
+
+All quantitative claims and experimental datasets used in the paper are published and tracked in this repository:
+- **Canonical Results Registry**: [`results/registry.json`](results/registry.json) (every number tagged with an Evidence Class: `M-HW`, `M-HOST`, `C`, `S`, or `E`).
+- **Results Documentation**: [`results/README.md`](results/README.md) (complete results ledger and analysis).
+- **Experimental Datasets**: [`data/`](data/) (raw PCAPs, serial logs, SHA-256 manifests, and derived CSVs).
+
+### Key Empirical Results Summary
+
+| Property / Metric | Evaluated Value | Baseline / Comparison | Evidence Class | Source / Dataset |
+|-------------------|-----------------|-----------------------|----------------|------------------|
+| **Wire Frame Size ($P_c=58\text{ B}$)** | **249 B** | ESP-NOW v1.0 ceiling (250 B) | `C` | [`results/registry.json`](results/registry.json#L31) |
+| **Lite Profile Wire Size** | **138 B** (FEC) / **105 B** (no FEC) | 249 B (Full Profile) | `C` | [`results/registry.json`](results/registry.json#L47) |
+| **Wire Efficiency ($P_c=58\text{ B}$)** | **23.3%** (Full) / **42.0%** (Lite) | 55.2% (Lite no FEC) | `C` | [`results/registry.json`](results/registry.json#L63) |
+| **802.11 MPDU Airtime (249 B)** | **2.528 ms** (1 Mbps DSSS) | 0.304 ms (Hardware ACK) | `C` | [`results/registry.json`](results/registry.json#L143) |
+| **Ed25519 Sign Duration (TX)** | **332.2 ms** median ($n=114$) | Oryx vendor bench: 28.3 ms | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L2) |
+| **Ascon-128 AEAD Decrypt (RX)** | **0.33 ms** median ($n=98$) | 1.46 ms (XSalsa20 box open) | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L4) |
+| **Ed25519 Verify Duration (RX)**| **662.7 ms** median ($n=99$) | Full verification path | `M-HW` | [`data/derived/bench58_today_stages.csv`](data/derived/bench58_today_stages.csv#L5) |
+| **Replay Rejection (Sliding Window)** | **100 / 100** vectors rejected | 95% CI failure bound: 3.0% | `M-HOST` | [`tests/host/test_replay_window.c`](tests/host/test_replay_window.c) |
+| **OTA Forged Frame Rejection** | **10 / 10** rejected (0 reach app) | Ascon tag auth error (err=5) | `M-HW` | [`data/raw/E1_B_ccmp_20261017/`](data/raw/E1_B_ccmp_20261017/) |
+| **Cleartext Air Leakage** | **0 bytes** visible in Mode C | Mode A: 100% payload visible | `M-HW` | [`data/derived/E1_A_plain_20261017/`](data/derived/E1_A_plain_20261017/) |
+| **Application Heap Allocations** | **0 bytes** (48 KB static region) | Standard heap allocators | `M-HW` | [`components/mem/ceepew_region.h`](components/mem/ceepew_region.h) |
+
+---
 
 ## Getting Started
 
@@ -49,140 +135,127 @@ for the wiring and component-level connections.
 
 - [ESP-IDF v6.0.2](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/)
 - Python 3.12+
-- ESP32 DevKit v1 with CP210x UART
+- CMake 3.20+ and Ninja
+- Two ESP32 DevKit v1 boards with CP210x UART
 
-### Windows
+### Windows Quickstart
 
 ```powershell
-# Initialize the repository's ESP-IDF environment. This clears stale
-# IDF_PATH/IDF_TOOLS_PATH/IDF_PYTHON_ENV_PATH values first.
+# 1. Initialize ESP-IDF 6.0.2 build environment
 .\tools\setup_esp_idf.ps1
+
+# 2. Run host verification tests (does not require hardware)
+python tools/ceepew_pipeline.py --mode host
+python tools/recompute_paper_numbers.py
+
+# 3. Build and flash target firmware
 idf.py set-target esp32
 idf.py build
 idf.py -p COM5 flash
 idf.py -p COM5 monitor
 ```
 
-The setup script uses ESP-IDF 6.0.2 at `C:\esp\v6.0.2\esp-idf`, the
-Espressif tools registry at `C:\Espressif\tools`, and its Python environment at
-`C:\Espressif\tools\python\v6.0.2\venv`. If the required tools are not
-registered yet, repair them once with:
-
-```powershell
-$env:IDF_TOOLS_PATH = "C:\Espressif\tools"
-$python = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
-& $python "C:\esp\v6.0.2\esp-idf\tools\idf_tools.py" --non-interactive install
-.\tools\setup_esp_idf.ps1
-```
-
-### Linux
+### Linux / macOS Quickstart
 
 ```bash
-# Set up ESP-IDF environment
+# 1. Source ESP-IDF environment
 source ~/esp/v6.0.2/esp-idf/export.sh
+
+# 2. Run host verification tests
+python tools/ceepew_pipeline.py --mode host
+python tools/recompute_paper_numbers.py
+
+# 3. Build and flash target firmware
 idf.py set-target esp32
 idf.py build
 idf.py -p /dev/ttyUSB0 flash
 idf.py -p /dev/ttyUSB0 monitor
 ```
 
-### Diagnostic Mode
-
-Enable the on-device test suite for development:
-
-```powershell
-idf.py menuconfig          # CEE-PEW Build Options → Diagnostic Mode → [*]
-idf.py build flash monitor
-```
-
-The boot log prints a `=== DIAGNOSTIC REPORT ===` block. See [tests/README.md](tests/README.md).
-
-### Two-Device Pairing Test
-
-Two ESP32s are required. Flash both, then run the unified monitor:
-
-```bash
-pip install pyserial  # if needed
-python tools/ceepew_monitor.py --ports COM5,COM6  # Windows
-python tools/ceepew_monitor.py --ports /dev/ttyUSB0,/dev/ttyUSB1  # Linux
-```
+---
 
 ## Project Structure
 
 ```
-main/                    App entry, session FSM, FreeRTOS tasks
-├── main.c              Initialization and task launch
-├── session_fsm.c/.h    Three-phase pairing FSM + key derivation
-├── task_session.c      Core 1: session crypto and transport
-├── task_ui.c           Core 0: OLED rendering and input
-├── session_send.c      Message encryption and send pipeline
-├── session_msgstore.c  Circular message buffer with TTL expiry
-├── session_memory.h    All session state + UI event types
-├── ceepew_config.h     Compile-time constants and limits
-└── ceepew_security_utils.c  Constant-time comparison, secure zero
-
-components/
-├── ceepew_common/      Shared types, config, asserts, security utils
-├── ceepew_hal/         HAL implementations + UI manager + OLED driver
-├── ceepew_oled/        SSD1306 OLED driver (native I2C)
-├── ceepew_oled_arduino/OLED Arduino Wire transport layer
-├── hal/                Public HAL headers (pins, GPIO, RNG)
-├── crypto/             Ascon-128 AEAD, HKDF, Ed25519, Curve25519, SHA-256
-├── ecc/                Hamming(15,11) FEC, CRC-32, Stop-and-Wait ARQ
-├── compress/           Static Huffman coding
-├── transport/          BLE transport, ESP-NOW transport, security layer
-├── tools/              digital_sum (HKDF salt preprocessor)
-└── mem/                Region allocator (48 KB, no heap)
-
-tests/                  On-device test suite (development mode only)
-├── main/               Integration tests (FSM, nonce, replay, ARQ, etc.)
-├── components/         Component-level self-tests
-└── CMakeLists.txt      Gated build (development mode only)
-
-tools/                  Host-side scripts
-├── ceepew_monitor.py   Unified serial monitor (single/dual port)
-├── ceepew_diagnose.ps1 Test driver (diagnose / pairing / build modes)
-├── ceepew_log_pipeline.py  Log ingestion + signature analysis
-└── flash_both.ps1      Flash two ESP32s then monitor
-
-fuzz/                   Off-host fuzzing harnesses (AFL/libFuzzer)
-├── fuzz_ascon/         Ascon-128 AEAD fuzz target
-├── fuzz_sha256/        SHA-256 fuzz target
-├── fuzz_hamming/       Hamming(15,11) FEC fuzz target
-├── fuzz_hkdf/          HKDF-SHA256 fuzz target
-└── fuzz_arq/           ARQ seq/state logic fuzz target
+CEEPEW/
+├── assets/                  Engineering circuit schematics, hardware diagrams, block SVGs
+│   ├── CEEPEW_Engineering_Schematic.pdf   Complete circuit schematic (PDF)
+│   └── hardware_block.svg                 Detailed block diagram
+├── data/                    Empirical testing datasets, raw captures, derived CSVs
+│   ├── raw/                 Read-only PCAPs, logs, and sealed SHA-256 manifests
+│   ├── derived/             Stage timing benchmarks (CSV), tshark dissections
+│   └── manifests/           Master run roll-up index (index.json)
+├── results/                 Canonical paper results registry & single source of truth
+│   ├── registry.json        Master JSON ledger of all quantitative claims and evidence
+│   └── README.md            Documentation of evidence classes and replication instructions
+├── main/                    Application entry, FreeRTOS tasks, session FSM
+│   ├── main.c              Initialization and core-affinity task pinout
+│   ├── session_fsm.c/.h    Three-phase pairing FSM (BLE -> ESP-NOW handoff)
+│   ├── task_session.c      Core 1: session crypto, transport, ARQ dispatch
+│   ├── task_ui.c           Core 0: OLED rendering, debounced inputs
+│   ├── session_send.c      Message encryption & transmission pipeline
+│   ├── session_msgstore.c  Static circular message store with TTL expiry
+│   └── session_memory.h    Static session structures and UI event queues
+├── components/              Modular system components
+│   ├── ceepew_common/      Shared types, asserts, security utils
+│   ├── ceepew_hal/         HAL drivers (ADC, GPIO, RGB LED, UI manager)
+│   ├── ceepew_oled/        SSD1306 OLED native I2C driver
+│   ├── crypto/             Ascon-128 AEAD, Ed25519, Curve25519, HKDF, SHA-256
+│   ├── ecc/                Hamming(15,11) FEC, CRC-32, Stop-and-Wait ARQ
+│   ├── compress/           Static Huffman encoder/decoder
+│   ├── transport/          BLE transport, ESP-NOW transport, ESL security layer
+│   └── mem/                48 KB static bump region allocator (zero heap)
+├── tests/                   Multi-tier testing framework
+│   ├── host/               13 native C unit test suites (ASan/UBSan)
+│   ├── main/               On-device integration tests and boot diagnostics
+│   └── components/         Component self-tests
+├── tools/                   Development, capture, diagnostic, and monitoring tools
+│   ├── ceepew_pipeline.py   Master automated test runner (--mode host/diag/pairing/prod)
+│   ├── recompute_paper_numbers.py  Automated paper arithmetic and claim checker
+│   ├── ceepew_monitor.py   Unified colorized serial monitor (single/dual port)
+│   ├── ceepew_log_pipeline.py      Post-test log ingestion and signature detector
+│   ├── ceepew_diagnose.ps1 Unified PowerShell test driver
+│   ├── bench_manifest.py   Evidence manifest generator and SHA-256 sealer
+│   └── capture/            OTA promiscuous capture scripts, PCAP analyzers
+└── fuzz/                    libFuzzer and AFL off-host fuzzing harnesses
 ```
+
+---
 
 ## Cryptographic Stack
 
-| Layer | Algorithm | Purpose |
-|-------|-----------|---------|
-| 1 | X25519 ECDH | Ephemeral shared secret |
-| 2 | Ed25519 EdDSA | Peer identity authentication |
-| 3 | HKDF-SHA256 | Key derivation (RFC 5869) |
-| 4 | HMAC-SHA256 | Commitment binding |
-| 5 | Ascon-128 AEAD | Message encryption + authentication |
-| 6 | digital_sum | Session-key mixing (HKDF salt preprocessor) |
-| 7 | Nonce + expiry | Replay prevention (64-bit, 2^56 hard limit) |
+| Layer | Primitive | Standard / Reference | Security Purpose |
+|:-----:|:----------|:---------------------|:-----------------|
+| **1** | **X25519 ECDH** | RFC 7748 | Ephemeral key agreement; shared secret generation |
+| **2** | **Ed25519 EdDSA** | RFC 8032 | Peer identity verification and per-fragment origin authentication |
+| **3** | **HKDF-SHA256** | RFC 5869 | Cryptographic key expansion with domain-separated labels |
+| **4** | **HMAC-SHA256** | FIPS 198-1 | Commitment binding and outer message authentication |
+| **5** | **Ascon-128 AEAD** | NIST SP 800-232 / v1.2 | Lightweight authenticated payload encryption (128-bit security) |
+| **6** | **digital_sum** | Custom Preprocessor | Non-linear digit-root mixing for HKDF salt enhancement |
+| **7** | **Nonce + Anti-Replay**| 64-bit sliding window | Parity-split counters ($2^{56}$ hard ceiling), WireGuard-style bitmap ($W=64$) |
+
+---
 
 ## Pairing Protocol
 
 The three-phase pairing protocol establishes trust without persistent infrastructure:
 
 1. **Discovery (BLE)** — Both devices advertise and scan. Beacon commitment exchange (truncated SHA-256 over session_code + device IDs). Lower-MAC peer becomes initiator.
+2. **Pairing (BLE GATT)** — Each device encrypts its public keys and Wi-Fi MAC with Ascon-128 AEAD keyed from the session code. Both displays present a 4-digit verification PIN (~13.3 bits of entropy against active MITM during the 45 s window).
+3. **Handoff (ESP-NOW)** — The BLE stack is completely torn down to release radio hardware, ESP-NOW initializes on channel 1, clock offsets synchronize via rendezvous frames, and active encrypted hopping begins.
 
-2. **Pairing (BLE GATT)** — Each device encrypts its Ed25519 sign_pk + Curve25519 box_pubkey + WiFi MAC using Ascon-128 AEAD. Keys derived from the user-entered session code via HKDF. Both devices display a 4-character PIN; the user verifies the PIN matches on both. This provides ~13.3 bits (log2(10^4), numeric) of brute-force resistance against active MITM during the ~45 s pairing window.
+---
 
-3. **Handoff (ESP-NOW)** — BLE torn down, ESP-NOW initialized, peer registered using WiFi MAC exchanged in Phase 2. Session FSM enters ACTIVE state.
+## Security Model & Limitations
 
-## Architecture
+See [SECURITY.md](SECURITY.md) for the formal threat model, cryptographic boundaries, and responsible disclosure policy.
+- **Application-Level Zero Heap**: The application layer executes completely within a 48 KB static region pool; mbedTLS PSA and Wi-Fi drivers allocate internally.
+- **Replay Commit Ordering**: Replay window state is checked read-only before AEAD authentication and committed only after tag verification passes, preventing denial-of-service via state poisoning.
+- **Side-Channel Hardening**: Secret-dependent comparisons use constant-time primitives (`crypto_ct_equal`); key material is scrubbed with `ceepew_secure_zero`.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview, including the memory model, task architecture, and component map.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for the threat model, known limitations, and responsible disclosure policy.
+---
 
 ## License
 
 GNU General Public License v3.0 — see [LICENSE](LICENSE).
+

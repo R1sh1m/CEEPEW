@@ -1846,3 +1846,13 @@ CeePewErr_t session_get_local_pfs_pubkey(uint8_t pfs_pubkey_out[32])
     memcpy(pfs_pubkey_out, g_crypto_ctx.pfs_pubkey, 32U);
     return CEEPEW_OK;
 }
+
+CeePewErr_t session_pfs_auth_key(uint8_t out[32])
+{
+    CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
+    static const uint8_t info[] = "CEEPEW_PFS_AUTH_v1";
+    return crypto_hkdf_derive(g_crypto_ctx.box_seed, 32U,
+                              g_crypto_ctx.session_id, 8U,
+                              info, sizeof(info) - 1U,
+                              out, 32U);
+}

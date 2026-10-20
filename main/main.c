@@ -29,6 +29,7 @@
 #include "esp_mac.h"
 #include "transport_ble.h"
 #include "hal_temp.h"
+#include "bench_timing.h"
 
 static const char *TAG = "CEE-PEW-MAIN";
 
@@ -139,6 +140,14 @@ void app_main(void){
 
     err = hal_radio_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "hal_radio_init failed: %d", (int)err); return; }
+
+    /* E5 sync-pulse instrumentation: configure the shared GPIO14 line and its
+     * falling-edge ISR BEFORE the radio can transmit anything. Without this the
+     * pin is left unconfigured and no pulse is ever emitted (and no edge ever
+     * captured), which silently yields an all-zero timing dump. When
+     * CONFIG_CEEPEW_BENCH_TIMING is off this is a static-inline no-op, so other
+     * builds are unaffected. */
+    bench_timing_init();
 
     /* RNG health check with exponential backoff on transient failures */
     for (int attempt = 0; attempt < 3; attempt++) {

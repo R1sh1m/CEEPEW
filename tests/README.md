@@ -1,127 +1,127 @@
-# tests/ — CEE-PEW On-Device Test Suite
+# tests/ — CEE-PEW Multi-Tier Testing & Validation Framework
 
-The `tests/` component is the project's diagnostic harness. It is a
-gated build of 16 internal test files, compiled into the firmware only
-when `CONFIG_CEEPEW_DEVELOPMENT_MODE` is set in `menuconfig` → "CEE-PEW
-Build Options" → "Diagnostic Mode". With the option off, this component
-contributes nothing to the final binary.
+This directory houses the comprehensive test suites, diagnostic harnesses, and host verification drivers for CEE-PEW. Testing follows a strict multi-tier hierarchy spanning host-side sanitizers, on-device boot self-tests, dual-device protocol integration, and over-the-air capture validation.
 
-## How to run
+---
 
-### Automated Pipeline (Recommended for AI Agents & Developers)
+## Testing Hierarchy Overview
 
+| Tier | Environment | Scope | Harness / Location | Execution Command |
+|------|-------------|-------|--------------------|-------------------|
+| **Tier 1: Host Unit & Crypto** | PC / Host Native (ASan/UBSan) | Ascon AEAD KAT, Ed25519, HKDF, Huffman, Hamming FEC, Replay Window, Side-channel | `tests/host/` | `python tools/ceepew_pipeline.py --mode host` |
+| **Tier 2: Boot Diagnostics** | Target MCU (Core 0 & 1) | 14 hardware/subsystem self-checks executed at boot | `tests/main/`, `tests/components/` | `python tools/ceepew_pipeline.py --mode diag` |
+| **Tier 3: Pairing Integration** | Two ESP32 DevKits | BLE discovery, GATT session-code key derivation, handoff to ESP-NOW | `main/session_fsm.c`, `tools/ceepew_monitor.py` | `python tools/ceepew_pipeline.py --mode pairing` |
+| **Tier 4: Fuzzing Targets** | Host Native (libFuzzer/AFL) | Protocol frame parsing, Ascon decrypt, Hamming syndrome decoding, ARQ state | `fuzz/`, `tests/host/fuzz_driver.c` | `bash tools/run_fuzz_harnesses.sh` |
+| **Tier 5: Production Audit** | Deployment Firmware | eFuse HMAC key, Secure Boot v2, Flash Encryption, diagnostic disablement | `tools/ceepew_production_check.py` | `python tools/ceepew_pipeline.py --mode prod` |
+| **Tier 6: OTA Experimental Rig** | Dual ESP32 + Promiscuous Sniffer | Airtime, entropy analysis, cleartext leakage detection, forged frame rejection | `tools/e1_run_mode.py`, `tools/capture/` | `python tools/capture/mode_report.py` |
+
+---
+
+## Tier 1: Native Host Unit & Sanitizer Tests
+
+Location: `tests/host/` (CMake-driven native build with `-fsanitize=address,undefined` on GCC/Clang).
+
+Executes natively without target hardware:
 ```powershell
-# Run native host unit tests (Ascon, ECDSA, HKDF, Huffman, SHA256, Hamming)
 python tools/ceepew_pipeline.py --mode host
-
-# Run on-device diagnostic tests (auto menuconfig toggle, build, flash, monitor, log ingest)
-python tools/ceepew_pipeline.py --mode diag
-
-# Run two-device pairing test
-python tools/ceepew_pipeline.py --mode pairing
 ```
 
-### Manual ESP-IDF Command Line
+### Coverage by Suite
 
-1. `idf.py menuconfig` -> `CEE-PEW Build Options` -> `Diagnostic Mode` -> `[*]`, Save.
-2. `idf.py build flash monitor -p COM5`
-3. Watch the serial log; the auto-runner prints a structured `=== DIAGNOSTIC REPORT ===` block and reboots after 5 s.
+| Test Target | Primary Primitives Tested | Verification & Pass Criteria |
+|-------------|---------------------------|------------------------------|
+| `test_security_utils` | Constant-time comparison (`crypto_ct_equal`), secure memory zeroing (`ceepew_secure_zero`) | Memory safety, zero leakage, constant execution flow |
+| `test_side_channel` | Timing uniformity of secret-dependent operations | Differential timing rejection, constant execution paths |
+| `test_ascon` | Ascon-128 AEAD encryption, decryption, authenticated tag verification | Known-Answer Test (KAT Count 265), tag forgery rejection |
+| `test_hamming` | Hamming(15,11) FEC encoding, syndrome decoding | Single-bit correction, double-bit error detection, zero-crash bounds |
+| `test_sha256` | SHA-256 compression and streaming hashing | NIST CAVP / RFC known-answer vectors |
+| `test_hkdf` | HKDF-SHA256 (RFC 5869) extract and expand | Salt preprocessing, domain separation labels, PRK generation |
+| `test_eddsa` | Ed25519 key generation, digital signing, signature verification | RFC 8032 vectors, corrupted signature rejection |
+| `test_huffman` | Static Huffman tree encoding and stream decoding | Lossless compression round-trip, out-of-alphabet handling |
+| `test_session_pairing` | Three-phase pairing finite state machine transitions | Phase 1 commitment, Phase 2 key derivation, Phase 3 handoff |
+| `test_arq_sync` | Stop-and-Wait ARQ sequence tracking and ACK validation | Window sliding, duplicate packet detection |
+| `test_arq_fault_injection` | Stop-and-Wait ARQ under synthetic packet drops and timeouts | Retry backoff (100/200/400 ms), effective 5-attempt ceiling |
+| `test_replay_window` | 64-bit WireGuard-style sliding window bitmap | In-order acceptance, duplicate rejection, historical frame rejection |
+| `test_ui_navigator` | Rotary encoder navigation step computation and rollover | Coordinate wrapping, velocity scaling |
 
-## Subsystem coverage
+---
 
-| Subsystem           | File(s)                                           | What it checks                                                                                  |
-|---------------------|---------------------------------------------------|-------------------------------------------------------------------------------------------------|
-| Session FSM         | tests/main/integration_test_e2e.c                 | phase 1/2 transitions, key derivation, MAC lock, termination                                     |
-| Nonce Enforcement   | tests/main/integration_test_e2e.c                 | 10-iteration `enforce_nonce_limit` call loop, counter increments correctly                       |
-| Replay Window       | tests/main/test_replay.c, test_replay_comprehensive.c | 64-bit WG-style sliding window: accept in-order, reject duplicates, accept old-but-not-seen     |
-| Pipeline/Memory     | tests/main/test_pipeline_memory.c                 | region allocator init/alloc/reset; pipeline buffer ownership                                    |
-| HKDF/Key Derive     | tests/main/test_pipeline_memory.c                 | HKDF-SHA256 expand roundtrip; known-answer vectors                                              |
-| Transport Hop       | tests/main/test_hop.c, test_transport_hop.c       | PRG permutation is deterministic; both peers see the same channel sequence for a given session  |
-| Power/Wakeup        | tests/main/test_power.c                           | sleep/deep-sleep transitions; wake source decode                                                |
-| Pairing UI          | tests/main/integration_test_pairing_ui.c          | digit entry, countdown, confirm; full state machine coverage                                     |
-| Curve25519 (RFC)    | tests/components/crypto/curve25519_test.c         | RFC 7748 vector on the project's X25519 implementation                                          |
-| UI Manager          | tests/components/ceepew_hal/ui_manager_test.c     | every state transition; STACKS page renders; bus_recover path                                   |
-| UI Cryptogram       | tests/components/ceepew_hal/ui_cryptogram_test.c  | 6-digit cryptogram render; field/frame encode                                                    |
-| Pairing Handoff     | tests/main/test_pairing_handoff.c                | regression: the handoff bug from Sprint 19 stays fixed                                          |
-| Pairing Converge    | tests/main/test_pairing_convergence.c             | regression: two-device pairing converges to a shared key within 3 attempts                      |
-| Temp Sensor         | tests/components/ceepew_hal/hal_temp_test.c       | on-die sensor returns plausible value; NULL guard; init idempotency                             |
+## Tier 2: On-Device Boot Diagnostics
 
-## The 15th line item — `hal_oled`
+Gated by `CONFIG_CEEPEW_DEVELOPMENT_MODE=y` in menuconfig. The firmware compiles in diagnostic self-tests and automatically executes them at boot, emitting a structured, machine-parsable block:
 
-| Subsystem   | File                                       | What it checks                                                 |
-|-------------|--------------------------------------------|----------------------------------------------------------------|
-| OLED Facade | tests/components/ceepew_hal/hal_oled_test.c | `hal_oled_*` symbols are linked; dimensions match the spec     |
+```powershell
+python tools/ceepew_pipeline.py --mode diag
+```
 
-The facade has no real "behaviour" to test (it's a one-line forwarder to
-`ceepew_oled_*`); the test verifies the wiring.
-
-## Code conventions
-
-- Every test file MUST define its entry point as `void NAME_selftest_run(void)` — never as a constructor. The compiler-enforced
-  ban on `__attribute__((constructor))` is documented in `.github/copilot-instructions.md`.
-- Every test file MUST guard its body with `#ifdef CEEPEW_ENABLE_SELFTEST`. The macro is set in `tests/CMakeLists.txt` only when
-  `CONFIG_CEEPEW_DEVELOPMENT_MODE=y`, so test code is invisible to the
-  compiler when the option is off.
-- Tests print PASS/FAIL with a leading `CEEPEW: ` prefix so `diagnose.ps1`
-  can `Select-String` the serial log without ambiguity.
-- Tests do not `malloc`; if you need a buffer, declare it `static`.
-
-## Reading the DIAGNOSTIC REPORT
-
-The on-boot `app_main` calls `integration_tests_run_all()` which
-emits, in order:
+### The 14 Subsystem Diagnostic Checks
 
 ```
 === DIAGNOSTIC REPORT ===
-  [Session FSM      ] PASS
-  [Nonce Enforcement] PASS
-  [Replay Window    ] PASS
-  [Pipeline/Memory  ] PASS
-  [HKDF/Key Derive  ] PASS
-  [Transport Hop    ] PASS
-  [Power/Wakeup     ] PASS
-  [Pairing UI       ] PASS
-  [Curve25519 (RFC) ] PASS
-  [UI Manager       ] PASS
-  [UI Cryptogram    ] PASS
-  [Pairing Handoff  ] PASS
-  [Pairing Converge ] PASS
-  [Temp Sensor      ] PASS
+  [Session FSM      ] PASS  # Phase transitions, key exchange, handoff
+  [Nonce Enforcement] PASS  # Counter increments, 2^56 hard ceiling enforcement
+  [Replay Window    ] PASS  # In-order accept, duplicate reject, old frame drop
+  [Pipeline/Memory  ] PASS  # 48 KB static region allocator init, ownership, reset
+  [HKDF/Key Derive  ] PASS  # Salt preprocessor and RFC 5869 vector match
+  [Transport Hop    ] PASS  # Deterministic PRG 9-channel hopping sync
+  [Power/Wakeup     ] PASS  # Light/deep sleep transitions and wake decode
+  [Pairing UI       ] PASS  # 4-digit verification code entry and timeout
+  [Curve25519 (RFC) ] PASS  # RFC 7748 X25519 test vector on hardware
+  [UI Manager       ] PASS  # SSD1306 OLED rendering and I2C recovery
+  [UI Cryptogram    ] PASS  # Cryptogram rendering and verification display
+  [Pairing Handoff  ] PASS  # BLE-to-ESP-NOW transport transition
+  [Pairing Converge ] PASS  # Two-device convergence within 3 attempts
+  [Temp Sensor      ] PASS  # On-die silicon temperature sanity check
   Total: 14 / 14 subsystems passed
 =========================
 ```
 
-Each line is machine-grepable: starts with `"  ["`, ends with `"PASS"`
-or `"FAIL"`. `diagnose.ps1` regex-matches every line and reports the
-first failure.
+---
 
-## AI-agent workflow
+## Tier 3: Two-Device Pairing & Protocol Integration
 
-When triaging a bug report, an AI agent can:
+Verifies the physical interaction between two ESP32 devices over BLE and ESP-NOW:
 
-1. Run `idf.py menuconfig` to enable Diagnostic Mode.
-2. Flash the binary.
-3. Pipe `idf.py monitor -p COM5` through `diagnose.ps1` (or any
-   `Select-String` over the `DIAGNOSTIC REPORT` block).
-4. The first `FAIL` line tells you which subsystem to grep:
-
-```
-rg -l 'subsystem_keyword' main/ components/ tests/
+```powershell
+python tools/ceepew_pipeline.py --mode pairing
 ```
 
-See `.github/copilot-instructions.md` for the module dependency DAG
-when narrowing down a fail.
+Workflow:
+1. Flashes Device A and Device B sequentially.
+2. Launches [`tools/ceepew_monitor.py`](../tools/ceepew_monitor.py) across both serial ports simultaneously.
+3. Observes BLE advertising, commitment exchange, GATT connection, verification PIN matching, and successful handoff to active ESP-NOW communication.
+4. Auto-ingests logs into [`DEVICE_LOG_FINDINGS.md`](../DEVICE_LOG_FINDINGS.md) via [`tools/ceepew_log_pipeline.py`](../tools/ceepew_log_pipeline.py).
 
-## Production policy
+---
 
-`sdkconfig.production` is the production build configuration. It
-contains:
+## Tier 4: Fuzzing Harnesses
 
+Location: `fuzz/` and `tests/host/fuzz_driver.c`.
+
+Off-host fuzzing targets input decoders and parsers using libFuzzer and AFL:
+- `fuzz_ascon`: Corrupted ciphertext and mutated associated data (AAD) injection.
+- `fuzz_sha256`: Stream boundary fuzzing.
+- `fuzz_hamming`: Arbitrary bit-flip injection across 15-bit codewords.
+- `fuzz_hkdf`: Variable-length PRK and info field expansion.
+- `fuzz_arq`: Sequence counter mutation and ACK desynchronization.
+
+Run all fuzz targets:
+```bash
+bash tools/run_fuzz_harnesses.sh
 ```
-# CONFIG_CEEPEW_DEVELOPMENT_MODE is not set
+
+---
+
+## Tier 5: Production Readiness Audit
+
+Audits the firmware build configuration before production release:
+
+```powershell
+python tools/ceepew_pipeline.py --mode prod
 ```
 
-A production build that accidentally enables the option will fail its
-`idf.py build` validation in CI (the `tests/` component will pull in
-test code, and the binary size budget will be exceeded). Do not delete
-this line.
+Validates:
+- `CONFIG_CEEPEW_DEVELOPMENT_MODE=n` (diagnostic test suite stripped from binary)
+- Flash encryption enabled
+- Secure Boot v2 enabled
+- Binary memory budget within 4 MB flash partitions

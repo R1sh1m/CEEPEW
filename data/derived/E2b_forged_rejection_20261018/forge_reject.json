@@ -1,0 +1,296 @@
+{
+  "run_id": "E2b_forged_rejection_20261018",
+  "window_seconds": 2.0,
+  "clock_used": "device",
+  "forged_tx": {
+    "total": 16,
+    "forge_armed": 16,
+    "by_device": {
+      "DEVICE_A": {
+        "count": 8,
+        "seqs": [
+          9,
+          19,
+          29,
+          39,
+          49,
+          59,
+          69,
+          79
+        ]
+      },
+      "DEVICE_B": {
+        "count": 8,
+        "seqs": [
+          9,
+          19,
+          29,
+          39,
+          49,
+          59,
+          69,
+          79
+        ]
+      }
+    }
+  },
+  "rejections": {
+    "total": 36,
+    "by_kind": {
+      "replay": 2,
+      "ascon": 1,
+      "pipeline": 17,
+      "box": 16
+    },
+    "by_device_kind": {
+      "DEVICE_B": {
+        "replay": 1,
+        "box": 8,
+        "pipeline": 8
+      },
+      "DEVICE_A": {
+        "replay": 1,
+        "ascon": 1,
+        "pipeline": 9,
+        "box": 8
+      }
+    }
+  },
+  "matching": {
+    "matched_count": 16,
+    "unmatched_count": 0,
+    "median_delta_us": 400000.0,
+    "max_abs_delta_us": 1500000,
+    "median_delta_host_s": 0.4000000000000057
+  },
+  "unexplained_rejections": {
+    "count": 6,
+    "by_kind": {
+      "replay": 2,
+      "ascon": 1,
+      "pipeline": 3
+    }
+  },
+  "match_details": [
+    {
+      "forged_seq": 9,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 61.1,
+      "forged_device_ts_us": 60945,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 500000,
+      "delta_t_host_s": 0.5
+    },
+    {
+      "forged_seq": 9,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 62.3,
+      "forged_device_ts_us": 62093,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 19,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 111.7,
+      "forged_device_ts_us": 111512,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.3999999999999915
+    },
+    {
+      "forged_seq": 19,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 113.1,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 29,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 162.3,
+      "forged_device_ts_us": null,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 29,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 163.5,
+      "forged_device_ts_us": 163261,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 39,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 212.9,
+      "forged_device_ts_us": 212711,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 39,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 214.2,
+      "forged_device_ts_us": 213962,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 400000,
+      "delta_t_host_s": 0.4000000000000057
+    },
+    {
+      "forged_seq": 49,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 263.5,
+      "forged_device_ts_us": 263265,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 49,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 264.7,
+      "forged_device_ts_us": 264536,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 500000,
+      "delta_t_host_s": 0.5
+    },
+    {
+      "forged_seq": 59,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 314.0,
+      "forged_device_ts_us": 313742,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 59,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 315.1,
+      "forged_device_ts_us": 314898,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 399999,
+      "delta_t_host_s": 0.39999999999997726
+    },
+    {
+      "forged_seq": 69,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 365.7,
+      "forged_device_ts_us": 364260,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 500000,
+      "delta_t_host_s": 0.5
+    },
+    {
+      "forged_seq": 69,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 367.2,
+      "forged_device_ts_us": 365503,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 699999,
+      "delta_t_host_s": 0.6999999999999886
+    },
+    {
+      "forged_seq": 79,
+      "forged_device": "DEVICE_A",
+      "forged_host_ts": 441.1,
+      "forged_device_ts_us": 414816,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_B",
+      "reject_err": 5,
+      "delta_t_us": 99999,
+      "delta_t_host_s": 0.0999999999999659
+    },
+    {
+      "forged_seq": 79,
+      "forged_device": "DEVICE_B",
+      "forged_host_ts": 442.7,
+      "forged_device_ts_us": 416115,
+      "reject_kind": "box",
+      "reject_device": "DEVICE_A",
+      "reject_err": 5,
+      "delta_t_us": 1500000,
+      "delta_t_host_s": 1.5
+    }
+  ],
+  "unexplained_details": [
+    {
+      "device": "DEVICE_B",
+      "kind": "replay",
+      "err": 0,
+      "host_ts": 13.9,
+      "device_ts_us": null
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "replay",
+      "err": 0,
+      "host_ts": 14.0,
+      "device_ts_us": 13767
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "ascon",
+      "err": 5,
+      "host_ts": 16.9,
+      "device_ts_us": 16742
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 17.0,
+      "device_ts_us": 16750
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 315.6,
+      "device_ts_us": 315355
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 368.0,
+      "device_ts_us": 365964
+    }
+  ]
+}

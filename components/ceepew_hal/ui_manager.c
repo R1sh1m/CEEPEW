@@ -2453,16 +2453,18 @@ CeePewErr_t ui_chat_show_bubble(uint8_t msg_idx, uint8_t y_pos, uint8_t dir, boo
 static void render_new_msg_banner(uint8_t x, uint8_t y)
 {
     if (g_ui_ctx.new_msg_count == 0U) { return; }
-    char banner[12U];
-    if (g_ui_ctx.new_msg_count > 9U) {
-        (void)snprintf(banner, sizeof(banner), "[!9+]");
+    char banner[16U];
+    /* Dynamic unread count display: shows actual count up to 99, then "99+" for overflow.
+     * Banner width auto-adjusts: "[!1]" = 24px, "[!99]" = 36px, "[!99+]" = 42px.
+     * Glyph width = 6px, +2px padding for clean rendering. */
+    if (g_ui_ctx.new_msg_count > 99U) {
+        (void)snprintf(banner, sizeof(banner), "[!99+]");
     } else {
         (void)snprintf(banner, sizeof(banner), "[!%u]", (unsigned)g_ui_ctx.new_msg_count);
     }
     uint8_t len = (uint8_t)strlen(banner);
-    /* Clamp to display bounds: the "[!9+]" banner is 5 glyphs = 32 px wide,
-     * and callers may pass x=100, so an unclamped w would exceed the
-     * 128 px frame and trip the rect_fill bounds assert. */
+    /* Clamp to display bounds: banner may be 4-7 glyphs (24-44px),
+     * and callers may pass x=90-100, so clamp width to prevent overflow. */
     uint8_t w = (uint8_t)(len * 6U + 2U);
     if ((uint16_t)x + w > HAL_UI_WIDTH_PX) { w = (uint8_t)(HAL_UI_WIDTH_PX - x); }
     HalUIRect_t bg = { .x = x, .y = y, .w = w, .h = 9U };
@@ -2492,14 +2494,23 @@ static CeePewErr_t render_chat_thread(void)
     draw_hline(0U, (uint8_t)(11U + banner_shift), 128U);
 
     uint8_t count = msg_store_count();
+    /* Message count badge: right-aligned, shows total messages in store */
     char badge[16U];
-    (void)snprintf(badge, sizeof(badge), "M%u", (unsigned)count);
+    if (count > 99U) {
+        (void)snprintf(badge, sizeof(badge), "M%u", (unsigned)count);
+    } else {
+        (void)snprintf(badge, sizeof(badge), "M%u", (unsigned)count);
+    }
     hal_ui_text(102U, (uint8_t)(1U + banner_shift), badge, HAL_UI_WHITE);
 
-    /* Unread badge: count of received messages not yet opened */
-    uint8_t unread = msg_store_unread_count();
-    char unread_str[8U];
-    (void)snprintf(unread_str, sizeof(unread_str), "U%u", (unsigned)unread);
+    /* Unread badge: left-aligned, live count of received messages not yet opened */
+    uint16_t unread = msg_store_unread_count();
+    char unread_str[12U];
+    if (unread > 99U) {
+        (void)snprintf(unread_str, sizeof(unread_str), "U99+");
+    } else {
+        (void)snprintf(unread_str, sizeof(unread_str), "U%u", (unsigned)unread);
+    }
     hal_ui_text(0U, (uint8_t)(1U + banner_shift), unread_str, HAL_UI_WHITE);
 
     if (count == 0U) {
@@ -2896,11 +2907,17 @@ static CeePewErr_t render_chat_menu(void)
         draw_selected_option_row(8U, y, 112U, 14U, OPTS[i], (i == sel));
     }
 
-    /* Message count badge */
+    /* Message count badge — dynamic, shows actual count up to 999 */
     uint8_t cnt = (uint8_t)msg_store_count();
     if (cnt > 0U) {
-        char badge[12U];
-        (void)snprintf(badge, sizeof(badge), "[%u msg]", (unsigned)cnt);
+        char badge[16U];
+        if (cnt > 99U) {
+            (void)snprintf(badge, sizeof(badge), "[%u msgs]", (unsigned)cnt);
+        } else if (cnt == 1U) {
+            (void)snprintf(badge, sizeof(badge), "[1 msg]");
+        } else {
+            (void)snprintf(badge, sizeof(badge), "[%u msgs]", (unsigned)cnt);
+        }
         hal_ui_text(4U, (uint8_t)(54U + banner_shift), badge, HAL_UI_WHITE);
     }
 

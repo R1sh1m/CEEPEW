@@ -28,11 +28,9 @@
 extern "C" {
 #endif
 
-/* Ring depth and per-entry payload cap. 16 x ~308 B ~= 5 KB static. */
-#define TRANSPORT_CAPTURE_RING_LEN  16U
+/* Ring depth and per-entry payload cap. 4 x ~308 B ~= 1.2 KB static. */
+#define TRANSPORT_CAPTURE_RING_LEN  4U
 #define TRANSPORT_CAPTURE_MAX_BYTES 300U
-
-#ifdef CONFIG_CEEPEW_CAPTURE
 
 /* Install MGMT promiscuous filter + RX callback, enable promiscuous mode,
  * and start the logger task. Must be called AFTER BLE teardown when WiFi
@@ -44,14 +42,6 @@ void transport_capture_stop(void);
 
 /* True once transport_capture_start() has succeeded. */
 bool transport_capture_is_running(void);
-
-#else /* CONFIG_CEEPEW_CAPTURE not set: no-op stubs, zero footprint */
-
-static inline CeePewErr_t transport_capture_start(void) { return CEEPEW_OK; }
-static inline void transport_capture_stop(void) { }
-static inline bool transport_capture_is_running(void) { return false; }
-
-#endif /* CONFIG_CEEPEW_CAPTURE */
 
 #ifdef __cplusplus
 }

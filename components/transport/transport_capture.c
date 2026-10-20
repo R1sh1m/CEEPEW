@@ -33,8 +33,6 @@
  * CONFIG_CEEPEW_CAPTURE=y). This is the ESP-IDF-idiomatic pattern. */
 #include "sdkconfig.h"
 
-#ifdef CONFIG_CEEPEW_CAPTURE
-
 #include "transport_capture.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
@@ -44,6 +42,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "capture";
@@ -67,20 +66,15 @@ static volatile uint8_t s_tail = 0U;
 static volatile bool s_running = false;
 static TaskHandle_t s_logger_task = NULL;
 
-/* Static hex scratch for the logger task (never on the task stack). */
-static char s_hex_row[100];
-
-/* Static footprint guard: ring + scratch must stay well under budget. */
+/* Static footprint guard: ring must stay well under budget. */
 _Static_assert(sizeof(s_ring) <= 8192U, "capture ring exceeds 8 KB static budget");
-_Static_assert(TRANSPORT_CAPTURE_RING_LEN == 16U, "capture ring depth changed");
+_Static_assert(TRANSPORT_CAPTURE_RING_LEN == 4U, "capture ring depth changed");
 _Static_assert(TRANSPORT_CAPTURE_MAX_BYTES == 300U, "capture payload cap changed");
 
 /* ISR-light promiscuous callback: MGMT filter + OUI guard, copy, advance. */
 static void IRAM_ATTR transport_capture_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 {
-    if (type != WIFI_PKT_MGMT) {
-        return;
-    }
+    /* accept all packet types – removed MGMT-only filter */
     if (buf == NULL) {
         return;
     }
@@ -90,12 +84,7 @@ static void IRAM_ATTR transport_capture_cb(void *buf, wifi_promiscuous_pkt_type_
         return;
     }
     const uint8_t *payload = pkt->payload;
-    if (payload[24] != 0x7FU) {
-        return;
-    }
-    if (payload[25] != 0x18U || payload[26] != 0xFEU || payload[27] != 0x34U) {
-        return;
-    }
+    /* OUI guard disabled */
     uint16_t copy_len = (sig_len > TRANSPORT_CAPTURE_MAX_BYTES)
                         ? TRANSPORT_CAPTURE_MAX_BYTES
                         : (uint16_t)sig_len;
@@ -113,8 +102,12 @@ static void IRAM_ATTR transport_capture_cb(void *buf, wifi_promiscuous_pkt_type_
     s_head = idx;
 }
 
-/* Low-priority logger task: prints ts,rssi,ch,len,hex per ring entry.
- * Polls the ring; all formatting uses static buffers only. */
+/* Low-priority logger task: prints one single-line CSV row per ring entry:
+ *   ts_us,rssi_dbm,channel,len,HEX (contiguous %02X, no spaces/colons).
+ * Matches tools/capture/serial_to_pcap.py LINE_RE and
+ * tools/promisc_capture_helper.py RING_LINE_RE. Raw printf (no ESP_LOGI
+ * tag prefix) so the strict RING_LINE_RE ^\d+, anchor holds. Polls the
+ * ring; zero-heap, static ring only. */
 static void transport_capture_logger_task(void *arg)
 {
     (void)arg;
@@ -122,33 +115,18 @@ static void transport_capture_logger_task(void *arg)
         uint8_t head = s_head;
         while (s_tail != head) {
             uint8_t idx = s_tail;
-            uint32_t ts_us = s_ring[idx].ts_us;
-            int rssi_dbm = (int)s_ring[idx].rssi_dbm;
-            unsigned channel = (unsigned)s_ring[idx].channel;
-            unsigned len = (unsigned)s_ring[idx].len;
-            ESP_LOGI(TAG, "cap ts=%lu rssi=%d ch=%u len=%u",
-                     (unsigned long)ts_us, rssi_dbm, channel, len);
-            for (uint16_t off = 0U; off < s_ring[idx].len;) {
-                uint16_t row_len = (uint16_t)(s_ring[idx].len - off);
-                if (row_len > 32U) {
-                    row_len = 32U;
-                }
-                uint16_t pos = 0U;
-                for (uint16_t i = 0U; i < row_len; i++) {
-                    pos += (uint16_t)snprintf(s_hex_row + pos,
-                                              sizeof(s_hex_row) - pos,
-                                              "%02X ", s_ring[idx].buf[off + i]);
-                    if (pos >= sizeof(s_hex_row) - 4U) {
-                        break;
-                    }
-                }
-                s_hex_row[pos] = '\0';
-                ESP_LOGI(TAG, "  %s", s_hex_row);
-                off = (uint16_t)(off + row_len);
+            printf("%lu,%d,%u,%u,",
+                   (unsigned long)s_ring[idx].ts_us,
+                   (int)s_ring[idx].rssi_dbm,
+                   (unsigned)s_ring[idx].channel,
+                   (unsigned)s_ring[idx].len);
+            for (uint16_t i = 0U; i < s_ring[idx].len; i++) {
+                printf("%02X", s_ring[idx].buf[i]);
             }
+            printf("\n");
             s_tail = (uint8_t)((idx + 1U) % TRANSPORT_CAPTURE_RING_LEN);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -159,7 +137,7 @@ CeePewErr_t transport_capture_start(void)
     }
     wifi_promiscuous_filter_t filt;
     memset(&filt, 0, sizeof(filt));
-    filt.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
+    filt.filter_mask = WIFI_PROMIS_FILTER_MASK_ALL;
     if (esp_wifi_set_promiscuous_filter(&filt) != ESP_OK) {
         return CEEPEW_ERR_HW;
     }
@@ -176,14 +154,14 @@ CeePewErr_t transport_capture_start(void)
         return CEEPEW_ERR_HW;
     }
     if (s_logger_task == NULL) {
-        if (xTaskCreate(transport_capture_logger_task, "cap_log", 2048,
+        if (xTaskCreate(transport_capture_logger_task, "cap_log", 1536,
                         NULL, 1, &s_logger_task) != pdPASS) {
             (void)esp_wifi_set_promiscuous(false);
             return CEEPEW_ERR_HW;
         }
     }
     s_running = true;
-    ESP_LOGI(TAG, "on-node capture started (MGMT filter, OUI 18:fe:34)");
+    ESP_LOGI(TAG, "on-node capture started (all-packet filter)");
     return CEEPEW_OK;
 }
 
@@ -201,5 +179,3 @@ bool transport_capture_is_running(void)
 {
     return s_running;
 }
-
-#endif /* CONFIG_CEEPEW_CAPTURE */

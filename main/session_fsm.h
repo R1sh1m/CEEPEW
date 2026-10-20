@@ -163,6 +163,19 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
                                  const uint8_t peer_mac[6],
                                  const uint8_t peer_public_key[32]);
 
+#if CONFIG_CEEPEW_BENCH_58B
+/* Bench-only: arm corruption of the next frame's outer box ciphertext
+ * (post-encrypt, pre-sign), exercising the peer's forged-fresh-seq reject
+ * path (box HMAC fail) over the air. No effect unless armed. */
+void session_send_bench_forge_next(void);
+
+/* Bench-only: arm replay injection of the next frame's ESL-wrapped blob
+ * (stale ESL msg_id, fresh ARQ seq downstream), exercising the peer's
+ * replay-window reject path (CEEPEW_ERR_REPLAY) over the air. No effect
+ * unless armed. */
+void session_send_bench_replay_next(void);
+#endif
+
 /* Get peer's Ed25519 public key (for signature verification).
  * Returns the key that was stored via session_set_peer_public_key() during
  * the BLE commitment exchange. No derivation or RNG is performed.
@@ -590,6 +603,9 @@ bool session_pfs_peer_ready(void);
 /* Get the PFS ephemeral public key to send to peer.
  * Must be called after session_pfs_initiate() returns success. */
 CeePewErr_t session_get_local_pfs_pubkey(uint8_t pfs_pubkey_out[32]);
+
+/* Derive the dedicated HMAC key that authenticates the in-band PFS handshake. */
+CeePewErr_t session_pfs_auth_key(uint8_t out[32]);
 
 /* ── Test injection setters (replace the old __attribute__((weak)) mocks) ──
  * Setting a value short-circuits the corresponding session_get_*() return.

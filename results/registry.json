@@ -1,0 +1,913 @@
+{
+  "schema_version": 1,
+  "updated_utc": "2026-10-19T06:36:27+00:00",
+  "project": "CEE-PEW",
+  "conference": "IEEE ICITIIT 2027",
+  "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
+  "evidence_classes": {
+    "M-HW": "Measured on physical ESP32 target hardware with production firmware or on-device timers/logs",
+    "M-HOST": "Measured in host C unit-test harness or simulation harness (ASan/UBSan)",
+    "C": "Mathematically computed/derived from exact protocol wire budget or 802.11 timing equations",
+    "S": "Cited from external vendor datasheet or published literature benchmark",
+    "E": "Projection or conservative engineering estimate (bounded scope)"
+  },
+  "entries": [
+    {
+      "id": "WB-FULL-CSIG",
+      "description": "Full Profile inner signed payload size (Pc=58)",
+      "formula": "Pc + 100",
+      "value": "158",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.B"
+      }
+    },
+    {
+      "id": "WB-FULL-CFEC",
+      "description": "Full Profile encoded FEC payload size (Pc=58)",
+      "formula": "ceil(ceil(8 * Csig / 11) * 15 / 8) + 4",
+      "value": "220",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.C"
+      }
+    },
+    {
+      "id": "WB-FULL-CWIRE",
+      "description": "Full Profile worst-case wire size (Pc=58)",
+      "formula": "Cfec + 24 (ESL hdr) + 4 (CRC) + 1 (ARQ)",
+      "value": "249",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.C, Eq. 4"
+      }
+    },
+    {
+      "id": "WB-LITE-ASCON",
+      "description": "Lite Profile Ascon ciphertext size (Pc=58)",
+      "formula": "Pc + 2 (frag hdr) + 16 (tag)",
+      "value": "76",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.B"
+      }
+    },
+    {
+      "id": "WB-LITE-FEC",
+      "description": "Lite Profile wire size with Hamming(15,11) FEC",
+      "formula": "ceil(ceil(8 * 76 / 11) * 15 / 8) + 4 + 29",
+      "value": "138",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.C"
+      }
+    },
+    {
+      "id": "WB-LITE-NOFEC",
+      "description": "Lite Profile wire size without FEC",
+      "formula": "76 + 29",
+      "value": "105",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.C"
+      }
+    },
+    {
+      "id": "EFF-FULL-FEC",
+      "description": "Full Profile wire efficiency with FEC (Pc=58)",
+      "formula": "58 / 249 * 100",
+      "value": "23.3",
+      "unit": "%",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Table II"
+      }
+    },
+    {
+      "id": "EFF-LITE-FEC",
+      "description": "Lite Profile wire efficiency with FEC (Pc=58)",
+      "formula": "58 / 138 * 100",
+      "value": "42.0",
+      "unit": "%",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Table II"
+      }
+    },
+    {
+      "id": "EFF-LITE-NOFEC",
+      "description": "Lite Profile wire efficiency without FEC (Pc=58)",
+      "formula": "58 / 105 * 100",
+      "value": "55.2",
+      "unit": "%",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Table II"
+      }
+    },
+    {
+      "id": "MAX-FULL-FEC",
+      "description": "Maximum payload chunk for Full Profile with FEC within 249 B",
+      "formula": "argmax Pc s.t. Cwire <= 249",
+      "value": "58",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.B"
+      }
+    },
+    {
+      "id": "MAX-FULL-NOFEC",
+      "description": "Maximum payload chunk for Full Profile without FEC in 249 B",
+      "formula": "249 - 129",
+      "value": "120",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.B"
+      }
+    },
+    {
+      "id": "MAX-LITE-FEC",
+      "description": "Maximum payload chunk for Lite Profile with FEC in 249 B",
+      "formula": "argmax Pc s.t. Cwire_lite <= 249",
+      "value": "140",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.B"
+      }
+    },
+    {
+      "id": "MAX-LITE-NOFEC",
+      "description": "Maximum payload chunk for Lite Profile without FEC in 249 B",
+      "formula": "249 - 47",
+      "value": "202",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.B"
+      }
+    },
+    {
+      "id": "V2-MAX-FULL-FEC",
+      "description": "ESP-NOW v2.0 (1,470 B budget) Full Profile max chunk with FEC",
+      "formula": "argmax Pc s.t. Cwire <= 1470",
+      "value": "953",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section VI.A"
+      }
+    },
+    {
+      "id": "V2-MAX-FULL-NOFEC",
+      "description": "ESP-NOW v2.0 Full Profile max chunk without FEC",
+      "formula": "1470 - 129",
+      "value": "1341",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section VI.A"
+      }
+    },
+    {
+      "id": "V2-MAX-LITE-FEC",
+      "description": "ESP-NOW v2.0 Lite Profile max chunk with FEC",
+      "formula": "argmax Pc s.t. Cwire_lite <= 1470",
+      "value": "1035",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section VI.A"
+      }
+    },
+    {
+      "id": "V2-MAX-LITE-NOFEC",
+      "description": "ESP-NOW v2.0 Lite Profile max chunk without FEC",
+      "formula": "1470 - 47",
+      "value": "1423",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section VI.A"
+      }
+    },
+    {
+      "id": "AIR-249-MPDU",
+      "description": "802.11 airtime for 249 B MPDU at 1 Mbps with 192 us long preamble",
+      "formula": "192 us + (249 + 39) * 8 us",
+      "value": "2.528",
+      "unit": "ms",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section IV.B"
+      }
+    },
+    {
+      "id": "AIR-ACK",
+      "description": "802.11 hardware MAC ACK airtime (14 B frame at 1 Mbps)",
+      "formula": "192 us + 14 * 8 us",
+      "value": "0.304",
+      "unit": "ms",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section IV.B"
+      }
+    },
+    {
+      "id": "AIR-DATA-ACK",
+      "description": "Total air transaction time (249 B Data + SIFS 10 us + MAC ACK)",
+      "formula": "2.528 ms + 0.010 ms + 0.304 ms",
+      "value": "2.84",
+      "unit": "ms",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section IV.B"
+      }
+    },
+    {
+      "id": "CYC-X25519",
+      "description": "Host-measured X25519 ECDH duration on ESP32 at 240 MHz (52.5 Mcycles)",
+      "formula": "52.5 Mcycles / 240 MHz",
+      "value": "218.75",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 53,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "raw_log": "logs/pairing_clean_20260802.txt"
+      }
+    },
+    {
+      "id": "CYC-ED25519",
+      "description": "Ed25519 signing duration on ESP32 at 240 MHz (-Og debug build, 258.0 Mcycles)",
+      "formula": "258.0 Mcycles / 240 MHz",
+      "value": "1075",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 76,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "CYC-TOTAL",
+      "description": "Full Profile combined crypto CPU time per fragment (317.3 Mcycles)",
+      "formula": "317.3 Mcycles / 240 MHz",
+      "value": "1322",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 76,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "CYC-LITE-CPU",
+      "description": "Lite Profile CPU time per fragment (Ascon-128 AEAD, 2.40 Mcycles)",
+      "formula": "2.40 Mcycles / 240 MHz",
+      "value": "10.0",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 98,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "CYC-VEND-X",
+      "description": "Vendor benchmark X25519 duration (Oryx CycloneCRYPTO on ESP32 at 240 MHz)",
+      "formula": "3.9 Mcycles / 240 MHz",
+      "value": "16.25",
+      "unit": "ms",
+      "class": "S",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Oryx Embedded Benchmark"
+      }
+    },
+    {
+      "id": "CYC-VEND-ED",
+      "description": "Vendor benchmark Ed25519 duration (Oryx CycloneCRYPTO on ESP32 at 240 MHz)",
+      "formula": "6.8 Mcycles / 240 MHz",
+      "value": "28.33",
+      "unit": "ms",
+      "class": "S",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Oryx Embedded Benchmark"
+      }
+    },
+    {
+      "id": "GP-FULL",
+      "description": "Full Profile sustainable application goodput (single-frame 58 B delivery)",
+      "formula": "58 B / 1.322 s",
+      "value": "44",
+      "unit": "B/s",
+      "class": "M-HW",
+      "n": 80,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "GP-LITE",
+      "description": "Lite Profile sustainable application goodput",
+      "formula": "58 B / 0.027 s",
+      "value": "2.1",
+      "unit": "KB/s",
+      "class": "M-HW",
+      "n": 76,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "LAT-LITE-CB",
+      "description": "Lite Profile send-callback latency (median over 76 trials)",
+      "formula": "median(esp_now_send_cb_time - send_trigger_time)",
+      "value": "18.0",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 76,
+      "source": {
+        "script": "tools/bench_timing_report.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "LAT-LITE-TOTAL",
+      "description": "Lite Profile total TX-to-ACK delivery latency (median over 76 trials)",
+      "formula": "median(total_elapsed_per_frame)",
+      "value": "27.0",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 76,
+      "source": {
+        "script": "tools/bench_timing_report.py",
+        "raw_log": "logs/bench58_run2.txt"
+      }
+    },
+    {
+      "id": "ARQ-WORST",
+      "description": "Stop-and-Wait ARQ worst-case timeout (5 attempts: 100/200/400/400/400 ms + 5*600 ms timeout)",
+      "formula": "5 * 600 ms + 100 + 200 + 400 + 400 = 4100 ms",
+      "value": "4100",
+      "unit": "ms",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.D"
+      }
+    },
+    {
+      "id": "ENTROPY-PIN",
+      "description": "4-digit verification code brute-force resistance during 45 s pairing window",
+      "formula": "log2(10^4)",
+      "value": "13.3",
+      "unit": "bits",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section III.A"
+      }
+    },
+    {
+      "id": "ASCII-SHARE",
+      "description": "Theoretical printable ASCII share over random byte pool (95 / 256)",
+      "formula": "95 / 256 * 100",
+      "value": "37.11",
+      "unit": "%",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section IV.A"
+      }
+    },
+    {
+      "id": "RULE-OF-THREE",
+      "description": "95% confidence upper bound on failure rate given 0 failures in 100 trials",
+      "formula": "3 / 100 * 100",
+      "value": "3.0",
+      "unit": "%",
+      "class": "C",
+      "n": 100,
+      "source": {
+        "script": "tools/recompute_paper_numbers.py",
+        "reference": "Section V.A"
+      }
+    },
+    {
+      "id": "BENCH-SIGN-US",
+      "description": "On-device hardware execution: Ed25519 signature generation (TX path)",
+      "formula": "median(sign_us across 114 trials)",
+      "value": "332183",
+      "unit": "us",
+      "class": "M-HW",
+      "n": 114,
+      "source": {
+        "script": "tools/bench_timing_report.py",
+        "raw_log": "data/derived/bench58_today_stages.csv"
+      }
+    },
+    {
+      "id": "BENCH-BOX-US",
+      "description": "On-device hardware execution: XSalsa20/HMAC box opening (RX path)",
+      "formula": "median(box_us across 106 trials)",
+      "value": "1458.5",
+      "unit": "us",
+      "class": "M-HW",
+      "n": 106,
+      "source": {
+        "script": "tools/bench_timing_report.py",
+        "raw_log": "data/derived/bench58_today_stages.csv"
+      }
+    },
+    {
+      "id": "BENCH-ASCON-US",
+      "description": "On-device hardware execution: Ascon-128 AEAD decrypt and verify (RX path)",
+      "formula": "median(ascon_us across 98 trials)",
+      "value": "327.5",
+      "unit": "us",
+      "class": "M-HW",
+      "n": 98,
+      "source": {
+        "script": "tools/bench_timing_report.py",
+        "raw_log": "data/derived/bench58_today_stages.csv"
+      }
+    },
+    {
+      "id": "BENCH-EDVERIFY-US",
+      "description": "On-device hardware execution: Ed25519 signature verification (RX path)",
+      "formula": "median(edverify_us across 99 trials)",
+      "value": "662674",
+      "unit": "us",
+      "class": "M-HW",
+      "n": 99,
+      "source": {
+        "script": "tools/bench_timing_report.py",
+        "raw_log": "data/derived/bench58_today_stages.csv"
+      }
+    },
+    {
+      "id": "TEST-HOST-UNIT",
+      "description": "Native host C unit test suites passing with AddressSanitizer and UBSan",
+      "formula": "count(host_tests_passed) / count(host_tests_total)",
+      "value": "13/13",
+      "unit": "suites",
+      "class": "M-HOST",
+      "n": 13,
+      "source": {
+        "script": "python tools/ceepew_pipeline.py --mode host",
+        "reference": "tests/host/CMakeLists.txt"
+      }
+    },
+    {
+      "id": "TEST-DIAG-BOOT",
+      "description": "On-device boot diagnostic self-test subsystem checks passing",
+      "formula": "count(diag_subsystems_passed) / 14",
+      "value": "14/14",
+      "unit": "checks",
+      "class": "M-HW",
+      "n": 14,
+      "source": {
+        "script": "python tools/ceepew_pipeline.py --mode diag",
+        "reference": "tests/main/integration_test_e2e.c"
+      }
+    },
+    {
+      "id": "EXP-FORGE-REJECT",
+      "description": "Hardware rejection of forged Ascon-128 AEAD frames over the air",
+      "formula": "forged_frames_rejected / forged_frames_transmitted",
+      "value": "10/10",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 10,
+      "source": {
+        "script": "tools/e1_run_mode.py",
+        "raw_log": "data/raw/E1_B_ccmp_20261017/capture_dual.log"
+      },
+      "superseded_by": "EXP-FORGE-REJECT-MODEC",
+      "note": "Stale: this entry was measured on a Mode A/B (ESL_BYPASS=1) run. In Modes A and B the application authenticator (ESL/Ascon + crypto_box) is bypassed, so forged frames are NOT rejected at an authenticator stage and this count must NOT be cited as a security result. Superseded by the Mode C measurements (EXP-FORGE-REJECT-MODEC), where the full stack is active."
+    },
+    {
+      "id": "EXP-REPLAY-REJECT",
+      "description": "Sliding-window replay rejection under host fault-injection (4 classes x 25)",
+      "formula": "rejected_vectors / 100",
+      "value": "100/100",
+      "unit": "vectors",
+      "class": "M-HOST",
+      "n": 100,
+      "source": {
+        "script": "tests/host/test_replay_window.c",
+        "reference": "Section V.A"
+      }
+    },
+    {
+      "id": "MEM-REGION-POOL",
+      "description": "Static region allocator pool size for zero application-level heap allocation",
+      "formula": "CEEPEW_REGION_POOL_BYTES",
+      "value": "48",
+      "unit": "KB",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "components/mem/ceepew_region.h",
+        "reference": "Section III.A"
+      }
+    },
+    {
+      "id": "MEM-STACK-CORE0",
+      "description": "Core 0 FreeRTOS UI task stack allocation",
+      "formula": "CEEPEW_CORE0_STACK_BYTES",
+      "value": "10240",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "components/ceepew_common/ceepew_config.h",
+        "reference": "Section III.A"
+      }
+    },
+    {
+      "id": "MEM-STACK-CORE1",
+      "description": "Core 1 FreeRTOS Session & Crypto task stack allocation",
+      "formula": "CEEPEW_CORE1_STACK_BYTES",
+      "value": "16384",
+      "unit": "B",
+      "class": "C",
+      "n": null,
+      "source": {
+        "script": "components/ceepew_common/ceepew_config.h",
+        "reference": "Section III.A"
+      }
+    },
+    {
+      "id": "E1A-FRAME-LEN",
+      "description": "E1 Mode A (plain, app-crypto bypassed): measured on-air payload lengths, BENCH58 58 B campaign, both boards TX+capture",
+      "formula": "histogram of [ARQ_TX] len= and RADIO-RX frame len= over intact log lines",
+      "value": "ARQ_TX n=167 len={12:5,74:94,77:2,78:66}; RADIO_RX n=173 len={2:2,5:1,9:3,13:5,75:94,78:2,79:66}; BENCH58_TX n=160 all 58",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 160,
+      "source": {
+        "script": "tools/e1_frame_lengths.py",
+        "raw_log": "data/raw/E1_A_plain_20261018/capture_dual.log"
+      }
+    },
+    {
+      "id": "E1B-FRAME-LEN",
+      "description": "E1 Mode B (CCMP, app-crypto bypassed): measured on-air payload lengths, BENCH58 58 B campaign, both boards TX+capture",
+      "formula": "histogram of [ARQ_TX] len= and RADIO-RX frame len= over intact log lines",
+      "value": "ARQ_TX n=173 len={12:13,74:92,77:2,78:66}; RADIO_RX n=180 len={2:1,5:1,9:3,13:13,75:94,78:2,79:66}; BENCH58_TX n=160 all 58; ARQ seq 0x00..0x57 gaps=0",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 160,
+      "source": {
+        "script": "tools/e1_frame_lengths.py",
+        "raw_log": "data/raw/E1_B_ccmp_20261018/capture_dual.log"
+      }
+    },
+    {
+      "id": "E1-FRAME-LEN-EQUALITY",
+      "description": "Mode A and Mode B share an identical application-level wire format (CEEPEW_CAPTURE_ESL_BYPASS applies to both PLAIN and CCMP); only the 802.11/CCMP layer differs (+16 B on air). Measured payload-length histograms are near-identical between the two modes.",
+      "formula": "compare E1A-FRAME-LEN vs E1B-FRAME-LEN",
+      "value": "{74:94,77:2,78:66} vs {74:92,77:2,78:66}",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 160,
+      "source": {
+        "script": "tools/e1_frame_lengths.py",
+        "reference": "E1-A and E1-B manifests"
+      }
+    },
+    {
+      "id": "EXP-PAIR-BARRIER",
+      "description": "Post-derive sync barrier cleared on physical hardware after the ARQ-prefix and FEC-length fixes; session reaching chat_menu. Barrier clears via HELLO 0xA5 -> ACK sent -> ACK 0x5A received.",
+      "formula": "count of runs clearing POST_DERIVE_SYNC",
+      "value": "3 Mode-A/B/C runs. E1-B and E1-C: cleared on the FIRST cycle, 0 timeouts. E1-A: cycle 1 failed - RESOLVED as a crash-induced failure (initiator panicked and rebooted at barrier entry, see EXP-E1A-CYCLE1-PANIC), NOT a protocol/RF barrier failure; cycle 2 succeeded. Excluding the crash, the barrier cleared on the first attempt in every observed attempt.",
+      "unit": "runs",
+      "class": "M-HW",
+      "n": 3,
+      "source": {
+        "script": "tools/e1_run_mode.py",
+        "raw_log": "data/raw/E1_B_ccmp_20261018/capture_dual.log"
+      },
+      "note": "E1-A cycle-1 must be reported as crash-induced and must not be counted as a protocol or RF pairing failure. See BUG-BLE-CTX-LOCK-PANIC."
+    },
+    {
+      "id": "CAP-RING-DEGRADE",
+      "description": "LIMITATION: fraction of on-node ring-dump (ts,rssi,ch,len,HEX) rows recorded intact at CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200 under BENCH58 log volume. The ring-dump task and the ESP-IDF log task interleave on the shared UART and bytes are dropped, cutting the hex. Corruption is length-biased (long frames preferentially destroyed), so pcap-derived frame-length histograms and airtime figures from these runs are invalid; intact short metadata lines are the valid evidence source.",
+      "formula": "clean_rows / total_ring_rows, clean defined as len(hex)/2 == declared_len and no trailing text",
+      "value": "E1-A 1433/6432 = 22.3% clean; E1-B 1404/9596 = 14.6% clean",
+      "unit": "% clean ring rows",
+      "class": "M-HW",
+      "n": 16028,
+      "source": {
+        "script": "tools/e1_frame_lengths.py",
+        "reference": "RUN_NOTES.md of E1_A_plain_20261018 and E1_B_ccmp_20261018"
+      }
+    },
+    {
+      "id": "TEST-HOST-CI",
+      "description": "Full native host test suite (core unit tests via ceepew_pipeline --mode host plus PFS auth and fuzz smoke tests via ctest) passing with the uncommitted security-hardening change set applied, under ASan/UBSan",
+      "formula": "count(passed)/count(total)",
+      "value": "19/19",
+      "unit": "tests",
+      "class": "M-HOST",
+      "n": 19,
+      "source": {
+        "script": "ctest in tests/host/build_host",
+        "reference": "session verification 2026-10-18, log in %TEMP%/opencode/ctest_full_log.txt"
+      }
+    },
+    {
+      "id": "E1C-FRAME-LEN",
+      "description": "E1 Mode C (CEE-PEW full stack, ESL_BYPASS=0): measured on-air payload lengths, BENCH58 58 B campaign, both boards TX+capture",
+      "formula": "histogram of [ARQ_TX] len= and RADIO-RX frame len= over intact log lines",
+      "value": "ARQ_TX n=170 len={77:2,173:8,233:94,237:66}; RADIO_RX n=175 len={2:1,5:1,9:3,78:2,174:8,234:94,238:66}; BENCH58_TX n=160 all 58; ARQ seq 0x00..0x55 gaps=0",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 160,
+      "source": {
+        "script": "tools/e1_frame_lengths.py",
+        "raw_log": "data/raw/E1_C_ceepew_20261018/capture_dual.log"
+      }
+    },
+    {
+      "id": "MODE-WIRE-CONTRAST",
+      "description": "Measured on-air application frame size by capture mode, same 58 B payload, same boards, same channel. Mode C runs the full stack (FEC + crypto_box + Ed25519 sig); Modes A and B bypass the ESL/Ascon application crypto and are byte-identical to each other at the application layer.",
+      "formula": "ARQ_TX length histograms across sealed runs E1-A/E1-B/E1-C",
+      "value": "Mode A: {12:5,74:94,77:2,78:66} (RADIO_RX +1). Mode B: {12:13,74:92,77:2,78:66}. Mode C: {77:2,173:8,233:94,237:66} \u2014 i.e. 233/237 B data and 173 B control vs 74/78 B data and 12 B control",
+      "unit": "B (ESP-NOW payload)",
+      "class": "M-HW",
+      "n": 480,
+      "source": {
+        "script": "tools/e1_frame_lengths.py",
+        "reference": "E1_A_plain_20261018, E1_B_ccmp_20261018, E1_C_ceepew_20261018 RUN_NOTES"
+      }
+    },
+    {
+      "id": "EXP-FORGE-REJECT-MODEC",
+      "description": "Over-the-air rejection of forged CEE-PEW frames in Mode C (full stack: FEC + crypto_box + Ed25519 signature). Each forged frame has exactly ONE outer-ciphertext byte corrupted by the one-shot bench forge. Rejection is observed at the crypto_box verify stage with err=CEEPEW_ERR_CRYPTO. Measured by ONE-TO-ONE TIME CORRELATION on the peer device. NOTE: app-level seq accounting must NOT be used (ARQ retransmits a clean copy after each rejected forgery, so every forged seq eventually logs commit err=0) -- see E1-PAIR-METHOD-NOTE.",
+      "formula": "forged frames with a peer crypto-stage rejection within 2.0 s / forged frames transmitted",
+      "value": "16/16 (E1-C) and 16/16 (E2b, independent replicate). Per run: 16 forged frames transmitted, 16 matched to a peer box-stage rejection; E1-C median match latency +0.40 s (max +0.50 s), E2b median 400 ms (range 100-1500 ms); rejection kind box = Discard: crypto_box decrypt FAILED (err=5 = CEEPEW_ERR_CRYPTO); no forged frame reached the application layer.",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 32,
+      "source": {
+        "script": "tools/e2_forge_reject.py",
+        "runs": [
+          "data/raw/E1_C_ceepew_20261018",
+          "data/raw/E2b_forged_rejection_20261018"
+        ],
+        "replicate": "E2b is an independent 480 s capture, same binary d2390308"
+      },
+      "note": "AUDIT: the hand-measured figure in the sealed E1_C RUN_NOTES.md says 2 unexplained rejections; the automated tool (tools/e2_forge_reject.py, device clock, 2.0 s window) reports 3 for E1_C (1 replay @15.2 s, 1 ascon, 1 pipeline) and 6 for E2b. The sealed run was NOT edited - correcting a sealed artifact would break its SHA-256 manifest, so the refinement is recorded here instead. The headline result (16/16 matched, median 400 ms) is identical under both measurements. Tool-verified machine-readable values: E1_C matched_count=16 unmatched_count=0 median_delta_us=400000 max_abs_delta_us=500000; E2b matched_count=16 unmatched_count=0 median_delta_us=400000 max_abs_delta_us=1500000. Both use clock_used=device."
+    },
+    {
+      "id": "E1-PAIR-METHOD-NOTE",
+      "description": "METHOD NOTE: app-level per-sequence accept/reject accounting must NOT be used to measure forgery rejection. The one-shot forge plus ARQ retransmission means the corrupted frame is dropped and a CLEAN retry of the same application sequence number is then accepted, so every forged seq eventually logs [BENCHRX] commit seq=N err=0. Only one-to-one time-correlated rejection on the peer device is valid.",
+      "formula": "n/a",
+      "value": "naive per-seq table reports 8/8 forged accepted (WRONG); time-correlated reports 16/16 rejected (correct)",
+      "unit": "n/a",
+      "class": "M-HW",
+      "n": 16,
+      "source": {
+        "script": "tools/e2_forge_reject.py",
+        "reference": "E1_C_ceepew_20261018/RUN_NOTES.md"
+      }
+    },
+    {
+      "id": "EXP-E2A-MODE-MISMATCH",
+      "description": "E2(a): can a plain (Mode A) ESP-NOW peer inject into, or establish a session with, a CEE-PEW (Mode C) peer? Two boards 20 cm apart, 300 s, channel 1, hopping off: COM3 = build_cap_plain (Mode A), COM4 = build_cap_ceepew (Mode C). NOTE: the planned criterion (inject 80 campaign frames, count rejects) is UNACHIEVABLE by construction -- BENCH58 TX is gated on session_is_active() AND session_sync_barrier_cleared(), and a mode-mismatched pair cannot clear the barrier, so the gate stops the experiment before injection. Reported instead as handshake-level mutual rejection. n_planned=80 is the planned injection count, NOT this result N.",
+      "formula": "counts of Discard reject events by stage, per device, over a 300 s dual capture; sessions and application deliveries = 0",
+      "value": "0 BENCH58 frames injected, 0 sessions, 0 application messages, 0 chat_menu, 0 POST_DERIVE_SYNC completions; 11 post-derive sync timeouts (A 6 / B 5); 25 PAIRING_FAILED; 628 Discard events: DEVICE_B (CEE-PEW) 12 ESL transport header/MAC/replay check failed, DEVICE_A (plain) 264 exact_len-exceeds-FEC-len + 352 RX decrypt pipeline failed",
+      "unit": "events / frames",
+      "class": "M-HW",
+      "n": 628,
+      "source": {
+        "raw_log": "data/raw/E2a_plain_injection_20261018/capture_dual.log",
+        "run_notes": "data/raw/E2a_plain_injection_20261018/RUN_NOTES.md",
+        "sender_sha256": "9495ee6c889ff86b5195bd610060fe1f3f92c9dbce443030ee2ffe4651720255",
+        "receiver_sha256": "d2390308a434744395760eab0074d4ae2988f06b7529cb7bd8b7161377763c7f"
+      }
+    },
+    {
+      "id": "EXP-E1A-CYCLE1-PANIC",
+      "description": "Root cause of the previously-unexplained E1-A first-cycle post-derive-sync timeout. RESOLVED: the initiator board (DEVICE_A) panicked and rebooted mid-run at host ~14.4-14.5 s, exactly at barrier entry, then had to re-discover and re-pair; the responder stayed in its own barrier until its 30 s timeout expired, so cycle 1 failed and cycle 2 succeeded. NOT an RF, timing, or protocol-barrier defect.",
+      "formula": "boot/panic markers per device counted across each sealed capture; device boot clocks used for ordering (treated as unsynchronised across boards)",
+      "value": "DEVICE_A: ble_ctx_lock DEADLOCK (held by pair_supp >2000 ms) x2 -> assert failed xTaskPriorityDisinherit tasks.c:5156 -> Backtrace -> Rebooting / rst:0xc (SW_CPU_RESET), host 14.5 s. DEVICE_B: Post-derive sync timed out after 30000 ms at boot 44170; Received sync byte 0xA5 (HELLO) at boot 59558 = 15.4 s AFTER the timeout. Cycle 2 completed: ACK 0x5A received host 60.1 s. Crash occurred in 1 of 4 captured runs (E1_A only; app_init counts 1x/1x and no backtrace in E1_B, E1_C, E2b).",
+      "unit": "occurrence (1 of 4 runs)",
+      "class": "M-HW",
+      "n": 4,
+      "source": {
+        "raw_log": "data/raw/E1_A_plain_20261018/capture_dual.log",
+        "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
+        "binary_sha256": "9495ee6c889ff86b5195bd610060fe1f3f92c9dbce443030ee2ffe4651720255"
+      }
+    },
+    {
+      "id": "BUG-BLE-CTX-LOCK-PANIC",
+      "description": "OPEN DEFECT (intermittent): transport_ble BLE context mutex handling can panic the ESP32 and reboot the board during the IDLE-phase entry that immediately precedes the post-derive-sync barrier. The ble_ctx_lock deadlock detector trips when the lock is held by the pair_supp task for >2000 ms, and the following lock timeout leads to a FreeRTOS assertion (xTaskPriorityDisinherit, tasks.c:5156 - disinheriting a mutex not held by the current task). Field symptom: inexplicable ~45 s extra pairing delay followed by success on retry. Observed on the E1-A binary only (1 of 4 captured runs).",
+      "formula": "n/a",
+      "value": "1 occurrence in 4 captured runs (E1_A_plain_20261018, DEVICE_A, host 14.5 s)",
+      "unit": "occurrences",
+      "class": "M-HW",
+      "n": 4,
+      "source": {
+        "site": "components/transport/transport_ble.c (ble_ctx_lock / pair_supp, IDLE-phase entry)",
+        "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
+        "status": "PARTIALLY FIXED - the illegal mutex release that produced the panic is removed (see FIX-BLE-CTX-LOCK-RELEASE). The >2 s hold that makes the timeout path reachable, and the 26 call sites that proceed unlocked after a timeout, remain open. Fix not yet built, flashed, or observed on hardware."
+      }
+    },
+    {
+      "id": "FIX-BLE-CTX-LOCK-RELEASE",
+      "description": "Fix for BUG-BLE-CTX-LOCK-PANIC. ble_ctx_lock() returns false when its 2 s take times out, but ble_ctx_unlock() called xSemaphoreGive() unconditionally, so a caller that timed out released a mutex it never held. FreeRTOS then attempted to priority-disinherit a mutex the current task did not own, tripping the assertion at tasks.c:5156 and rebooting the board. ble_ctx_unlock() now releases only when the current task is the recorded owner (s_ble_ctx_lock_owner == xTaskGetCurrentTaskHandle()); a timing-out caller becomes a correct no-op.",
+      "formula": "if (s_ble_ctx_lock_owner != xTaskGetCurrentTaskHandle()) return;  // before xSemaphoreGive",
+      "value": "illegal release path removed by construction; NOT yet built, flashed, or reproduced on hardware",
+      "unit": "code change",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "site": "components/transport/transport_ble.c: ble_ctx_unlock()",
+        "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
+        "status": "APPLIED AND COMPILE-VERIFIED ONLY - not flashed and not observed on hardware, and the intermittent race cannot be reproduced on demand. All 26 call sites that ignored the false return are now hardened (see FIX-BLE-LOCK-CALLSITE-HARDENING). The separate >2 s hold that made the timeout reachable is addressed by FIX-BLE-ADV-WATCHDOG-LOCK-HOLD."
+      }
+    },
+    {
+      "id": "FIX-BLE-LOCK-CALLSITE-HARDENING",
+      "description": "Hardening of the 26 call sites in transport_ble.c that discarded ble_ctx_lock()'s return value and then used g_ble_ctx as if the lock were held. Previously a caller whose 2 s take timed out proceeded into the critical section with no mutual exclusion - a data-corruption defect independent of the panic, and one that would still exist after the crash fix alone. Each site now uses the guarded pattern already present at transport_ble_connect_to_peer: abort the operation with a warning instead of continuing unlocked. The bail value matches each function's return type.",
+      "formula": "if (!ble_ctx_lock()) { ESP_LOGW(TAG, \"<fn>: ble_ctx_lock timed out - skipping\"); return <type-appropriate bail>; }",
+      "value": "26 sites hardened; the file then has 30 guarded sites and 0 unguarded sites (26 new + the 4 that already checked the return value)",
+      "unit": "code change",
+      "class": "M-HW",
+      "n": 26,
+      "source": {
+        "site": "components/transport/transport_ble.c",
+        "status": "compile-verified only: ninja exit=0, transport_ble.c.obj rebuilt and newer than its source, image ceepew.bin 0x1573b0 bytes with 31% of the app partition free, brace balance 0. NOT flashed and NOT run on hardware. Caveat: the two state getters now return a conservative default (0U / PAIRING_PHASE_IDLE) when the lock cannot be taken, which is safe but is not equivalent to a successful read - callers treat an unreadable phase as 'not pairing'."
+      }
+    },
+    {
+      "id": "FIX-BLE-ADV-WATCHDOG-LOCK-HOLD",
+      "description": "Root cause of the >2 s ble_ctx_lock hold that made BUG-BLE-CTX-LOCK-PANIC reachable, found by locating what the holder task actually does while holding the lock. The task named pair_supp is transport_ble_supervisor_task (xTaskCreate at transport_ble.c:4226). Its tick calls transport_ble_supervisor_tick_adv_watchdog(), which took ble_ctx_lock() and then, while still holding it, called transport_ble_start_advertising(). That function reaches the BLE controller synchronously through transport_ble_configure_data_raw_unlocked(): esp_ble_gap_stop_advertising(), esp_ble_gap_config_adv_data_raw() and esp_ble_gap_config_scan_rsp_data_raw() each block until the controller acknowledges. The watchdog only runs when advertising has been down for >=2 s, i.e. precisely when the controller may be unresponsive, so the hold can exceed the 2 s lock timeout - which is what made enter_phase() time out and report the holder as pair_supp. The watchdog now evaluates its condition and updates its state under the lock, releases the lock, and only then performs the re-arm.",
+      "formula": "lock -> read state, decide need_rearm, update s_adv_down_since_ms -> unlock -> transport_ble_start_advertising()",
+      "value": "long hold removed from the supervisor/watchdog path; the blocking radio calls now execute with no lock held",
+      "unit": "code change",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "site": "components/transport/transport_ble.c: transport_ble_supervisor_tick_adv_watchdog() (~line 4098) and transport_ble_configure_data_raw_unlocked() (~line 886)",
+        "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
+        "status": "code change applied; compile-verified only. NOT flashed and NOT observed on hardware. The same synchronous-radio-call-under-lock pattern may exist at the other four call sites of transport_ble_start_advertising() (lines 428, 1306, 1798, 3421), which run from GAP/GATTS event handlers - NOT audited here."
+      }
+    },
+    {
+      "id": "LAT-ONEWAY-SYNCPULSE",
+      "description": "One-way radio latency (E5), measured with a microsecond sync pulse on a single jumper wire between GPIO14 of both boards (open-drain, assert-low, falling edge timed). The transmitter asserts the line immediately before esp_now_send; the receiver timestamps the edge against its own esp_timer, so both endpoints of the interval lie on the receiver's clock and no cross-board clock correction is used or needed. This is the headline E5 figure.",
+      "formula": "edge_to_rxcb = t_rxcb - t_edge  (both timestamps on the receiver's own esp_timer_get_time() epoch)",
+      "value": "26.620 ms median (DEVICE_A, N=71, IQR 20.141-37.552, min 6.696, max 55.680); 27.214 ms median (DEVICE_B, N=68, IQR 19.806-33.982, min 6.774)",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 139,
+      "source": {
+        "raw_log": "data/raw/E5_sync_pulse_20261018/capture_dual.log",
+        "analysis": "data/derived/E5_sync_pulse_20261018/latency.md",
+        "run_notes": "data/raw/E5_sync_pulse_20261018/RUN_NOTES.md",
+        "binary_sha256": "b335daf4c879b9c5ddbe202a3636e8324e049d5e389d95eae80360441aa76bb0",
+        "status": "single bench run, one board pair, 20 cm, channel 1, hopping off, 115200 baud. Medians and IQRs quoted as robust statistics; the DEVICE_B maximum is a stale-latch artifact (see EXP-E5-STALE-EDGE) and is NOT excluded."
+      }
+    },
+    {
+      "id": "LAT-TX-STAGES",
+      "description": "Transmitter-side stages preceding the sync pulse (E5). submit->pulse is the interval from the campaign submitting frame n to the pulse being asserted (= the on-device cryptographic and ARQ framing path); pulse->sendcb is from the pulse being asserted to the ESP-NOW send callback firing. Both are same-clock intervals on the transmitting board. Reporting these separately is what makes the crypto cost distinguishable from the radio cost.",
+      "formula": "submit_to_pulse = t_pulse - t_submit ; pulse_to_sendcb = t_sendcb - t_pulse  (same board clock)",
+      "value": "submit->pulse: 365.524 ms median (DEVICE_A, N=80, IQR 357.340-371.738, min 346.658, max 395.325); 370.274 ms median (DEVICE_B, N=80, IQR 365.632-375.772, min 347.076, max 389.087). pulse->sendcb: 4.364 ms median (A, N=80, IQR 4.223-4.626, max 11.305); 4.366 ms median (B, N=80, IQR 4.240-4.636)",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 160,
+      "source": {
+        "raw_log": "data/raw/E5_sync_pulse_20261018/capture_dual.log",
+        "analysis": "data/derived/E5_sync_pulse_20261018/latency.md",
+        "run_notes": "data/raw/E5_sync_pulse_20261018/RUN_NOTES.md",
+        "binary_sha256": "b335daf4c879b9c5ddbe202a3636e8324e049d5e389d95eae80360441aa76bb0",
+        "status": "TX sequence coverage is complete and exact on both boards: seq 0..79, unique=80, gaps=0."
+      }
+    },
+    {
+      "id": "LAT-RX-PROCESS",
+      "description": "Receiver-side processing after the ESP-NOW receive callback (E5): rxcb->accept is the interval from frame delivery to the callback to the frame being accepted into the session layer. Consistent with the independently measured Ed25519 verify plus Ascon decrypt cost.",
+      "formula": "rxcb_to_accept = t_accept - t_rxcb  (same board clock)",
+      "value": "727.284 ms median (DEVICE_A, N=71, IQR 715.593-737.457); 725.586 ms median (DEVICE_B, N=68, IQR 717.143-734.664)",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 139,
+      "source": {
+        "raw_log": "data/raw/E5_sync_pulse_20261018/capture_dual.log",
+        "analysis": "data/derived/E5_sync_pulse_20261018/latency.md",
+        "run_notes": "data/raw/E5_sync_pulse_20261018/RUN_NOTES.md",
+        "binary_sha256": "b335daf4c879b9c5ddbe202a3636e8324e049d5e389d95eae80360441aa76bb0",
+        "status": "DEVICE_B maximum is a stale-latch artifact (265880.270 ms), not excluded; median and IQR are robust to it."
+      }
+    },
+    {
+      "id": "EXP-E5-SEQ-CAVEAT",
+      "description": "Measurement limitation in the E5 report that must be disclosed whenever E5 sequence coverage is cited. The RX-side seq field is read from the first byte of the ARQ-decoded frame at the receive-callback hook, which is an internal header byte, NOT the BENCH58 campaign sequence number. It reports a constant 69 on both boards, so the report's RX sequence-coverage lines (unique=1, gaps=0) are void and are not evidence of duplicate or missing frames.",
+      "formula": "n/a",
+      "value": "RX seq reported as 69..69, unique=1 on both DEVICE_A and DEVICE_B; TX seq valid at 0..79, unique=80, gaps=0",
+      "unit": "n/a",
+      "class": "M-HW",
+      "n": 139,
+      "source": {
+        "raw_log": "data/raw/E5_sync_pulse_20261018/capture_dual.log",
+        "analysis": "data/derived/E5_sync_pulse_20261018/latency.md",
+        "status": "Does NOT affect the headline edge->rxcb interval: the accept hook reads the same variable within the same process_rx_frame call, so the pairing is self-consistent."
+      }
+    },
+    {
+      "id": "EXP-E5-STALE-EDGE",
+      "description": "Measurement artifact in E5, reported rather than removed. The sync-line ISR latches an edge; if no receive callback consumes it (for example a frame rejected before the callback), the stale latch is consumed by a much later frame, inflating that record's edge->rxcb interval. Affects 1 of 68 DEVICE_B receive records.",
+      "formula": "n/a",
+      "value": "DEVICE_B edge->rxcb max = 341336.571 ms and rxcb->accept max = 265880.270 ms, both from the same stale-latch mechanism",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "raw_log": "data/raw/E5_sync_pulse_20261018/capture_dual.log",
+        "analysis": "data/derived/E5_sync_pulse_20261018/latency.md",
+        "status": "NOT excluded - the declared exclusion rule for this run is 'none'. Median and IQR are robust to it. A reviewer must be told the extreme exists."
+      }
+    },
+    {
+      "id": "E5-EXCLUSION-RULE",
+      "description": "Pre-declared exclusion rule for the E5 run, fixed before analysis so that no post-hoc filtering can flatter the result.",
+      "formula": "n/a",
+      "value": "none - no frame or record is excluded for being a timing outlier; zero-timestamp records are reported as not-measurable rather than dropped; full distributions including extremes are reported and medians/IQRs are quoted as robust statistics",
+      "unit": "n/a",
+      "class": "M-HW",
+      "n": 300,
+      "source": {
+        "run_notes": "data/raw/E5_sync_pulse_20261018/RUN_NOTES.md",
+        "manifest": "data/raw/E5_sync_pulse_20261018/manifest.json",
+        "status": "recorded in the sealed manifest's exclusion_rule field and in RUN_NOTES.md"
+      }
+    }
+  ]
+}

@@ -16,6 +16,13 @@
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 
+/* Cleartext ESL header size: magic(2) | version(1) | flags(1) | ts(4) |
+ * seq(8) | nonce_counter(8) = 24 bytes. The header is NOT transmitted as
+ * separate data: it is bound to the inner Ascon-128 AEAD as associated data,
+ * so any tampering with seq/timestamp_s/flags/nonce_counter fails tag
+ * verification (silent discard) and can never reach the replay-window commit. */
+#define CEEPEW_ESL_HEADER_BYTES       24U
+
 /* Minimum size of a valid ESL frame on the wire: 24-byte header + 4-byte CRC.
  * Session frames additionally carry a 1-byte ARQ sequence prefix, so the
  * minimum raw ESP-NOW frame that can be a legitimate session frame is
@@ -37,9 +44,32 @@ void esl_reset_callbacks(void);
 extern "C" {
 #endif
 
-/* Wrap payload with ESL header + CRC. frame buffer must have headroom for header. */
+/* Wrap payload with ESL header + CRC. frame buffer must have headroom for header.
+ * NOTE: this convenience form generates the header internally, so the header is
+ * NOT bound as AEAD associated data. Callers on the authenticated data path must
+ * use transport_esl_prepare_header() + transport_esl_process_outgoing_with_header(). */
 CeePewErr_t transport_esl_process_outgoing(uint8_t *frame, uint16_t *len, uint16_t max_len, uint64_t nonce_counter);
+
+/* Prepare the next outgoing 24-byte ESL header into hdr_out
+ * (magic/version/flags=0/timestamp=now/seq=next/nonce_counter). The SAME bytes
+ * MUST be passed as Ascon-128 AEAD associated data to the inner encryption, then
+ * handed to transport_esl_process_outgoing_with_header() so the tag binds the
+ * header (seq/timestamp_s/flags/nonce_counter) to the ciphertext. */
+CeePewErr_t transport_esl_prepare_header(uint8_t hdr_out[CEEPEW_ESL_HEADER_BYTES],
+                                         uint64_t nonce_counter);
+
+/* Wrap payload with a caller-prepared ESL header + CRC (appends the ESL CRC-32
+ * over header+payload). No header is generated here and no tx-seq is consumed. */
+CeePewErr_t transport_esl_process_outgoing_with_header(uint8_t *frame, uint16_t *len,
+                                                       uint16_t max_len,
+                                                       const uint8_t hdr[CEEPEW_ESL_HEADER_BYTES]);
+
 CeePewErr_t transport_esl_get_last_nonce_counter(uint64_t *nonce_counter_out);
+
+/* Copy the 24-byte header of the last frame admitted by the read-only replay
+ * check (snapshotted before the header is stripped). Used as Ascon-128 AEAD
+ * associated data on the RX decrypt path. */
+CeePewErr_t transport_esl_get_last_header(uint8_t hdr_out[CEEPEW_ESL_HEADER_BYTES]);
 
 /* Process incoming ESL frame with full security pipeline.
  * SECURITY: Auth/replay/decrypt failures = SILENT DISCARD. CRC failures may NACK. */
@@ -66,17 +96,21 @@ void transport_replay_reset(void);
 
 /* Process PFS handshake frame — bypasses normal crypto pipeline.
  * Returns CEEPEW_OK on success, peer PFS public key in peer_pfs_pubkey_out.
+ * The frame is authenticated with a 16-byte HMAC-SHA256 tag keyed by auth_key.
  * The caller must then call session_pfs_process_peer_key(). */
 CeePewErr_t transport_esl_process_pfs_handshake(const uint8_t *frame, uint16_t len,
                                                  const uint8_t peer_mac[6],
+                                                 const uint8_t auth_key[32],
                                                  uint8_t peer_pfs_pubkey_out[32]);
 
 /* Build PFS handshake frame (initiator or responder).
  * pfs_pubkey: local PFS public key to send.
  * is_initiator: true for PFS_INIT, false for PFS_RESP.
- * frame buffer must have headroom for ESL header + 1 byte type + 32 bytes pubkey + CRC. */
+ * auth_key: 32-byte HMAC key for authenticating the PFS handshake.
+ * frame buffer must have headroom for ESL header + 1 byte type + 32 bytes pubkey + 16 bytes MAC + CRC. */
 CeePewErr_t transport_esl_build_pfs_handshake(uint8_t *frame, uint16_t *len, uint16_t max_len,
-                                               const uint8_t pfs_pubkey[32], bool is_initiator);
+                                               const uint8_t pfs_pubkey[32], bool is_initiator,
+                                               const uint8_t auth_key[32]);
 
 /* ────────────────────────────────────────────────────────────────────── */
 /* Rendezvous Phase (Static Channel Sync before Channel Hopping)         */
