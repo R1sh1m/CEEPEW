@@ -60,3 +60,7 @@ DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
 *log*.*
 **/build_fuzz/
+
+# Local-only generated report + generator (not for GitHub)
+out/
+tools/build_technical_report.py

@@ -99,7 +99,7 @@ Unified test driver with three modes.
 
 ### Prerequisites
 
-- ESP-IDF PowerShell profile at `C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1`
+- The repository setup script at `.\tools\setup_esp_idf.ps1` (ESP-IDF 6.0.2)
 - Devices connected on COM5 (and COM6 for pairing mode)
 
 ### Diagnose mode

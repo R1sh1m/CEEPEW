@@ -13,7 +13,7 @@ drawing API and tile-dirty flush coordinator.
 
 ## Why an in-house component
 
-The CEE-PEW firmware needs a no-Arduino, ESP-IDF v6.0.1-native SSD1306
+The CEE-PEW firmware needs a no-Arduino, ESP-IDF v6.0.2-native SSD1306
 driver with a small, well-defined GFX surface. The vendored
 `nopnop2002/esp-idf-ssd1306` covers the transport but not the drawing
 primitives, and the upstream Adafruit_GFX is C++/Arduino. This component:

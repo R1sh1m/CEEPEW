@@ -47,12 +47,25 @@ ESP32-based secure messaging with an 8-layer cryptographic stack, pairing via BL
 ### Windows
 
 ```powershell
-# Set up ESP-IDF environment (adjust path for your install)
-& "C:\esp\v6.0.2\esp-idf\export.ps1"
+# Initialize the repository's ESP-IDF environment. This clears stale
+# IDF_PATH/IDF_TOOLS_PATH/IDF_PYTHON_ENV_PATH values first.
+.\tools\setup_esp_idf.ps1
 idf.py set-target esp32
 idf.py build
 idf.py -p COM5 flash
 idf.py -p COM5 monitor
+```
+
+The setup script uses ESP-IDF 6.0.2 at `C:\esp\v6.0.2\esp-idf`, the
+Espressif tools registry at `C:\Espressif\tools`, and its Python environment at
+`C:\Espressif\tools\python\v6.0.2\venv`. If the required tools are not
+registered yet, repair them once with:
+
+```powershell
+$env:IDF_TOOLS_PATH = "C:\Espressif\tools"
+$python = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
+& $python "C:\esp\v6.0.2\esp-idf\tools\idf_tools.py" --non-interactive install
+.\tools\setup_esp_idf.ps1
 ```
 
 ### Linux

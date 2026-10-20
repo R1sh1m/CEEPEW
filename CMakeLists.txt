@@ -30,7 +30,9 @@ set(EXTRA_COMPONENT_DIRS
 #   - calls idf_build_process internally
 #   - registers menuconfig, bootloader, flash targets
 # DO NOT call idf_build_process() anywhere else.
-if(NOT DEFINED ENV{IDF_PATH} OR "$ENV{IDF_PATH}" STREQUAL "")
+if(NOT DEFINED ENV{IDF_PATH} OR
+   "$ENV{IDF_PATH}" STREQUAL "" OR
+   NOT EXISTS "$ENV{IDF_PATH}/tools/cmake/project.cmake")
     set(ENV{IDF_PATH} "C:/esp/v6.0.2/esp-idf")
     set(IDF_PATH "C:/esp/v6.0.2/esp-idf")
 else()
@@ -55,4 +57,3 @@ if(NOT GIT_HASH)
     set(GIT_HASH "unknown")
 endif()
 add_compile_definitions(CEEPEW_GIT_HASH="${GIT_HASH}")
-

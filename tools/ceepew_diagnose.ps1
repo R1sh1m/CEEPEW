@@ -72,19 +72,11 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
-$IdfProfile = if (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
-    "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1"
-} elseif (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
-    "C:\esp\v6.0.2\esp-idf\export.ps1"
-} else {
-    "C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1"
-}
+$SetupScript = Join-Path $ProjectRoot "tools\setup_esp_idf.ps1"
 $PythonExe  = if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
     "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
-} elseif (Test-Path -LiteralPath "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe") {
-    "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe"
 } else {
-    "C:\Espressif\tools\python\v6.0.1\venv\Scripts\python.exe"
+    throw "ESP-IDF 6.0.2 Python environment was not found."
 }
 $MonitorPy  = Join-Path $PSScriptRoot "ceepew_monitor.py"
 
@@ -235,13 +227,8 @@ function Invoke-DiagnoseMode {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $diagLog = Join-Path $logDir "diagnose_${timestamp}.log"
 
-    # Source the IDF profile
-    if (Test-Path -LiteralPath $IdfProfile) {
-        Write-Host "[diagnose] Sourcing IDF profile: $IdfProfile"
-        . $IdfProfile
-    } else {
-        Write-Warning "[diagnose] IDF profile not found; assuming env is already set."
-    }
+    Write-Host "[diagnose] Initializing ESP-IDF environment"
+    & $SetupScript
 
     Set-Location -Path $ProjectRoot
 

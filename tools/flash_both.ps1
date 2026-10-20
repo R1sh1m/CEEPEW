@@ -98,25 +98,14 @@ $ScriptRoot    = $PSScriptRoot
 $ProjectRoot   = Split-Path -Path $ScriptRoot -Parent
 $LogDir        = Join-Path $ProjectRoot "logs"
 
-# Tool & environment (matching ceepew_diagnose.ps1 conventions)
-$IdfProfile    = $env:CEEPEW_IDF_PROFILE
-if (-not $IdfProfile) {
-    if (Test-Path -LiteralPath "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1") {
-        $IdfProfile = "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1"
-    } elseif (Test-Path -LiteralPath "C:\esp\v6.0.2\esp-idf\export.ps1") {
-        $IdfProfile = "C:\esp\v6.0.2\esp-idf\export.ps1"
-    } else {
-        $IdfProfile = "C:\Espressif\tools\Microsoft.v6.0.1.PowerShell_profile.ps1"
-    }
-}
+# Tool & environment
+$SetupScript    = Join-Path $ProjectRoot "tools\setup_esp_idf.ps1"
 $PythonExe     = $env:CEEPEW_PYTHON
 if (-not $PythonExe) {
-    if (Test-Path -LiteralPath "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe") {
-        $PythonExe = "C:\Users\Rishi Misra\.espressif\python_env\idf6.0_py3.13_env\Scripts\python.exe"
-    } elseif (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
+    if (Test-Path -LiteralPath "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe") {
         $PythonExe = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
     } else {
-        $PythonExe = "C:\Espressif\tools\python\v6.0.1\venv\Scripts\python.exe"
+        throw "ESP-IDF 6.0.2 Python environment was not found."
     }
 }
 $MonitorPy     = Join-Path $ScriptRoot "ceepew_monitor.py"
@@ -157,18 +146,8 @@ function Format-Elapsed {
 # Environment initialisation
 # ---------------------------------------------------------------------------
 function Initialize-Environment {
-    $env:IDF_PATH = "C:\esp\v6.0.2\esp-idf"
-    $env:IDF_TOOLS_PATH = "C:\Espressif\tools"
-    $env:IDF_PYTHON_ENV_PATH = "C:\Espressif\tools\python\v6.0.2\venv"
+    & $SetupScript
     $env:ESP_IDF_VERSION = "6.0.2"
-    $idfBinPaths = @(
-        "C:\Espressif\tools\python\v6.0.2\venv\Scripts",
-        "C:\Espressif\tools\xtensa-esp-elf\esp-15.2.0_20251204\xtensa-esp-elf\bin",
-        "C:\Espressif\tools\cmake\4.0.3\bin",
-        "C:\Espressif\tools\ninja\1.12.1",
-        "C:\esp\v6.0.2\esp-idf\tools"
-    )
-    $env:PATH = ($idfBinPaths -join ';') + ';' + $env:PATH
 
     $script:PythonExeResolved = "C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe"
     if (-not (Test-Path -LiteralPath $script:PythonExeResolved)) {
