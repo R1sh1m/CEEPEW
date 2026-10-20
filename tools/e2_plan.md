@@ -20,8 +20,8 @@ An attacker (or compromised peer) sends:
 **Note:** Case E2(b) is **already exercised** by the BENCH58 forge path (every 10th frame corrupts a box byte). Today's earlier run showed 10/10 forged frames rejected.
 
 ## Hardware Setup
-- **Node A (sender)**: COM3 (DEVKIT v1, GPIO14 pulse for E5)
-- **Node B (receiver)**: COM5 (NodeMCU, GPIO16 edge capture for E5)
+- **Node A (sender)**: COM3 (DEVKIT v1, GPIO14 on the shared E5 sync line)
+- **Node B (receiver)**: COM5 (NodeMCU, GPIO14 on the same shared E5 sync line)
 - Distance: 20 cm, fixed orientation
 - Channel: 1 (hopping suppressed in capture builds)
 
