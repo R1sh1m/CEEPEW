@@ -28,6 +28,16 @@ typedef void * QueueHandle_t;
 #define pdPASS  ((BaseType_t) 1)
 #define pdFAIL  ((BaseType_t) 0)
 
+/* Host stub for the replay-window spinlock
+ * (components/transport/transport_replay.c). Host tests are
+ * single-threaded: critical sections are no-ops. The macros accept a
+ * pointer argument to match the ESP-IDF call shape
+ * portENTER_CRITICAL(&s_window.spinlock). */
+typedef int portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define portENTER_CRITICAL(mux) ((void)(mux))
+#define portEXIT_CRITICAL(mux) ((void)(mux))
+
 #ifdef __cplusplus
 }
 #endif

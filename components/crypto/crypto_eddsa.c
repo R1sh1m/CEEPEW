@@ -328,14 +328,15 @@ CeePewErr_t crypto_eddsa_sign(const uint8_t priv[64], const uint8_t *msg, uint16
      * CEEPEW_SIGN_MAX_BYTES; the plaintext limit (60) is too tight. */
     CEEPEW_ASSERT(msg_len <= CEEPEW_SIGN_MAX_BYTES, CEEPEW_ERR_BOUNDS);
 
+    /* Fast-path: priv is the full 64-byte secret key (seed || pubkey) as
+     * produced by crypto_eddsa_keypair/seeded_keypair. Use it directly —
+     * re-deriving the pubkey via crypto_sign_seed_keypair costs a full
+     * base-point scalarmult on every TX sign. The peer pubkey cache in
+     * session_set_peer_public_key() covers the verify side. */
     uint8_t keypair[64];
-    uint8_t pub[32];
-    for (uint8_t i = 0U; i < 32U; i++) { keypair[i] = priv[i]; }
-    crypto_sign_seed_keypair(pub, keypair, keypair);
-    memcpy(&keypair[32], pub, 32U);
+    memcpy(keypair, priv, 64U);
     (void)crypto_sign_detached(sig, msg, (u64)msg_len, keypair);
     ceepew_secure_zero(keypair, sizeof(keypair));
-    ceepew_secure_zero(pub, sizeof(pub));
     return CEEPEW_OK;
 }
 

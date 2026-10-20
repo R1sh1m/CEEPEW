@@ -7,6 +7,13 @@
  * 3. Duplicate detection: Same sequence number sent twice is rejected on second occurrence
  * 4. Bitmap shift correctness: Window correctly shifts and bits are set/cleared properly
  * 5. Out-of-order acceptance: Valid packets within window are accepted even if out-of-order
+ * 6. Forged far-forward (s_max+1000) check-only, no commit, then legitimate
+ *    frame still accepted (check/commit split — no window poisoning)
+ * 7. UINT64_MAX edge: top-of-space commit, duplicate commit rejection,
+ *    within-window backward accept, no wrap-around
+ *
+ * All tests drive the production flow: read-only check, then commit on
+ * accept (commit stands in for "AEAD tag verified").
  */
 
 #include "ceepew_assert.h"
@@ -17,9 +24,34 @@
 
 static const char *TAG = "TEST-REPLAY-COMP";
 
-/* Forward declarations from transport_replay.c */
+/* Forward declarations from transport_replay.c (check/commit split:
+ * check is a pure read pre-decrypt; commit advances the window only after
+ * AEAD verification — WireGuard model). */
 CeePewErr_t transport_replay_check(uint64_t msg_id, uint32_t timestamp, bool *is_replay);
+CeePewErr_t transport_replay_commit(uint64_t msg_id);
 void transport_replay_reset(void);
+
+/* Production-flow helper: read-only check, then commit on accept (the
+ * commit stands in for "AEAD tag verified" in these unit tests). A
+ * rejected check is never committed — mirroring a forged frame that fails
+ * tag verification and must not shift the window. */
+static bool check_and_commit(uint64_t msg_id, CeePewErr_t *err_out) {
+    bool is_replay = false;
+    CeePewErr_t err = transport_replay_check(msg_id, 0U, &is_replay);
+    if (err == CEEPEW_OK && !is_replay) {
+        err = transport_replay_commit(msg_id);
+        if (err == CEEPEW_ERR_REPLAY) {
+            /* Dup-then-confirm interleaving: admitted pre-decrypt but lost
+             * the commit race — report as replay, like production. */
+            is_replay = true;
+            err = CEEPEW_OK;
+        }
+    }
+    if (err_out != NULL) {
+        *err_out = err;
+    }
+    return is_replay;
+}
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* Test Statistics                                                             */
@@ -29,8 +61,8 @@ static uint32_t s_total_failed = 0U;
 
 #define TEST_ASSERT_REPLAY_REJECTED(msg_id, expected_is_replay, msg) \
     do { \
-        bool is_replay = false; \
-        CeePewErr_t err = transport_replay_check(msg_id, 0U, &is_replay); \
+        CeePewErr_t err = CEEPEW_OK; \
+        bool is_replay = check_and_commit(msg_id, &err); \
         if (err == CEEPEW_OK && is_replay == expected_is_replay) { \
             ESP_LOGI(TAG, "✓ PASS: %s (is_replay=%u)", msg, is_replay); \
             s_total_passed++; \
@@ -244,12 +276,105 @@ static void test_forward_after_backward(void) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
+/* Test 13: Forged Far-Forward Frame Must Not Shift Window (check/commit)   */
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* ATTACK: adversary injects a forged frame with seq = s_max + 1000. The
+ * read-only pre-decrypt check admits it (forward seq), but the frame fails
+ * AEAD tag verification so it is NEVER committed. The next legitimate frame
+ * (s_max + 1) must still be accepted. Under the old mutate-on-check code
+ * the forged check alone advanced last_seq to s_max+1000, wiping the bitmap
+ * and rejecting the legitimate frame as too-old. */
+static void test_forged_far_forward_no_commit(void) {
+    ESP_LOGI(TAG, "\n=== Test 13: Forged Far-Forward (check-only, no commit) ===");
+    transport_replay_reset();
+
+    bool is_replay = false;
+    CeePewErr_t err = CEEPEW_OK;
+
+    /* Establish s_max = 500 via the production flow (check + commit). */
+    is_replay = check_and_commit(500ULL, &err);
+    if (err == CEEPEW_OK && !is_replay) {
+        ESP_LOGI(TAG, "✓ PASS: seq=500 (legit baseline) accepted+committed");
+        s_total_passed++;
+    } else {
+        ESP_LOGE(TAG, "✗ FAIL: seq=500 baseline (err=%d is_replay=%u)", err, is_replay);
+        s_total_failed++;
+    }
+
+    /* Forged frame s_max+1000: check admits (forward), but tag verification
+     * FAILS so we deliberately do NOT commit. */
+    err = transport_replay_check(1500ULL, 0U, &is_replay);
+    if (err == CEEPEW_OK && !is_replay) {
+        ESP_LOGI(TAG, "✓ PASS: forged seq=1500 admitted by read-only check (no commit — tag fails)");
+        s_total_passed++;
+    } else {
+        ESP_LOGE(TAG, "✗ FAIL: forged seq=1500 check (err=%d is_replay=%u)", err, is_replay);
+        s_total_failed++;
+    }
+    /* NOTE: no transport_replay_commit(1500) — forged frame discarded. */
+
+    /* Legitimate next frame must still be accepted AND committable. */
+    TEST_ASSERT_REPLAY_REJECTED(501ULL, false, "seq=501 (legit, after uncommitted forgery) accepted");
+
+    /* And the forged seq, if ever re-presented legitimately, still commits
+     * cleanly as a forward advance (window was never poisoned). */
+    TEST_ASSERT_REPLAY_REJECTED(1500ULL, false, "seq=1500 (later, genuine) accepted");
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Test 14: UINT64_MAX Edge (check/commit split)                               */
+/* ─────────────────────────────────────────────────────────────────────────── */
+static void test_uint64_max_edge(void) {
+    ESP_LOGI(TAG, "\n=== Test 14: UINT64_MAX Edge ===");
+    transport_replay_reset();
+
+    bool is_replay = false;
+    CeePewErr_t err = CEEPEW_OK;
+
+    TEST_ASSERT_REPLAY_REJECTED(UINT64_MAX - 10ULL, false, "seq=MAX-10 init accepted+committed");
+    TEST_ASSERT_REPLAY_REJECTED(UINT64_MAX, false, "seq=UINT64_MAX accepted+committed");
+
+    /* Exact duplicate: check flags replay; commit re-checks under lock and
+     * returns CEEPEW_ERR_REPLAY (dup-then-confirm path). */
+    err = transport_replay_check(UINT64_MAX, 0U, &is_replay);
+    if (err == CEEPEW_OK && is_replay) {
+        ESP_LOGI(TAG, "✓ PASS: seq=UINT64_MAX duplicate flagged by check");
+        s_total_passed++;
+    } else {
+        ESP_LOGE(TAG, "✗ FAIL: seq=UINT64_MAX duplicate check (err=%d is_replay=%u)", err, is_replay);
+        s_total_failed++;
+    }
+    err = transport_replay_commit(UINT64_MAX);
+    if (err == CEEPEW_ERR_REPLAY) {
+        ESP_LOGI(TAG, "✓ PASS: seq=UINT64_MAX duplicate commit rejected (err=REPLAY)");
+        s_total_passed++;
+    } else {
+        ESP_LOGE(TAG, "✗ FAIL: seq=UINT64_MAX duplicate commit (err=%d, want REPLAY)", err);
+        s_total_failed++;
+    }
+
+    /* Within-window backward seq still works at the top edge. */
+    TEST_ASSERT_REPLAY_REJECTED(UINT64_MAX - 5ULL, false, "seq=MAX-5 (within window) accepted");
+
+    /* Wrap-around to small values is rejected (no wrap support — same as
+     * WireGuard: seq MUST increase monotonically across the 64-bit space). */
+    err = transport_replay_check(1ULL, 0U, &is_replay);
+    if (err == CEEPEW_OK && is_replay) {
+        ESP_LOGI(TAG, "✓ PASS: seq=1 after MAX rejected (no wrap)");
+        s_total_passed++;
+    } else {
+        ESP_LOGE(TAG, "✗ FAIL: seq=1 after MAX (err=%d is_replay=%u)", err, is_replay);
+        s_total_failed++;
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
 /* Test Suite Runner                                                           */
 /* ─────────────────────────────────────────────────────────────────────────── */
 void test_replay_window_comprehensive(void) {
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║  COMPREHENSIVE WIREGUARD REPLAY WINDOW TEST SUITE        ║");
-    ESP_LOGI(TAG, "║  Coverage: 5 edge cases + 7 extended scenarios           ║");
+    ESP_LOGI(TAG, "║  Coverage: 5 edge cases + 7 extended + 2 check/commit vectors ║");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════╝");
     
     s_total_passed = 0U;
@@ -270,6 +395,10 @@ void test_replay_window_comprehensive(void) {
     test_complex_interleaved_pattern();
     test_all_bits_filled();
     test_forward_after_backward();
+
+    /* Check/commit-split vectors: forged-frame window poisoning + top edge */
+    test_forged_far_forward_no_commit();
+    test_uint64_max_edge();
     
     ESP_LOGI(TAG, "\n╔══════════════════════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║  FINAL RESULTS                                           ║");

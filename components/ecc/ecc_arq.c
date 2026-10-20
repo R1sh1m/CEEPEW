@@ -187,7 +187,7 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
  * - Attempt 0: 100ms base ± 10% jitter
  * - Attempt 1: 200ms base ± 10% jitter
  * - Attempt 2: 400ms base ± 10% jitter
- * Max retries: 5 to span channel hopping boundaries.
+ * Max retries: 3 to span channel hopping boundaries.
  */
 #define CEEPEW_ARQ_EFFECTIVE_MAX_RETRIES 5U
 

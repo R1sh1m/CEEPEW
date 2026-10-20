@@ -32,3 +32,15 @@ CONFIG_BT_GATTC_ENABLE=y
 CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 
+# On-node promiscuous OTA capture (Phase 3 debug aid, default off).
+# When enabled, the session task starts transport_capture after BLE teardown.
+CONFIG_CEEPEW_CAPTURE=n
+
+# Crypto hot-path: -O2 (PERF) instead of the default -Og (DEBUG).
+# TweetNaCl X25519/Ed25519 use 64-bit limbs on the 32-bit Xtensa LX6, so
+# every 64-bit multiply is emulated; -O2 keeps the ladder code in registers
+# and measurably shortens the uncached X25519 (~218.5 ms @ -Og) still paid
+# once per session in session_set_peer_box_pubkey(). Per-frame cost is ~0
+# (cached stream key) regardless of opt level.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+

@@ -61,6 +61,63 @@ static CeePewErr_t box_derive_stream_key(const uint8_t shared_secret[32U],
     return crypto_sha256_compute(shared_secret, 32U, stream_key);
 }
 
+/* Fast-path resolver: reuse the cached stream key when the caller passes
+ * the same peer key the cache was derived for (constant-time compare).
+ * Falls back to a fresh ECDH + SHA-256 derive otherwise (e.g. host tests
+ * that install peer keys via direct memcpy). Never writes the cache, so it
+ * is safe to call from both the mutex-guarded TX path and the RX path. */
+static CeePewErr_t box_resolve_stream_key(const CryptoCtx_t *ctx,
+                                          const uint8_t peer_public_key[32U],
+                                          uint8_t stream_key[32U])
+{
+    if (ctx->box_shared_valid &&
+        ceepew_ct_equal(peer_public_key, ctx->peer_box_pubkey, 32U)) {
+        memcpy(stream_key, ctx->box_stream_key, 32U);
+        return CEEPEW_OK;
+    }
+
+    uint8_t shared_secret[32U];
+    CeePewErr_t err = box_derive_shared_secret(ctx, peer_public_key, shared_secret);
+    if (err != CEEPEW_OK) {
+        return err;
+    }
+    err = box_derive_stream_key(shared_secret, stream_key);
+    ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
+    return err;
+}
+
+CeePewErr_t crypto_box_invalidate_cache(CryptoCtx_t *ctx)
+{
+    CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
+    ceepew_secure_zero(ctx->box_shared_secret, 32U);
+    ceepew_secure_zero(ctx->box_stream_key, 32U);
+    ctx->box_shared_valid = false;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t crypto_box_refresh_cache(CryptoCtx_t *ctx)
+{
+    CEEPEW_ASSERT(ctx != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(ctx->peer_box_pubkey_valid, CEEPEW_ERR_PARAM);
+
+    uint8_t shared_secret[32U];
+    CeePewErr_t err = box_derive_shared_secret(ctx, ctx->peer_box_pubkey, shared_secret);
+    if (err != CEEPEW_OK) {
+        (void)crypto_box_invalidate_cache(ctx);
+        return err;
+    }
+    err = box_derive_stream_key(shared_secret, ctx->box_stream_key);
+    if (err != CEEPEW_OK) {
+        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
+        (void)crypto_box_invalidate_cache(ctx);
+        return err;
+    }
+    memcpy(ctx->box_shared_secret, shared_secret, 32U);
+    ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
+    ctx->box_shared_valid = true;
+    return CEEPEW_OK;
+}
+
 CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
                                const uint8_t peer_public_key[32U],
                                const uint8_t *msg,
@@ -81,22 +138,17 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     uint8_t nonce[CRYPTO_BOX_NONCEBYTES];
     box_make_nonce_from_counter(ctx, nonce_counter, nonce);
 
-    uint8_t shared_secret[32U];
     uint8_t stream_key[32U];
-    CeePewErr_t err = box_derive_shared_secret(ctx, peer_public_key, shared_secret);
+    /* Cached fast-path: ECDH + SHA-256 run once in
+     * session_set_peer_box_pubkey(), not per frame. */
+    CeePewErr_t err = box_resolve_stream_key(ctx, peer_public_key, stream_key);
     if (err != CEEPEW_OK) {
-        return err;
-    }
-    err = box_derive_stream_key(shared_secret, stream_key);
-    if (err != CEEPEW_OK) {
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         return err;
     }
 
     StreamCipher_t stream;
     err = crypto_stream_init(&stream, stream_key, nonce);
     if (err != CEEPEW_OK) {
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         return err;
     }
@@ -112,7 +164,6 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     err = crypto_stream_process(&stream, nacl_pt_buf, work_len, nacl_ct_buf, &out_work_len);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         return err;
     }
@@ -123,7 +174,6 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     err = crypto_hmac_sha256(mac_key, 32U, nacl_ct_buf + CRYPTO_BOX_ZEROBYTES, (uint32_t)msg_len, mac);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
         ceepew_secure_zero(mac, (uint32_t)sizeof(mac));
@@ -139,7 +189,6 @@ CeePewErr_t crypto_box_encrypt(CryptoCtx_t *ctx,
     *out_len = (uint16_t)(msg_len + CRYPTO_BOX_BOXZEROBYTES);
 
     crypto_stream_finalise(&stream);
-    ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
     ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
     ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
     ceepew_secure_zero(mac, (uint32_t)sizeof(mac));
@@ -171,22 +220,17 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
 
     uint16_t msg_len = (uint16_t)(in_len - CRYPTO_BOX_BOXZEROBYTES);
 
-    uint8_t shared_secret[32U];
     uint8_t stream_key[32U];
-    CeePewErr_t err = box_derive_shared_secret(ctx, peer_public_key, shared_secret);
+    /* Cached fast-path: ECDH + SHA-256 run once in
+     * session_set_peer_box_pubkey(), not per frame. */
+    CeePewErr_t err = box_resolve_stream_key(ctx, peer_public_key, stream_key);
     if (err != CEEPEW_OK) {
-        return err;
-    }
-    err = box_derive_stream_key(shared_secret, stream_key);
-    if (err != CEEPEW_OK) {
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         return err;
     }
 
     StreamCipher_t stream;
     err = crypto_stream_init(&stream, stream_key, nonce);
     if (err != CEEPEW_OK) {
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         return err;
     }
@@ -199,7 +243,6 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     err = crypto_stream_process(&stream, nacl_pt_buf, work_len, nacl_ct_buf, &out_work_len);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         return err;
     }
@@ -210,7 +253,6 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     err = crypto_hmac_sha256(mac_key, 32U, in + CRYPTO_BOX_BOXZEROBYTES, (uint32_t)msg_len, calc_mac);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
         ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));
@@ -221,7 +263,6 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
 
     if (!ceepew_ct_equal(in, calc_mac, CRYPTO_BOX_BOXZEROBYTES)) {
         crypto_stream_finalise(&stream);
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
         ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));
@@ -231,7 +272,6 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     crypto_stream_finalise(&stream);
     err = crypto_stream_init(&stream, stream_key, nonce);
     if (err != CEEPEW_OK) {
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
         ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));
@@ -242,7 +282,6 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     err = crypto_stream_process(&stream, nacl_pt_buf, work_len, nacl_ct_buf, &out_work_len);
     if (err != CEEPEW_OK) {
         crypto_stream_finalise(&stream);
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
         ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));
@@ -252,14 +291,12 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
     err = crypto_stream_process(&stream, in + CRYPTO_BOX_BOXZEROBYTES, msg_len, out, out_len);
     crypto_stream_finalise(&stream);
     if (err != CEEPEW_OK) {
-        ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
         ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
         ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
         ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));
         return err;
     }
 
-    ceepew_secure_zero(shared_secret, (uint32_t)sizeof(shared_secret));
     ceepew_secure_zero(stream_key, (uint32_t)sizeof(stream_key));
     ceepew_secure_zero(mac_key, (uint32_t)sizeof(mac_key));
     ceepew_secure_zero(calc_mac, (uint32_t)sizeof(calc_mac));

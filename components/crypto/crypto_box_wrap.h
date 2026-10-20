@@ -29,4 +29,15 @@ CeePewErr_t crypto_box_decrypt(const CryptoCtx_t *ctx,
                                uint8_t *out,
                                uint16_t *out_len);
 
+/* Derive and cache the X25519 shared secret + stream key for the peer key
+ * already stored in ctx->peer_box_pubkey. Call once after
+ * session_set_peer_box_pubkey(); encrypt/decrypt reuse the cache.
+ * Sets ctx->box_shared_valid on success. */
+CeePewErr_t crypto_box_refresh_cache(CryptoCtx_t *ctx);
+
+/* Securely invalidate the cached shared secret + stream key
+ * (ceepew_secure_zero + box_shared_valid=false). Call on session
+ * teardown and PFS key rotation. */
+CeePewErr_t crypto_box_invalidate_cache(CryptoCtx_t *ctx);
+
 #endif /* CRYPTO_BOX_WRAP_H */

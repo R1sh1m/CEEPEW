@@ -19,6 +19,7 @@
 #include "session_msgstore.h"
 #include "crypto_eddsa.h"
 #include "crypto_hkdf.h"
+#include "crypto_box_wrap.h"
 #include "crypto_ecdh.h"
 #include "ecc_hamming.h"
 #include "session_fsm.h"
@@ -364,6 +365,7 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
         g_crypto_ctx.box_pubkey, g_crypto_ctx.box_privkey);
     if (ecdh_err != CEEPEW_OK) { s_session_fsm_locked = false; return ecdh_err; }
     g_crypto_ctx.peer_box_pubkey_valid = false;
+    (void)crypto_box_invalidate_cache(&g_crypto_ctx);
 
     /* Phase guard: if s_session.phase was corrupted back to 1 (e.g. by an
      * unexpected session_phase1_init or memory corruption), restore it to 2
@@ -732,6 +734,8 @@ CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32])
 
     memcpy(s_session.peer_sign_pk, peer_pk, 32U);
     s_session.peer_sign_pk_valid = true;
+    /* Peer pubkey cache for the RX verify path: stage_rx_decrypt reads this
+     * cached key instead of re-fetching/re-deriving per frame. */
     return CEEPEW_OK;
 }
 
@@ -762,6 +766,12 @@ CeePewErr_t session_set_peer_box_pubkey(const uint8_t peer_pk[32])
 
     memcpy(g_crypto_ctx.peer_box_pubkey, peer_pk, 32U);
     g_crypto_ctx.peer_box_pubkey_valid = true;
+    /* Derive the shared secret + stream key ONCE here; every TX/RX
+     * crypto_box call reuses the cache instead of repeating ECDH. */
+    CeePewErr_t cache_err = crypto_box_refresh_cache(&g_crypto_ctx);
+    if (cache_err != CEEPEW_OK) {
+        return cache_err;
+    }
     return CEEPEW_OK;
 }
 
@@ -1361,6 +1371,8 @@ CeePewErr_t session_end(void){
     ceepew_secure_zero(g_crypto_ctx.box_privkey, sizeof(g_crypto_ctx.box_privkey));
     ceepew_secure_zero(g_crypto_ctx.peer_box_pubkey, sizeof(g_crypto_ctx.peer_box_pubkey));
     g_crypto_ctx.peer_box_pubkey_valid = false;
+    /* Invalidate the cached box shared secret + stream key */
+    (void)crypto_box_invalidate_cache(&g_crypto_ctx);
     session_secure_zero_context();
     /* Wipe message store so old messages don't leak between sessions */
     msg_store_wipe_all();
@@ -1751,6 +1763,16 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32])
 
     memcpy(g_crypto_ctx.pfs_peer_pubkey, peer_pfs_pubkey, 32U);
     g_crypto_ctx.pfs_peer_pubkey_valid = true;
+
+    /* PFS rotation: drop the cached box shared secret + stream key and
+     * re-derive it fresh so no pre-rotation key material survives. */
+    (void)crypto_box_invalidate_cache(&g_crypto_ctx);
+    if (g_crypto_ctx.peer_box_pubkey_valid) {
+        CeePewErr_t box_err = crypto_box_refresh_cache(&g_crypto_ctx);
+        if (box_err != CEEPEW_OK) {
+            return box_err;
+        }
+    }
 
     /* Derive new Ascon-128 session key from PFS shared secret using HKDF.
      * Info string binds the key to this session (device IDs + session_id). */

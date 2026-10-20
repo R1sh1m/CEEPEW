@@ -19,7 +19,10 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
 endif()
 
-# Custom component directories
+# Custom component directories. tests/ registers with no sources unless
+# CONFIG_CEEPEW_DEVELOPMENT_MODE=y (see tests/CMakeLists.txt), so production
+# firmware is unaffected; dev-mode builds link the on-board self-test suite
+# invoked from main.c and printing === DIAGNOSTIC REPORT ===.
 set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/components
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -38,12 +41,24 @@ if(NOT DEFINED ENV{IDF_PATH} OR
 else()
     set(IDF_PATH "$ENV{IDF_PATH}")
 endif()
+# Required for idf.py mcp-server detection: include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 include(${IDF_PATH}/tools/cmake/project.cmake)
 
 # Keep the build focused on the components this app actually uses.
 idf_build_set_property(MINIMAL_BUILD OFF)
 
 project(ceepew)
+
+# ESP-Modbus unblock (project config only — NO third-party code modified):
+# managed_components espressif__esp-modbus forces -Werror on its own target,
+# and GCC 15.x (pinned IDF 6.0.2 toolchain) reports -Wstringop-truncation on
+# its modbus/mb_ports/tcp/port_tcp_utils.c strncpy. Downgrade ONLY that
+# warning to non-error for that target; the warning itself stays visible.
+# NOTE: registry component target is __idf_espressif__esp-modbus
+# (namespace __ name), not __idf_esp-modbus.
+if(TARGET __idf_espressif__esp-modbus)
+    target_compile_options(__idf_espressif__esp-modbus PRIVATE -Wno-error=stringop-truncation)
+endif()
 
 # Inject git hash as a compile definition for firmware versioning
 execute_process(

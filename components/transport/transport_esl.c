@@ -38,8 +38,7 @@
 
 static const char *TAG = "ESL";
 
-/* Forward declarations */
-CeePewErr_t transport_replay_check(uint64_t msg_id, uint32_t timestamp, bool *is_replay);
+#include "transport_replay.h"
 
 /* DoS cookie context — server-side state for rate limiting */
 typedef struct {
@@ -53,6 +52,11 @@ static DosCtx_t s_dos_ctx = {0};
 static bool s_dos_ctx_initialized = false;
 static uint64_t s_tx_seq = 1ULL;
 static uint64_t s_last_nonce_counter = 0ULL;
+/* Last ESL seq admitted by the read-only replay check (stage_esl_replay).
+ * The window itself is advanced only by transport_replay_commit(), called
+ * from the task_session decrypt path after the Ascon-128 tag verifies.
+ * Same snapshot pattern as s_last_nonce_counter (no lock — single RX path). */
+static uint64_t s_last_seq = 0ULL;
 static EslMacCheckFn s_mac_cb = NULL;
 static EslNonceFn s_nonce_cb = NULL;
 static bool s_esl_callbacks_registered = false;
@@ -257,7 +261,12 @@ static CeePewErr_t stage_esl_timestamp(Region_t *region, const uint8_t *in,
     return CEEPEW_OK;
 }
 
-/* Stage 6: Replay window (WireGuard bitmap, silent fail) */
+/* Stage 6: Replay check — READ-ONLY (WireGuard model, silent fail).
+ * transport_replay_check() never mutates the window; it only admits or
+ * rejects. The window advances via transport_replay_commit(), called from
+ * the task_session decrypt path after the Ascon-128 AEAD tag verifies, so
+ * forged frames cannot shift last_seq/bitmap. The admitted seq is
+ * snapshotted to s_last_seq for the commit call. */
 static CeePewErr_t stage_esl_replay(Region_t *region, const uint8_t *in,
                                      uint16_t in_len, uint8_t **out,
                                      uint16_t *out_len, void *stage_ctx)
@@ -282,6 +291,7 @@ static CeePewErr_t stage_esl_replay(Region_t *region, const uint8_t *in,
         *out_len = in_len;
         return CEEPEW_ERR_TRANSPORT;
     }
+    s_last_seq = hdr.seq;
     *out = (uint8_t *)in;
     *out_len = in_len;
     return CEEPEW_OK;
@@ -539,6 +549,16 @@ CeePewErr_t transport_esl_get_last_nonce_counter(uint64_t *nonce_counter_out)
 {
     CEEPEW_ASSERT(nonce_counter_out != NULL, CEEPEW_ERR_NULL_PTR);
     *nonce_counter_out = s_last_nonce_counter;
+    return CEEPEW_OK;
+}
+
+/* Seq admitted by the last successful read-only replay check. The
+ * task_session decrypt path passes this to transport_replay_commit()
+ * after the Ascon-128 tag verifies. 0 means no frame admitted yet. */
+CeePewErr_t transport_esl_get_last_seq(uint64_t *seq_out)
+{
+    CEEPEW_ASSERT(seq_out != NULL, CEEPEW_ERR_NULL_PTR);
+    *seq_out = s_last_seq;
     return CEEPEW_OK;
 }
 

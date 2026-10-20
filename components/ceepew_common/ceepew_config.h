@@ -29,7 +29,7 @@
 /* -------------------------------------------------------------------------- */
 #define CEEPEW_SESSION_KEY_BYTES         16U    /* Ascon-128 key = 128 bits   */
 #define CEEPEW_ASCON_TAG_BYTES           16U    /* Ascon auth tag             */
-#define CEEPEW_BOX_TAG_BYTES             16U    /* crypto_box Poly1305 tag    */
+#define CEEPEW_BOX_TAG_BYTES             16U    /* crypto_box HMAC-SHA256 truncated tag (16B) */
 /* Max ciphertext length handed to Ed25519 signing: compressed per fragment (60) + Ascon
  * tag(16) + box tag(16) = 92 B. See CEEPEW_PAYLOAD_MAX_BYTES derivation. */
 #define CEEPEW_SIGN_MAX_BYTES            (CEEPEW_MAX_MSG_BYTES + CEEPEW_ASCON_TAG_BYTES + CEEPEW_BOX_TAG_BYTES)

@@ -68,8 +68,11 @@ static void run_vector(const char *label, const char *k_hex, const char *u_hex, 
 static void test_crypto_box_loopback(void) {
     printf("CEEPEW: Running crypto_box loopback test\n");
 
-    static CryptoCtx_t ctxA;
-    static CryptoCtx_t ctxB;
+    /* Stack locals (not static): the on-device build overflows
+     * dram0_0_seg by ~2.4 kB if these live in .bss. Precedent:
+     * test_transport_hop.c keeps its CryptoCtx_t on the stack. */
+    CryptoCtx_t ctxA;
+    CryptoCtx_t ctxB;
 
     memset(&ctxA, 0, sizeof(ctxA));
     memset(&ctxB, 0, sizeof(ctxB));
@@ -101,7 +104,8 @@ static void test_crypto_box_loopback(void) {
     static const uint8_t plaintext[] = "Hello World! This is a test message.";
     uint16_t pt_len = (uint16_t)strlen((char *)plaintext);
 
-    static uint8_t ciphertext[128];
+    /* Stack locals (not static) to conserve link-time DRAM. */
+    uint8_t ciphertext[128];
     uint16_t ct_len = sizeof(ciphertext);
 
     /* Set nonce counter override for A encrypt */
@@ -123,7 +127,8 @@ static void test_crypto_box_loopback(void) {
     memset(nonce + 16U, 0, 8U);
 
     /* Decrypt at B */
-    static uint8_t decrypted[128];
+    /* Stack local (not static) to conserve link-time DRAM. */
+    uint8_t decrypted[128];
     uint16_t dec_len = sizeof(decrypted);
     err = crypto_box_decrypt(&ctxB, nonce, ctxB.peer_box_pubkey, ciphertext, ct_len, decrypted, &dec_len);
     if (err != CEEPEW_OK) {

@@ -1674,7 +1674,7 @@ static CeePewErr_t transport_ble_verify_pending_commitment_unlocked(void) {
 
   /* Broadcast a rejection beacon (subtype 0x51) so the peer
    * transitions to PAIRING_FAILED immediately instead of waiting
-   * for its own 30-second timeout. The beacon fits in SCAN_RSP
+   * for its own 45-second timeout. The beacon fits in SCAN_RSP
    * alongside the "CEEPEW" name (13 bytes total, well under 31). */
   {
     uint8_t reject_buf[16U];
@@ -3568,7 +3568,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
        *
        * Bounded exposure: ephemeral per-session key, brief
        * GATT window (<= 5 reconnect attempts, ~2s), short
-       * pairing window (30s max per spec), requires
+       * pairing window (45s max per spec), requires
        * physical proximity. */
       uint8_t session_code[32];
       CeePewErr_t sc_err = session_get_session_code(session_code);

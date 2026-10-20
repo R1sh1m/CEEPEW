@@ -30,6 +30,7 @@
 #include "esp_coexist.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_cpu.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "hal_radio.h"
@@ -46,6 +47,9 @@ extern CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len,
 #include "session_msgstore.h"
 #include "transport_ble.h"
 #include "transport_esl.h"
+#ifdef CONFIG_CEEPEW_CAPTURE
+#include "transport_capture.h"
+#endif
 #include "ui_manager.h"
 #include <stdio.h>
 #include <string.h>
@@ -55,12 +59,30 @@ CeePewErr_t ecc_arq_init_hop_sync(void);
 
 static const char *TAG = "task_session";
 
-/* ── Coexistence diagnostic logging helpers ────────────────────────────── */
-static inline uint32_t coex_now_ms(void) {
-    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+/* ── Raw microsecond timebase (no 1 ms quantisation) ─────────────────────
+ * esp_timer_get_time() returns monotonic microseconds. The previous code
+ * divided by 1000 at every call site, quantising all timeouts to 1 ms and
+ * paying for a 64-bit division on hot paths (TX/RX, pairing gates).
+ * All *_us values below are raw esp_timer microseconds; ms budgets are
+ * converted with session_ms_to_us() at comparison points only. */
+static inline uint64_t session_now_us(void) {
+    return (uint64_t)esp_timer_get_time();
 }
 
-#define COEX_LOG(fmt, ...)  ESP_LOGI("coex_dbg", "[%lu] " fmt, coex_now_ms(), ##__VA_ARGS__)
+static inline uint64_t session_ms_to_us(uint32_t ms) {
+    return (uint64_t)ms * 1000ULL;
+}
+
+/* Sub-microsecond ordering source for jitter seeds (Xtensa CCOUNT). */
+static inline uint32_t session_cycle_count(void) {
+    return (uint32_t)esp_cpu_get_cycle_count();
+}
+
+static inline uint64_t coex_now_us(void) {
+    return session_now_us();
+}
+
+#define COEX_LOG(fmt, ...)  ESP_LOGI("coex_dbg", "[%llu us] " fmt, (unsigned long long)coex_now_us(), ##__VA_ARGS__)
 
 CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16],
                                       const uint8_t nonce[16],
@@ -69,6 +91,13 @@ CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16],
                                       uint8_t *pt, uint16_t *pt_len);
 CeePewErr_t crypto_eddsa_verify(const uint8_t pub[32], const uint8_t *msg,
                                 uint16_t msg_len, const uint8_t sig[64]);
+
+/* Replay check/commit split (transport_replay.c): the ESL stage admitted
+ * this frame via a read-only check; the window advances here, only after
+ * the Ascon-128 tag verifies. Declared here (not via transport_esl.h) to
+ * keep the change to the decrypt path call site. */
+CeePewErr_t transport_replay_commit(uint64_t msg_id);
+CeePewErr_t transport_esl_get_last_seq(uint64_t *seq_out);
 
 /* -------------------------------------------------------------------------- */
 /* Queue Instances (global, created by task_session_init)                    */
@@ -160,27 +189,27 @@ static uint64_t s_ble_scan_start_ms =
     0ULL; /* ms when discovery pattern started */
 static bool s_ble_peer_latched = false;
 /* Jitter state for phase 2 derive gating to tolerate asymmetric timing */
-static uint32_t s_phase2_jitter_target_ms = 0U;
-static uint32_t s_phase2_jitter_start_ms = 0U;
+static uint64_t s_phase2_jitter_target_us = 0U;
+static uint64_t s_phase2_jitter_start_us = 0U;
 /* Time-based escape hatch for STEP 5 sign_pk gate. If sign_pk exchange
  * hasn't completed within this timeout, force-proceed to STEP 6 in
  * degraded mode (missing peer sign_pk). This prevents permanent deadlock
  * when the GATT connection is lost before sign_pk exchange completes. */
-static uint32_t s_sign_pk_gate_start_ms = 0U;
+static uint64_t s_sign_pk_gate_start_us = 0U;
 #define CEEPEW_SIGN_PK_GATE_TIMEOUT_MS 6000U  /* 6 s escape hatch */
 
 /* M2 gate timeout escape: if peer_gatt_ready never arrives (ESP-IDF
  * caches scan response data and never re-polls), open GATTC anyway
  * after this timeout.  Safe because commitment_verified already
  * authenticates the peer. */
-static uint32_t s_m2_gate_wait_start_ms = 0U;
+static uint64_t s_m2_gate_wait_start_us = 0U;
 #define CEEPEW_M2_GATE_TIMEOUT_MS 2000U
 
 /* Initiator jitter state to avoid cross-connection race */
 static bool s_initiator_jittered = false;
-static uint32_t s_last_gattc_open_ms = 0U;  /* minimum gap between GATTC opens */
+static uint64_t s_last_gattc_open_us = 0U;  /* minimum gap between GATTC opens */
 static bool s_hopping_started = false;
-static uint32_t s_handoff_sync_start_ms = 0U;
+static uint64_t s_handoff_sync_start_us = 0U;
 static uint32_t s_rev_gattc_backoff_stage = 0U;
 static const uint32_t s_rev_gattc_backoff_ms[] = {
     CEEPEW_RESPONDER_REV_GATTC_BACKOFF_BASE_MS,
@@ -195,21 +224,21 @@ static uint8_t s_frag_total = 0U;
 static uint8_t s_frag_expected_idx = 0U;
 static uint16_t s_frag_accum_len = 0U;
 static bool s_frag_active = false;
-static uint32_t s_frag_start_ms = 0U;
+static uint64_t s_frag_start_us = 0U;
 
 /* TX/RX LED blink overlay: transient pattern that overrides the base state
 * pattern for a short duration to indicate message activity. */
 static RgbPattern_t s_rgb_blink_overlay = RGB_OFF;
-static uint32_t s_rgb_blink_expiry_ms = 0U;
+static uint64_t s_rgb_blink_expiry_us = 0U;
 
 /* Trigger a transient RGB blink overlay (e.g., on message TX/RX).
  * pattern: the blink pattern to display (e.g., RGB_GREEN_BLINK for TX, RGB_BLUE_BLINK for RX)
  * duration_ms: how long to show the blink before reverting to base state pattern */
 inline void task_session_trigger_rgb_blink(RgbPattern_t pattern, uint32_t duration_ms)
 {
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    uint64_t now_us = session_now_us();
     s_rgb_blink_overlay = pattern;
-    s_rgb_blink_expiry_ms = now_ms + duration_ms;
+    s_rgb_blink_expiry_us = now_us + session_ms_to_us(duration_ms);
 }
 #define CEEPEW_REV_GATTC_BACKOFF_STAGES \
     (sizeof(s_rev_gattc_backoff_ms) / sizeof(s_rev_gattc_backoff_ms[0]))
@@ -232,8 +261,8 @@ typedef enum {
 } PairingFlowState_t;
 
 static PairingFlowState_t s_pairing_flow_state = PAIRING_FLOW_IDLE;
-static uint32_t s_pairing_flow_start_ms = 0U;
-static uint32_t s_pairing_phase_entered_ms = 0U;
+static uint64_t s_pairing_flow_start_us = 0U;
+static uint64_t s_pairing_phase_entered_us = 0U;
 static uint8_t s_pairing_retry_count = 0U;
 
 static void task_session_reset_pairing_static_state(void);
@@ -652,11 +681,11 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     /* Time-based escape hatch: record when we first entered this gate.
      * If sign_pk exchange hasn't completed within the timeout, fall
      * through to STEP 6 in degraded mode instead of spinning forever. */
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-    if (s_sign_pk_gate_start_ms == 0U) {
-      s_sign_pk_gate_start_ms = now_ms;
+    uint64_t now_us = session_now_us();
+    if (s_sign_pk_gate_start_us == 0U) {
+      s_sign_pk_gate_start_us = now_us;
     }
-    if ((now_ms - s_sign_pk_gate_start_ms) >= CEEPEW_SIGN_PK_GATE_TIMEOUT_MS) {
+    if ((now_us - s_sign_pk_gate_start_us) >= session_ms_to_us(CEEPEW_SIGN_PK_GATE_TIMEOUT_MS)) {
       ESP_LOGW(TAG,
                "STEP 5: sign_pk gate timeout (%u ms) — "
                "GATT exchange failed, letting reconnect_attempts accumulate",
@@ -669,8 +698,8 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
                g_ble_ctx.reverse_gattc_pending,
                g_ble_ctx.initiator_sign_pk_sent,
                (unsigned)g_ble_ctx.reconnect_attempts,
-               (unsigned)(now_ms - s_sign_pk_gate_start_ms));
-      s_sign_pk_gate_start_ms = 0U;
+               (unsigned)((now_us - s_sign_pk_gate_start_us) / 1000ULL));
+      s_sign_pk_gate_start_us = 0U;
       g_ble_ctx.reconnect_attempts++;
       return CEEPEW_OK;
     } else {
@@ -687,17 +716,17 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
                      * open GATTC after CEEPEW_M2_GATE_TIMEOUT_MS. */
                     bool m2_peer_ready = g_ble_ctx.peer_gatt_ready;
                     if (!m2_peer_ready) {
-                        if (s_m2_gate_wait_start_ms == 0U) {
-                            s_m2_gate_wait_start_ms = now_ms;
+                        if (s_m2_gate_wait_start_us == 0U) {
+                            s_m2_gate_wait_start_us = now_us;
                         }
-                        if ((now_ms - s_m2_gate_wait_start_ms) >= CEEPEW_M2_GATE_TIMEOUT_MS) {
+                        if ((now_us - s_m2_gate_wait_start_us) >= session_ms_to_us(CEEPEW_M2_GATE_TIMEOUT_MS)) {
                             ESP_LOGW(TAG,
                                      "M2 gate peer_gatt_ready timeout %u ms — opening GATTC",
                                      (unsigned)CEEPEW_M2_GATE_TIMEOUT_MS);
                             m2_peer_ready = true;
                         }
                     } else {
-                        s_m2_gate_wait_start_ms = 0U;
+                        s_m2_gate_wait_start_us = 0U;
                     }
                     if (is_initiator && !g_ble_ctx.connecting && !g_ble_ctx.gattc_connected &&
                             !g_ble_ctx.gatts_connected &&
@@ -715,14 +744,14 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
         }
         /* Enforce minimum 300 ms gap between GATTC open attempts to avoid
          * hammering the BLE stack and causing status=133/attp races. */
-        uint32_t now_ms_gattc = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        if (s_last_gattc_open_ms != 0U && (now_ms_gattc - s_last_gattc_open_ms) < 300U) {
+        uint64_t now_gattc_us = session_now_us();
+        if (s_last_gattc_open_us != 0U && (now_gattc_us - s_last_gattc_open_us) < session_ms_to_us(300U)) {
             ESP_LOGI(TAG, "M2 gate: min 300 ms gap not elapsed since last GATTC open — deferring");
         } else {
             ESP_LOGI(TAG, "Beacon match — opening brief GATT for sign_pk exchange");
             CeePewErr_t conn_err = transport_ble_connect_to_peer(peer->peer_mac);
             if (conn_err == CEEPEW_OK) {
-                s_last_gattc_open_ms = now_ms_gattc;
+                s_last_gattc_open_us = now_gattc_us;
                 /* Allow initiator's GATTC write (sign_pk+box_pk) to complete before
                  * responder attempts reverse GATTC. Increased from 100ms to
                  * CEEPEW_INITIATOR_RESPONDER_DELAY_MS (300ms) for more reliable
@@ -762,19 +791,19 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     /* Exponential backoff with jitter to avoid hammering the BLE stack
      * and to give the initiator time to complete its sign_pk write.
      * Stages: 1000ms, 2000ms, 4000ms (configurable via CEEPEW_RESPONDER_REV_GATTC_BACKOFF_BASE_MS) */
-    static uint32_t s_rev_gattc_last_attempt_ms = 0U;
+    static uint64_t s_rev_gattc_last_attempt_us = 0U;
     static bool s_rev_gattc_jittered = false;
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+    uint64_t now_us = session_now_us();
 
     /* First-attempt jitter: both devices may try to open GATTC connections
      * simultaneously (~50 ms apart), causing "gatt_connect wrong state 2".
      * A random 50-150 ms delay on the responder's first attempt pushes one
      * side outside the race window. */
-    if (!s_rev_gattc_jittered && s_rev_gattc_last_attempt_ms == 0U) {
+    if (!s_rev_gattc_jittered && s_rev_gattc_last_attempt_us == 0U) {
       uint32_t jitter_ms = 50U + ((uint32_t)esp_random() % 101U);
       ESP_LOGI(TAG, "reverse GATTC: applying %u ms jitter to avoid cross-connection",
                (unsigned)jitter_ms);
-      s_rev_gattc_last_attempt_ms = now_ms;
+      s_rev_gattc_last_attempt_us = now_us;
       s_rev_gattc_jittered = true;
       return CEEPEW_OK;
     }
@@ -784,13 +813,13 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     uint32_t stage = (s_rev_gattc_backoff_stage < CEEPEW_REV_GATTC_BACKOFF_STAGES)
                      ? s_rev_gattc_backoff_stage : (CEEPEW_REV_GATTC_BACKOFF_STAGES - 1U);
     uint32_t backoff_ms = s_rev_gattc_backoff_ms[stage];
-    if (s_rev_gattc_last_attempt_ms != 0U &&
-        (now_ms - s_rev_gattc_last_attempt_ms) < backoff_ms) {
+    if (s_rev_gattc_last_attempt_us != 0U &&
+        (now_us - s_rev_gattc_last_attempt_us) < session_ms_to_us(backoff_ms)) {
       return CEEPEW_OK;  /* too soon — retry on next loop iteration */
     }
     if (g_ble_ctx.peer_mac[0] != 0U) {
       ESP_LOGI(TAG, "Responder: opening reverse GATTC for sign_pk exchange");
-      s_rev_gattc_last_attempt_ms = now_ms;
+      s_rev_gattc_last_attempt_us = now_us;
       CeePewErr_t conn_err = transport_ble_connect_to_peer(g_ble_ctx.peer_mac);
       ESP_LOGI(TAG,
                "Reverse GATTC connect result: err=%d "
@@ -810,7 +839,7 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
           ESP_LOGW(TAG, "reverse GATTC: max retries (%u) exhausted — clearing rev_pend",
                    (unsigned)CEEPEW_MAX_RECONNECT_ATTEMPTS);
           g_ble_ctx.reverse_gattc_pending = false;
-          s_rev_gattc_last_attempt_ms = 0U;
+          s_rev_gattc_last_attempt_us = 0U;
           s_rev_gattc_backoff_stage = 0U;
         } else {
           ESP_LOGW(TAG, "reverse GATT connect failed: %d — will retry (attempt %u, backoff stage %u, %u ms)",
@@ -820,7 +849,7 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
         }
       } else {
         /* Success — connection initiated */
-        s_rev_gattc_last_attempt_ms = 0U;
+        s_rev_gattc_last_attempt_us = 0U;
         s_rev_gattc_backoff_stage = 0U;
       }
     } else {
@@ -861,26 +890,27 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
   if (phase == 2U && transport_ble_handoff_ready() && sign_pk_exchange_complete) {
 
     /* Jittered backoff to reduce simultaneous-derive timing collision. */
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-    if (s_phase2_jitter_target_ms == 0U) {
+    uint64_t now_us = session_now_us();
+    if (s_phase2_jitter_target_us == 0U) {
       uint8_t local_dev[CEEPEW_DEVICE_ID_BYTES];
       (void)session_get_device_id(local_dev);
-      uint32_t seed = now_ms ^ ((uint32_t)local_dev[5] << 8);
+      uint32_t seed = (uint32_t)(now_us & 0xFFFFFFFFULL) ^ session_cycle_count() ^
+                      ((uint32_t)local_dev[5] << 8);
       if (peer != NULL) {
         seed ^=
             ((uint32_t)peer->peer_mac[5] << 16) | (uint32_t)peer->peer_mac[4];
       }
-      /* jitter in [50, 500) ms */
-      s_phase2_jitter_target_ms = 50U + (uint32_t)(seed % 450U);
-      s_phase2_jitter_start_ms = now_ms;
+      /* jitter in [50, 500) ms, stored as us */
+      s_phase2_jitter_target_us = session_ms_to_us(50U + (uint32_t)(seed % 450U));
+      s_phase2_jitter_start_us = now_us;
       ceepew_secure_zero(local_dev, sizeof(local_dev));
       ESP_LOGI(TAG, "phase2: jitter target %u ms",
-               (unsigned)s_phase2_jitter_target_ms);
+               (unsigned)(s_phase2_jitter_target_us / 1000ULL));
     }
-    if ((now_ms - s_phase2_jitter_start_ms) < s_phase2_jitter_target_ms) {
+    if ((now_us - s_phase2_jitter_start_us) < s_phase2_jitter_target_us) {
       return CEEPEW_OK;
     }
-    s_phase2_jitter_target_ms = 0U;
+    s_phase2_jitter_target_us = 0U;
 
     /* Distinguish normal vs degraded mode for log-diagnosable asymmetry.
      * If both sign_pk fields are set, the exchange completed normally.
@@ -933,18 +963,18 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
      * the peer's beacon before tearing down BLE. This prevents race where
      * one side tears down BLE before the other has confirmed the PIN. */
     if (g_ble_ctx.ready_for_chat && !g_ble_ctx.peer_ready_for_chat) {
-        if (s_handoff_sync_start_ms == 0U) {
-            s_handoff_sync_start_ms = now_ms;
+        if (s_handoff_sync_start_us == 0U) {
+            s_handoff_sync_start_us = now_us;
             (void)transport_ble_send_handoff_ready_beacon();
             ESP_LOGI(TAG, "Sent HANDOFF_READY beacon, waiting for peer...");
         }
 
-        if ((now_ms - s_handoff_sync_start_ms) < 5000U) {
+        if ((now_us - s_handoff_sync_start_us) < session_ms_to_us(5000U)) {
             return CEEPEW_OK; // Defer handoff, wait for peer
         }
         ESP_LOGW(TAG, "HANDOFF_READY sync timeout — peer not ready, proceeding");
     }
-    s_handoff_sync_start_ms = 0U; // Reset for next time
+    s_handoff_sync_start_us = 0U; // Reset for next time
 
     /* Both sides ready (or timeout) — send final beacon and proceed */
     if (g_ble_ctx.peer_ready_for_chat) {
@@ -1020,6 +1050,13 @@ static CeePewErr_t task_session_drive_ble_pairing(void) {
     ESP_LOGI(TAG, "ESP-NOW initialized on channel %d", CEEPEW_ESPNOW_CHANNEL);
     #endif
     vTaskDelay(pdMS_TO_TICKS(100));  /* 100 ms for WiFi/coex stack to settle (was 200) */
+
+    /* On-node promiscuous OTA capture (opt-in debug, default off).
+     * Started AFTER BLE teardown + WiFi restart, entering ESP-NOW Phase 3.
+     * Consume the logger output at 921600 baud host-side. */
+#ifdef CONFIG_CEEPEW_CAPTURE
+    (void)transport_capture_start();
+#endif
 
     /* Quick broadcast probe to verify ESP-NOW RX is live after BLE teardown */
     {
@@ -1315,14 +1352,14 @@ static RgbPattern_t task_session_map_pattern(UIState_t state,
 static void task_session_reset_pairing_static_state(void) {
   s_ble_peer_latched = false;
   s_ble_commitment_exchanged = false;
-  s_phase2_jitter_target_ms = 0U;
-  s_phase2_jitter_start_ms = 0U;
+  s_phase2_jitter_target_us = 0U;
+  s_phase2_jitter_start_us = 0U;
   s_initiator_jittered = false;
   s_hopping_started = false;
-  s_handoff_sync_start_ms = 0U;
+  s_handoff_sync_start_us = 0U;
   s_rev_gattc_backoff_stage = 0U;
-  s_sign_pk_gate_start_ms = 0U;
-  s_m2_gate_wait_start_ms = 0U;
+  s_sign_pk_gate_start_us = 0U;
+  s_m2_gate_wait_start_us = 0U;
   s_last_pfs_retry_ms = 0ULL;
 }
 
@@ -1352,32 +1389,34 @@ static const char *task_session_pairing_flow_state_name(PairingFlowState_t state
 /* Pairing flow ownership — session task drives the pairing state machine */
 static void task_session_pairing_flow_reset(void) {
   s_pairing_flow_state = PAIRING_FLOW_IDLE;
-  s_pairing_flow_start_ms = 0U;
-  s_pairing_phase_entered_ms = 0U;
+  s_pairing_flow_start_us = 0U;
+  s_pairing_phase_entered_us = 0U;
   s_pairing_retry_count = 0U;
   s_ble_peer_latched = false; /* Force re-latch on next pairing attempt */
   s_initiator_jittered = false;
   s_rev_gattc_backoff_stage = 0U;
-  s_sign_pk_gate_start_ms = 0U;
-  s_m2_gate_wait_start_ms = 0U;
+  s_sign_pk_gate_start_us = 0U;
+  s_m2_gate_wait_start_us = 0U;
 }
 
 static void task_session_pairing_flow_advance(PairingFlowState_t new_state) {
   if (s_pairing_flow_state != new_state) {
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
-    uint32_t phase_time = s_pairing_phase_entered_ms > 0U ? (now_ms - s_pairing_phase_entered_ms) : 0U;
+    uint64_t now_us = session_now_us();
+    /* ms shown in the log only; the hot-path comparison stays in raw us. */
+    uint32_t phase_time_ms = s_pairing_phase_entered_us > 0U
+        ? (uint32_t)((now_us - s_pairing_phase_entered_us) / 1000ULL) : 0U;
     ESP_LOGI(TAG, "[PAIRING_STEP] Flow state transition: %s -> %s (phase time=%u ms, role=%s)",
              task_session_pairing_flow_state_name(s_pairing_flow_state),
              task_session_pairing_flow_state_name(new_state),
-             (unsigned)phase_time,
+             (unsigned)phase_time_ms,
              session_get_role() ? "initiator" : "responder");
     s_pairing_flow_state = new_state;
-    s_pairing_phase_entered_ms = now_ms;
+    s_pairing_phase_entered_us = now_us;
   }
 }
 
 static CeePewErr_t task_session_pairing_flow_drive(void) {
-  uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+  uint64_t now_us = session_now_us();
   uint8_t phase = session_get_phase();
   const BlePeerRecord_t *peer = transport_ble_get_peer_cached();
   UIState_t ui_state;
@@ -1403,7 +1442,7 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       }
       if (peer != NULL) {
         task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
-        s_pairing_flow_start_ms = now_ms;
+        s_pairing_flow_start_us = now_us;
       }
     }
     break;
@@ -1413,10 +1452,10 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_COMMITMENT);
     } else if (peer == NULL) {
       task_session_pairing_flow_advance(PAIRING_FLOW_IDLE);
-    } else if ((now_ms - s_pairing_phase_entered_ms) >
-               pairing_flow_timeout_ms[PAIRING_FLOW_DISCOVERY]) {
+    } else if ((now_us - s_pairing_phase_entered_us) >
+               session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_DISCOVERY])) {
       ESP_LOGE(TAG, "[PAIRING_TIMEOUT] DISCOVERY timeout after %u ms (budget=%u ms)",
-               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)((now_us - s_pairing_phase_entered_us) / 1000ULL),
                (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_DISCOVERY]);
       ESP_LOGE(TAG, "  Details: role=%s, peer_latched=%d, ui_state=%s",
                session_get_role() ? "initiator" : "responder",
@@ -1430,10 +1469,10 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_GATT_IDENTITY);
     } else if (phase < 2U) {
       task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
-    } else if ((now_ms - s_pairing_phase_entered_ms) >
-               pairing_flow_timeout_ms[PAIRING_FLOW_COMMITMENT]) {
+    } else if ((now_us - s_pairing_phase_entered_us) >
+               session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_COMMITMENT])) {
       ESP_LOGE(TAG, "[PAIRING_TIMEOUT] COMMITMENT timeout after %u ms (budget=%u ms)",
-               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)((now_us - s_pairing_phase_entered_us) / 1000ULL),
                (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_COMMITMENT]);
       ESP_LOGE(TAG, "  Details: role=%s, commit_ver=%d, handoff_ready=%d, local_commit_len=%u, ui_state=%s",
                session_get_role() ? "initiator" : "responder",
@@ -1466,10 +1505,10 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
       task_session_pairing_flow_advance(PAIRING_FLOW_DEGRADED);
     } else if (phase < 2U) {
       task_session_pairing_flow_advance(PAIRING_FLOW_DISCOVERY);
-    } else if ((now_ms - s_pairing_phase_entered_ms) >
-               pairing_flow_timeout_ms[PAIRING_FLOW_GATT_IDENTITY]) {
+    } else if ((now_us - s_pairing_phase_entered_us) >
+               session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_GATT_IDENTITY])) {
       ESP_LOGE(TAG, "[PAIRING_TIMEOUT] GATT_IDENTITY timeout after %u ms (budget=%u ms)",
-               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)((now_us - s_pairing_phase_entered_us) / 1000ULL),
                (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_GATT_IDENTITY]);
       ESP_LOGE(TAG, "  Details: role=%s, gattc_conn=%d, gatts_conn=%d, sign_pk_rcvd=%d, init_sent=%d, attempts=%u/%u",
                session_get_role() ? "initiator" : "responder",
@@ -1483,10 +1522,10 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
   case PAIRING_FLOW_KEY_DERIVE:
     if (session_is_active() && session_sync_barrier_cleared()) {
       task_session_pairing_flow_advance(PAIRING_FLOW_POST_DERIVE_SYNC);
-    } else if ((now_ms - s_pairing_phase_entered_ms) >
-               pairing_flow_timeout_ms[PAIRING_FLOW_KEY_DERIVE]) {
+    } else if ((now_us - s_pairing_phase_entered_us) >
+               session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_KEY_DERIVE])) {
       ESP_LOGE(TAG, "[PAIRING_TIMEOUT] KEY_DERIVE timeout after %u ms (budget=%u ms)",
-               (unsigned)(now_ms - s_pairing_phase_entered_ms),
+               (unsigned)((now_us - s_pairing_phase_entered_us) / 1000ULL),
                (unsigned)pairing_flow_timeout_ms[PAIRING_FLOW_KEY_DERIVE]);
       ESP_LOGE(TAG, "  Details: session_active=%d, sync_barrier=%d, wifi_mac_valid=%d",
                session_is_active(), session_sync_barrier_cleared(), session_peer_wifi_mac_valid());
@@ -1498,10 +1537,10 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
     if (session_is_identity_degraded()) {
       ESP_LOGW(TAG, "[PAIRING_STEP] DEGRADED -> KEY_DERIVE (user explicitly confirmed degraded mode)");
       task_session_pairing_flow_advance(PAIRING_FLOW_KEY_DERIVE);
-    } else if ((now_ms - s_pairing_phase_entered_ms) >
-               pairing_flow_timeout_ms[PAIRING_FLOW_DEGRADED]) {
+    } else if ((now_us - s_pairing_phase_entered_us) >
+               session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_DEGRADED])) {
       ESP_LOGE(TAG, "[PAIRING_TIMEOUT] DEGRADED user confirmation timeout after %u ms — failing pairing",
-               (unsigned)(now_ms - s_pairing_phase_entered_ms));
+               (unsigned)((now_us - s_pairing_phase_entered_us) / 1000ULL));
       session_ui_ctx_lock();
       g_ui_ctx.pairing_result_reason = UI_PAIRING_RESULT_TIMED_OUT;
       g_ui_ctx.transition_ready = true;
@@ -1515,17 +1554,17 @@ static CeePewErr_t task_session_pairing_flow_drive(void) {
     if (session_sync_barrier_cleared()) {
       ESP_LOGI(TAG, "[PAIRING_STEP] POST_DERIVE_SYNC verified — pairing successfully completed!");
       task_session_pairing_flow_reset();
-    } else if ((now_ms - s_pairing_phase_entered_ms) >
-               pairing_flow_timeout_ms[PAIRING_FLOW_POST_DERIVE_SYNC]) {
+    } else if ((now_us - s_pairing_phase_entered_us) >
+               session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_POST_DERIVE_SYNC])) {
       ESP_LOGE(TAG, "[PAIRING_TIMEOUT] POST_DERIVE_SYNC timeout after %u ms — peer failed to ACK post-derive sync",
-               (unsigned)(now_ms - s_pairing_phase_entered_ms));
+               (unsigned)((now_us - s_pairing_phase_entered_us) / 1000ULL));
       task_session_pairing_flow_advance(PAIRING_FLOW_FAILED);
     }
     break;
 
   case PAIRING_FLOW_FAILED:
-    if ((now_ms - s_pairing_phase_entered_ms) >
-        pairing_flow_timeout_ms[PAIRING_FLOW_FAILED]) {
+    if ((now_us - s_pairing_phase_entered_us) >
+        session_ms_to_us(pairing_flow_timeout_ms[PAIRING_FLOW_FAILED])) {
       ESP_LOGI(TAG, "pairing flow: cleanup complete, returning to discovery");
       (void)transport_ble_restart_discovery_session();
       task_session_reset_pairing_static_state();
@@ -1655,10 +1694,10 @@ if (!scan_active) {
     s_last_ble_scan_heartbeat_ms = 0ULL;
   }
 
-  /* Check for active TX/RX blink overlay */
-  uint32_t now_ms32 = (uint32_t)now_ms;
+  /* Check for active TX/RX blink overlay (raw us compare, no 1 ms quant) */
+  uint64_t now_blink_us = session_now_us();
   RgbPattern_t effective_pattern = pattern;
-  if (s_rgb_blink_overlay != RGB_OFF && now_ms32 < s_rgb_blink_expiry_ms) {
+  if (s_rgb_blink_overlay != RGB_OFF && now_blink_us < s_rgb_blink_expiry_us) {
     effective_pattern = s_rgb_blink_overlay;
   }
 
@@ -1843,8 +1882,39 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
         return err;
     }
 
-    ESP_LOGI("SESSION", "[SECURE_CHAT_RX] Ascon-128 AEAD decrypt & auth VERIFIED OK (plain_len=%u B, nonce=%llu)",
+    ESP_LOGD("SESSION", "[SECURE_CHAT_RX] Ascon-128 AEAD decrypt & auth VERIFIED OK (plain_len=%u B, nonce=%llu)",
              (unsigned)plain_len, (unsigned long long)rx_nonce_counter);
+
+    /* Replay commit — WireGuard model. The ESL stage ran a READ-ONLY replay
+     * check pre-decrypt; the window advances only now that the Ascon-128
+     * tag has verified, so forged frames cannot shift last_seq/bitmap.
+     * commit() takes/releases the window spinlock internally — it is never
+     * held across crypto. It re-checks under the lock: a duplicate that
+     * passed check concurrently (dup-then-confirm) fails here and the
+     * frame is discarded. */
+    {
+        uint64_t rx_seq = 0ULL;
+        CeePewErr_t seq_err = transport_esl_get_last_seq(&rx_seq);
+        if (seq_err != CEEPEW_OK || rx_seq == 0ULL) {
+            ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: replay commit seq unavailable (err=%d seq=%llu)",
+                     (int)seq_err, (unsigned long long)rx_seq);
+            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+            ceepew_secure_zero(local_sig, sizeof(local_sig));
+            ceepew_secure_zero(local_plain, sizeof(local_plain));
+            ceepew_secure_zero(local_ascon_ct, sizeof(local_ascon_ct));
+            return (seq_err != CEEPEW_OK) ? seq_err : CEEPEW_ERR_TRANSPORT;
+        }
+        CeePewErr_t commit_err = transport_replay_commit(rx_seq);
+        if (commit_err != CEEPEW_OK) {
+            ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Discard: replay commit rejected seq=%llu (err=%d)",
+                     (unsigned long long)rx_seq, (int)commit_err);
+            ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
+            ceepew_secure_zero(local_sig, sizeof(local_sig));
+            ceepew_secure_zero(local_plain, sizeof(local_plain));
+            ceepew_secure_zero(local_ascon_ct, sizeof(local_ascon_ct));
+            return commit_err;
+        }
+    }
 
     /* Ed25519 signature verification (skipped in identity-degraded mode) */
     if (!session_is_identity_degraded()) {
@@ -1866,7 +1936,7 @@ static CeePewErr_t stage_rx_decrypt(Region_t *region, const uint8_t *in,
             ceepew_secure_zero(local_sig, sizeof(local_sig));
             return err;
         }
-        ESP_LOGI("SESSION", "[SECURE_CHAT_RX] Ed25519 signature VERIFIED OK");
+        ESP_LOGD("SESSION", "[SECURE_CHAT_RX] Ed25519 signature VERIFIED OK");
     } else {
         ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Ed25519 signature verification SKIPPED (identity-degraded mode active)");
     }
@@ -1980,7 +2050,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
                     frame->payload_len <= CEEPEW_PACKET_MAX_BYTES,
                 CEEPEW_ERR_BOUNDS);
 
-  ESP_LOGI("SESSION-RX", "[SECURE_CHAT_RX] Processing incoming frame: src=%02X:%02X:%02X:%02X:%02X:%02X len=%u B active=%d",
+  ESP_LOGD("SESSION-RX", "[SECURE_CHAT_RX] Processing incoming frame: src=%02X:%02X:%02X:%02X:%02X:%02X len=%u B active=%d",
            frame->src_mac[0], frame->src_mac[1], frame->src_mac[2],
            frame->src_mac[3], frame->src_mac[4], frame->src_mac[5],
            (unsigned)frame->payload_len, session_is_active());
@@ -2122,9 +2192,9 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
   uint8_t total_frags = (uint8_t)((flags & 0x3FU) + 1U);
   uint16_t chunk_len = (uint16_t)(frag_payload_len - CEEPEW_FRAG_HEADER_BYTES);
 
-  /* Timeout check for partial assembly */
-  uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-  if (s_frag_active && (now_ms - s_frag_start_ms > CEEPEW_FRAG_TIMEOUT_MS)) {
+  /* Timeout check for partial assembly (raw us, no 1 ms quant) */
+  uint64_t now_us = session_now_us();
+  if (s_frag_active && (now_us - s_frag_start_us > session_ms_to_us(CEEPEW_FRAG_TIMEOUT_MS))) {
     ESP_LOGW("SESSION", "[SECURE_CHAT_RX] Fragment reassembly timeout (%u ms) — discarding partial",
              CEEPEW_FRAG_TIMEOUT_MS);
     s_frag_active = false;
@@ -2150,7 +2220,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     s_frag_expected_idx = 0U;
     s_frag_accum_len = 0U;
     s_frag_active = true;
-    s_frag_start_ms = now_ms;
+    s_frag_start_us = now_us;
   } else {
     /* Continuation fragment */
     if (!s_frag_active) {

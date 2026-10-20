@@ -143,7 +143,7 @@ static CeePewErr_t stage_tx_encrypt(Region_t *region, const uint8_t *in,
     *out = payload;
     *out_len = payload_len;
 
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Encrypt & sign complete: ascon_ct=%u B, box_ct=%u B, frame=%u B, nonce=%llu",
+    ESP_LOGD(TAG, "[SECURE_CHAT_TX] Encrypt & sign complete: ascon_ct=%u B, box_ct=%u B, frame=%u B, nonce=%llu",
              (unsigned)ascon_ct_len, (unsigned)box_ct_len, (unsigned)payload_len,
              (unsigned long long)session_get_nonce_counter());
 
@@ -186,7 +186,7 @@ static CeePewErr_t stage_tx_frame_fec(Region_t *region, const uint8_t *in,
     if ((uint32_t)frame_len > CEEPEW_FEC_BUF_MAX) { return CEEPEW_ERR_BOUNDS; }
     memcpy(fec_buf + fec_len, &crc, sizeof(crc));
 
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] FEC & CRC-32 encode: in=%u B -> fec_crc=%u B (crc=0x%08X)",
+    ESP_LOGD(TAG, "[SECURE_CHAT_TX] FEC & CRC-32 encode: in=%u B -> fec_crc=%u B (crc=0x%08X)",
              (unsigned)in_len, (unsigned)frame_len, (unsigned)crc);
 
     *out = fec_buf;
@@ -221,7 +221,7 @@ static CeePewErr_t stage_tx_esl_wrap(Region_t *region, const uint8_t *in,
         return err;
     }
 
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] ESL frame wrapped: total=%u B, nonce_counter=%llu",
+    ESP_LOGD(TAG, "[SECURE_CHAT_TX] ESL frame wrapped: total=%u B, nonce_counter=%llu",
              (unsigned)wrapped_len, (unsigned long long)nonce_counter);
 
     *out = buf;
@@ -307,7 +307,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     }
 
     float ratio = (len > 0U) ? ((float)comp_len / (float)len * 100.0f) : 100.0f;
-    ESP_LOGI(TAG, "[SECURE_CHAT_TX] Huffman compress: in=%u B -> out=%u B (ratio=%.1f%%)",
+    ESP_LOGD(TAG, "[SECURE_CHAT_TX] Huffman compress: in=%u B -> out=%u B (ratio=%.1f%%)",
              (unsigned)len, (unsigned)comp_len, (double)ratio);
 
     /* ── Step 2: Fragment compressed stream ─────────────────────────────── */
@@ -357,7 +357,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
             memcpy(frag_in + CEEPEW_FRAG_HEADER_BYTES, compressed + offset, chunk_len);
         }
 
-        ESP_LOGI(TAG, "[SECURE_CHAT_TX] Fragment %u/%u: chunk=%u B, frag_in=%u B",
+        ESP_LOGD(TAG, "[SECURE_CHAT_TX] Fragment %u/%u: chunk=%u B, frag_in=%u B",
                  (unsigned)(frag_idx + 1U), (unsigned)total_frags,
                  (unsigned)chunk_len, (unsigned)frag_payload_len);
 
@@ -385,7 +385,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
         }
 
         /* Wrap frame with ARQ and send with retry/backoff */
-        ESP_LOGI(TAG, "[SECURE_CHAT_TX] Submitting fragment %u/%u (%u B) to ARQ...",
+        ESP_LOGD(TAG, "[SECURE_CHAT_TX] Submitting fragment %u/%u (%u B) to ARQ...",
                  (unsigned)(frag_idx + 1U), (unsigned)total_frags, (unsigned)final_len);
         err = ecc_arq_send(peer_mac, final_frame, final_len);
         if (err != CEEPEW_OK) {
@@ -395,7 +395,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
             return err;
         }
 
-        ESP_LOGI(TAG, "[SECURE_CHAT_TX] Fragment %u/%u delivered & ACKed via ARQ!",
+        ESP_LOGD(TAG, "[SECURE_CHAT_TX] Fragment %u/%u TX-complete (link ACK only, no peer auth)!",
                  (unsigned)(frag_idx + 1U), (unsigned)total_frags);
 
         offset += chunk_len;
@@ -450,10 +450,12 @@ CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_
         return err;
     }
 
-    uint32_t start_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-    uint32_t elapsed_ms = 0U;
+    /* Raw microsecond timebase: esp_timer_get_time() is monotonic us.
+     * No /1000 quantisation and no 64-bit division on this polling path. */
+    uint64_t start_us = (uint64_t)esp_timer_get_time();
+    uint64_t timeout_us = (uint64_t)timeout_ms * 1000ULL;
 
-    while (elapsed_ms < timeout_ms) {
+    while (((uint64_t)esp_timer_get_time() - start_us) < timeout_us) {
         uint32_t current_count = msg_store_count();
         if (current_count > start_count) {
             const StoredMsg_t *msg = msg_store_get(current_count - 1);
@@ -465,7 +467,6 @@ CeePewErr_t session_send_roundtrip(const uint8_t *payload, uint16_t len, uint32_
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10));
-        elapsed_ms = (uint32_t)((esp_timer_get_time() / 1000ULL) - start_ms);
     }
 
     return CEEPEW_ERR_TIMEOUT;

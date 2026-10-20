@@ -10,8 +10,9 @@
 
 static const char *TAG = "TEST-REPLAY";
 
-/* Forward declarations from transport_replay.c */
+/* Forward declarations from transport_replay.c (check/commit split) */
 CeePewErr_t transport_replay_check(uint64_t msg_id, uint32_t timestamp, bool *is_replay);
+CeePewErr_t transport_replay_commit(uint64_t msg_id);
 void transport_replay_reset(void);
 
 void test_replay_window(void){
@@ -22,12 +23,14 @@ void test_replay_window(void){
 
     transport_replay_reset();
 
-    /* First packet should be accepted */
+    /* First packet should be accepted (check, then commit = tag verified) */
     CeePewErr_t err = transport_replay_check(1ULL, 0U, &is_replay);
+    if (err == CEEPEW_OK && !is_replay) { err = transport_replay_commit(1ULL); }
     if (err == CEEPEW_OK && !is_replay) { ESP_LOGI(TAG, "PASS: first packet accepted"); passed++; } else { ESP_LOGE(TAG, "FAIL: first packet rejected"); failed++; }
 
-    /* Next packet with higher seq accepted */
+    /* Next packet with higher seq accepted (check + commit) */
     err = transport_replay_check(2ULL, 0U, &is_replay);
+    if (err == CEEPEW_OK && !is_replay) { err = transport_replay_commit(2ULL); }
     if (err == CEEPEW_OK && !is_replay) { ESP_LOGI(TAG, "PASS: next packet accepted"); passed++; } else { ESP_LOGE(TAG, "FAIL: next packet rejected"); failed++; }
 
     /* Duplicate packet should be detected as replay */
@@ -37,6 +40,7 @@ void test_replay_window(void){
     /* Too-old packet (beyond 64-window) should be rejected */
     transport_replay_reset();
     err = transport_replay_check(1000ULL, 0U, &is_replay);
+    if (err == CEEPEW_OK && !is_replay) { err = transport_replay_commit(1000ULL); }
     if (!(err == CEEPEW_OK && !is_replay)) { ESP_LOGE(TAG, "FAIL: init packet failed"); failed++; }
     uint64_t too_old = 1000ULL - (CEEPEW_REPLAY_WINDOW_SIZE + 1ULL);
     err = transport_replay_check(too_old, 0U, &is_replay);

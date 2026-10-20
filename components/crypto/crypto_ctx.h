@@ -19,6 +19,13 @@ typedef struct {
     uint8_t  box_pubkey[32U];          /* Ephemeral X25519 public key (exchanged via BLE) */
     uint8_t  peer_box_pubkey[32U];     /* Peer's X25519 public key (received via BLE) */
     bool     peer_box_pubkey_valid;    /* true once peer_box_pubkey has been received */
+    /* Cached crypto_box key material — derived ONCE in
+     * session_set_peer_box_pubkey() via crypto_box_refresh_cache(),
+     * reused by crypto_box_encrypt/decrypt on every TX/RX frame.
+     * Avoids a per-frame X25519 scalarmult + SHA-256 on the hot path. */
+    uint8_t  box_shared_secret[32U];   /* Cached X25519 shared secret */
+    uint8_t  box_stream_key[32U];      /* Cached SHA-256(shared_secret) stream key */
+    bool     box_shared_valid;         /* true once box cache has been derived */
     uint8_t  session_id[8U];
     uint8_t  reserved[8U];
 

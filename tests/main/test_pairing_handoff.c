@@ -21,6 +21,7 @@
 
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+#include "ceepew_region.h"
 #include "transport_ble.h"
 #include "session_fsm.h"
 #include "ui_manager.h"
@@ -212,9 +213,12 @@ void test_pairing_handoff_run(void)
 {
     ESP_LOGI(TAG, "=== Pairing handoff (beacon) test ===");
 
-    /* Save the entire BLE context before any test mutates it. */
-    static BleContext_t saved_ctx;
-    memcpy(&saved_ctx, &g_ble_ctx, sizeof(BleContext_t));
+    /* Save the entire BLE context before any test mutates it.
+     * Region-allocated (not static) to conserve link-time DRAM: the
+     * on-device build overflows dram0_0_seg by ~2.4 kB otherwise. */
+    BleContext_t *saved_ctx = (BleContext_t *)region_alloc(&g_region, (uint32_t)sizeof(BleContext_t));
+    CEEPEW_ASSERT_VOID(saved_ctx != NULL);
+    memcpy(saved_ctx, &g_ble_ctx, sizeof(BleContext_t));
 
     uint32_t passed = 0U, failed = 0U;
     bool ok;
@@ -232,7 +236,7 @@ void test_pairing_handoff_run(void)
     passed += ok ? 1U : 0U; failed += ok ? 0U : 1U;
 
     /* Restore BLE context — zero side effects on production state. */
-    memcpy(&g_ble_ctx, &saved_ctx, sizeof(BleContext_t));
+    memcpy(&g_ble_ctx, saved_ctx, sizeof(BleContext_t));
 
     /* The mismatching-beacon test above (handoff_test_mismatch_does_not_promote)
      * calls transport_ble_verify_pending_commitment() with deliberately

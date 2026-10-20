@@ -105,8 +105,9 @@ static void test_channel_hop_deterministic(void) {
     CryptoCtx_t ctx1 = create_test_ctx(test_key, test_sid);
     CryptoCtx_t ctx2 = create_test_ctx(test_key, test_sid);
     
-    static uint8_t channels_seq1[100];
-    static uint8_t channels_seq2[100];
+    /* Stack locals (not static) to conserve link-time DRAM. */
+    uint8_t channels_seq1[100];
+    uint8_t channels_seq2[100];
     
     /* Generate channel sequences for nonces 0-99 */
     if (generate_hop_sequence(&ctx1, 0ULL, 100U, channels_seq1) != CEEPEW_OK) {
@@ -163,8 +164,9 @@ static void test_channel_hop_seed_uniqueness(void) {
     CryptoCtx_t ctx1 = create_test_ctx(test_key, sid1);
     CryptoCtx_t ctx2 = create_test_ctx(test_key, sid2);
     
-    static uint8_t channels_seq1[100];
-    static uint8_t channels_seq2[100];
+    /* Stack locals (not static) to conserve link-time DRAM. */
+    uint8_t channels_seq1[100];
+    uint8_t channels_seq2[100];
     
     if (generate_hop_sequence(&ctx1, 0ULL, 100U, channels_seq1) != CEEPEW_OK) {
         s_hop_tests_failed++;
@@ -209,7 +211,8 @@ static void test_channel_hop_all_channels_present(void) {
     uint8_t test_sid[8] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11};
     CryptoCtx_t ctx = create_test_ctx(test_key, test_sid);
     
-    static uint8_t channels[512];
+    /* Stack local (not static) to conserve link-time DRAM. */
+    uint8_t channels[512];
     if (generate_hop_sequence(&ctx, 0ULL, 512U, channels) != CEEPEW_OK) {
         s_hop_tests_failed++;
         return;
@@ -260,7 +263,8 @@ static void test_channel_hop_no_consecutive_duplicates(void) {
     uint8_t test_sid[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
     CryptoCtx_t ctx = create_test_ctx(test_key, test_sid);
     
-    static uint8_t channels[256];
+    /* Stack local (not static) to conserve link-time DRAM. */
+    uint8_t channels[256];
     if (generate_hop_sequence(&ctx, 0ULL, 256U, channels) != CEEPEW_OK) {
         s_hop_tests_failed++;
         return;

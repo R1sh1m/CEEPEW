@@ -189,6 +189,18 @@ target_link_libraries(test_arq_fault_injection PRIVATE ceepew_portable ceepew_ar
 target_include_directories(test_arq_fault_injection PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_arq_fault_injection COMMAND test_arq_fault_injection)
 
+# test_replay_window — WireGuard check/commit replay window (REAL transport_replay.c).
+# Host mirror of on-device Test 13 (tests/main/test_replay_comprehensive.c):
+# forged s_max+1000 check-only must not shift the window; legit next-seq
+# must still commit (commit-after-AEAD-verify, main/task_session.c:1907).
+add_executable(test_replay_window
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_replay_window.c
+    ${COMPONENT_DIR}/components/transport/transport_replay.c
+)
+target_link_libraries(test_replay_window PRIVATE ceepew_portable)
+target_include_directories(test_replay_window PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_replay_window COMMAND test_replay_window)
+
 # test_ui_navigator — relative navigator hysteresis, velocity ramp, edge dwell, clamp
 add_executable(test_ui_navigator
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ui_navigator.c
