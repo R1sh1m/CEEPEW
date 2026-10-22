@@ -3,6 +3,8 @@ build/
 build*/
 **/build*/
 out/
+_out/
+**/_out/
 
 # ESP-IDF runtime configurations & keys
 sdkconfig
@@ -57,6 +59,8 @@ project_snapshot.ps1
 project_snapshot_md.ps1
 eim_config.toml
 Research/
+ISSUES.md
+issues.md
 
 # Logs & hardware analysis artifacts
 logs/
@@ -89,7 +93,7 @@ tools/capture/*.log
 tools/_*.ps1
 tools/_*.*
 !tools/cppcheck_suppressions.txt
-tools/citation_report.md
+tools/citation_report*.md
 tools/build_technical_report.py
 tools/archive/build_technical_report.py
 tools/capture/captures/
