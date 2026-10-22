@@ -16,13 +16,14 @@
 ## Rejection Events (All Categories)
 
 - Total: 52
-- err=17 (CEEPEW_ERR_REPLAY): 0
+- err=6 (CEEPEW_ERR_TRANSPORT, ESL sliding-window replay check): 16
+- err=17 (CEEPEW_ERR_REPLAY, commit-time recheck): 0
 - By kind: {'esl': 18, 'ascon': 1, 'pipeline': 17, 'box': 16}
 
-| Device | replay_commit | replay_seq_unavail | esl | box | ascon | pipeline | other | err=17 |
-|--------|---------------|--------------------|-----|-----|-------|----------|-------|--------|
-| DEVICE_A | 0 | 0 | 9 | 8 | 1 | 9 | 0 | 0 |
-| DEVICE_B | 0 | 0 | 9 | 8 | 0 | 8 | 0 | 0 |
+| Device | replay_commit | replay_seq_unavail | esl | box | ascon | pipeline | other | err=6 | err=17 |
+|--------|---------------|--------------------|-----|-----|-------|----------|-------|-------|-------|
+| DEVICE_A | 0 | 0 | 9 | 8 | 1 | 9 | 0 | 8 | 0 |
+| DEVICE_B | 0 | 0 | 9 | 8 | 0 | 8 | 0 | 8 | 0 |
 
 ## Matching Results
 
@@ -35,22 +36,22 @@
 
 | Replay Len | Replay Dev | Reject Layer | Reject Dev | Reject Err | Δt (us) | Δt (host) |
 |------------|------------|--------------|------------|------------|---------|-----------|
-| 237 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +0.00 ms | +0.000s |
-| 237 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +100.00 ms | +0.100s |
-| 237 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +0.00 ms | +0.000s |
-| 237 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +0.00 ms | +0.000s |
-| 237 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +100.00 ms | +0.100s |
-| 237 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +0.00 ms | +0.000s |
-| 233 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +0.00 ms | +0.000s |
-| 233 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +100.00 ms | +0.100s |
-| 233 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +100.00 ms | +0.100s |
-| 233 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +0.00 ms | +0.000s |
-| 233 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +0.00 ms | +0.000s |
-| 233 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +0.00 ms | +0.000s |
-| 233 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +100.00 ms | +0.100s |
-| 233 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +100.00 ms | +0.100s |
-| 233 | DEVICE_A | unexpected layer (err=6) | DEVICE_B | 6 | +0.00 ms | +0.000s |
-| 233 | DEVICE_B | unexpected layer (err=6) | DEVICE_A | 6 | +100.00 ms | +0.100s |
+| 237 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +0.00 ms | +0.000s |
+| 237 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +100.00 ms | +0.100s |
+| 237 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +0.00 ms | +0.000s |
+| 237 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +0.00 ms | +0.000s |
+| 237 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +100.00 ms | +0.100s |
+| 237 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +0.00 ms | +0.000s |
+| 233 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +0.00 ms | +0.000s |
+| 233 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +100.00 ms | +0.100s |
+| 233 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +100.00 ms | +0.100s |
+| 233 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +0.00 ms | +0.000s |
+| 233 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +0.00 ms | +0.000s |
+| 233 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +0.00 ms | +0.000s |
+| 233 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +100.00 ms | +0.100s |
+| 233 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +100.00 ms | +0.100s |
+| 233 | DEVICE_A | ESL sliding-window replay check | DEVICE_B | 6 | +0.00 ms | +0.000s |
+| 233 | DEVICE_B | ESL sliding-window replay check | DEVICE_A | 6 | +100.00 ms | +0.100s |
 
 ## Unexplained Rejections
 

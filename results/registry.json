@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-10-19T19:01:48+00:00",
+  "updated_utc": "2026-10-20T14:30:24+00:00",
   "project": "CEE-PEW",
   "conference": "IEEE ICITIIT 2027",
   "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
@@ -1128,6 +1128,23 @@
         "script": "tests/host/test_ascon.c (test_ascon_header_ad_binding)",
         "raw_log": "logs/p4c_ascon_timing_20261019.txt",
         "note": "Log line 41: 'cause AEAD tag rejection (24/24 rejected), plus seq/timestamp variant rejection'; the same report records 'Passed: 14 / 14' at that date (pre-replay-vector build). Traceable counterpart of the paper's '24 ESL-header-tamper vectors [HOST]' (paper6_main.tex:345); the neighbouring '207 AEAD-tag vectors' figure has no surviving artifact (see .agents/AUTHOR_FLAGS_20261019.md)."
+      }
+    },
+    {
+      "id": "P4A-RECEIVER-COMPLETE",
+      "description": "Two bidirectional ESP-NOW full-stack runs (P4a) comparing TX-reported message delivery with receiver-confirmed application-layer completion on the same stream. Capture build: promiscuous frame dumping enabled, channel hopping suppressed; 300 s cap per run.",
+      "formula": "receiver-confirmed messages / TX-reported messages, per run; deficit = TX-reported - receiver-confirmed",
+      "value": "Run 1: 35/38 (92.1%); run 2: 33/36 (91.7%). Deficit is exactly three single-fragment messages per run (~8 pp overstatement by link-layer reporting).",
+      "unit": "messages",
+      "class": "M-HW",
+      "n": 74,
+      "source": {
+        "raw_log": [
+          "logs/p4a_delivery_20261019_202131.txt",
+          "logs/p4a_delivery_20261019_202959.txt"
+        ],
+        "locators": "run 1: ARQ gap A->B at line 3547 (accept seq=0x04, diff=2, so seq 0x02-0x03 missing), B->A at line 6443 (diff=1, seq 0x03 missing); err=3 beacon at line 1853; err=17 duplicate at line 5093. Run 2 replicate: lines 3417, 6409, 1789, 4938.",
+        "note": "Attribution corrected 2026-10-20. The 3-message deficit is NOT err=3 (2-byte rendezvous beacon failing the ESL length check) and NOT err=17 (correctly suppressed duplicate); it is localized to the MAC-ACK->ARQ-decode window by the receiver ARQ counter, with no crypto, FEC, or reassembly rejection logged. Caveats: 300 s cap; per-run n=36-38 (95% Wilson approx [78%, 97%]); one corrupted TX marker makes the scripted run-1 count 37/35 while the physical count is 38/35; RX-drop counter reports only every 256th event; the capture build may itself induce receiver-side ISR/queue loss, which the logs cannot confirm."
       }
     }
   ]
