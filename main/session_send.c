@@ -125,9 +125,14 @@ static CeePewErr_t stage_tx_encrypt(Region_t *region, const uint8_t *in,
         return err;
     }
 
-    /* Snapshot peer X25519 key under mutex */
+    /* Snapshot peer X25519 key under mutex. Lite has no outer box, so the
+     * key is neither read nor required there (it still arrives in the GATT
+     * identity payload, unused). */
     uint8_t local_box_pubkey[32U];
+    memset(local_box_pubkey, 0U, sizeof(local_box_pubkey));
+#if !CEEPEW_PROFILE_LITE_ENABLED
     memcpy(local_box_pubkey, g_crypto_ctx.peer_box_pubkey, 32U);
+#endif
 
     /* Get nonce and session key */
     uint8_t nonce_24[24U];
@@ -169,6 +174,29 @@ static CeePewErr_t stage_tx_encrypt(Region_t *region, const uint8_t *in,
     }
 
     /* crypto_box encrypt */
+#if CEEPEW_PROFILE_LITE_ENABLED
+    /* ── Lite profile ────────────────────────────────────────────────────
+     * The Ascon-128 ciphertext is the frame payload; the outer box and the
+     * per-fragment Ed25519 signature are omitted. 58 B chunk -> 76 B, and
+     * the receive side recovers the length from the ESL payload length
+     * rather than a 2-byte prefix. */
+    (void)crypto_mutex_unlock();
+    (void)local_box_pubkey;
+    {
+        uint16_t payload_len = ascon_ct_len;
+        uint8_t *payload = (uint8_t *)region_alloc(region, payload_len);
+        if (payload == NULL) {
+            err = CEEPEW_ERR_ALLOC;
+            goto zero_intermediate;
+        }
+        memcpy(payload, local_ascon_ct, ascon_ct_len);
+        *out = payload;
+        *out_len = payload_len;
+    }
+    ESP_LOGD(TAG, "[SECURE_CHAT_TX] Lite encrypt complete: ascon_ct=%u B, frame=%u B (no box, no sig), nonce=%llu",
+             (unsigned)ascon_ct_len, (unsigned)(*out_len),
+             (unsigned long long)session_get_nonce_counter());
+#else
     uint8_t local_box_ct[CEEPEW_MAX_MSG_BYTES + 64U];
     uint16_t box_ct_len = (uint16_t)sizeof(local_box_ct);
     err = crypto_box_encrypt(&g_crypto_ctx, local_box_pubkey,
@@ -233,6 +261,7 @@ static CeePewErr_t stage_tx_encrypt(Region_t *region, const uint8_t *in,
     /* Secure zero all key material and intermediate ciphertext */
     ceepew_secure_zero(local_box_ct, sizeof(local_box_ct));
     ceepew_secure_zero(sig, sizeof(sig));
+#endif /* CEEPEW_PROFILE_LITE_ENABLED */
 zero_intermediate:
     ceepew_secure_zero(local_ascon_ct, sizeof(local_ascon_ct));
 zero_keys:
@@ -424,15 +453,36 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     ESP_LOGI(TAG, "[SECURE_CHAT_TX] Initiating TX: len=%u bytes, peer_mac=%02X:%02X:%02X:%02X:%02X:%02X",
              (unsigned)len, peer_mac[0], peer_mac[1], peer_mac[2], peer_mac[3], peer_mac[4], peer_mac[5]);
 
+    /* ISS-S01 fail-closed identity gate. No frame carrying application data
+     * leaves this function unless the peer's Ed25519 sign_pk was received,
+     * canonically encoded, and bound to the pairing commitment — the same
+     * predicate that gates the pairing → ACTIVE transition. The only way
+     * past this in a default build is a verified identity; a degraded
+     * pairing is refused for the whole session. */
+    {
+        CeePewErr_t identity_err = session_tx_identity_gate(session_tx_permitted());
+        if (identity_err != CEEPEW_OK) {
+            ESP_LOGE(TAG, "[SECURE_CHAT_TX] FAILED: peer identity unverified "
+                          "(sign_pk=%d degraded=%d) — refusing to transmit",
+                     (int)session_peer_sign_pk_valid(),
+                     (int)session_is_identity_degraded());
+            return identity_err;
+        }
+    }
+
+#if !CEEPEW_PROFILE_LITE_ENABLED
     /* RC#0 guard: the peer's X25519 key must have arrived via BLE before we
      * can encrypt. If it hasn't, the caller passed either NULL or the wrong
      * (Ed25519) key — both produce unreadable ciphertext.  We gate here so
      * the UI gets a clean CEEPEW_ERR_PARAM rather than silently sending
-     * garbage the peer can never decrypt. */
+     * garbage the peer can never decrypt.
+     * The Lite profile has no outer box, so this requirement does not apply
+     * there (the key is still delivered, just unused). */
     if (!session_peer_box_pubkey_valid()) {
         ESP_LOGE(TAG, "[SECURE_CHAT_TX] FAILED: peer X25519 box pubkey not yet received");
         return CEEPEW_ERR_PARAM;
     }
+#endif
 
     /* Verify ESP-NOW peer is registered before attempting to send. */
     if (!hal_radio_is_peer_registered(peer_mac)) {

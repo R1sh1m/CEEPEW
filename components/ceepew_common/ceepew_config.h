@@ -104,6 +104,22 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_ARQ_TIMEOUT_MS            600U
 #define CEEPEW_SEQ_WINDOW_SIZE           32U
 
+/* ISS-F02: the transmit loop runs one initial attempt plus
+ * CEEPEW_ARQ_MAX_RETRIES backoff-bounded retries, plus one extra attempt so
+ * that a frame blocked across a 5 s channel-hop boundary still gets a
+ * second chance after the hop. The effective count is derived here, in one
+ * place, so the code and the configuration cannot drift apart the way they
+ * did when the loop hard-coded 5 against a configured 3. The exponential
+ * backoff shift is clamped to CEEPEW_ARQ_MAX_RETRIES, so the extra hop-span
+ * attempt reuses the last backoff value instead of growing the schedule.
+ *
+ * Worst-case per-fragment delivery time:
+ *   (1 + 3 + 1) attempts x 600 ms timeout  +  (100 + 200 + 400 + 400) ms
+ *   = 3000 ms + 1100 ms = 4100 ms.
+ */
+#define CEEPEW_ARQ_HOP_SPAN_EXTRA_ATTEMPTS 1U
+#define CEEPEW_ARQ_EFFECTIVE_ATTEMPTS      (1U + CEEPEW_ARQ_MAX_RETRIES + CEEPEW_ARQ_HOP_SPAN_EXTRA_ATTEMPTS)
+
 /* Post-derive sync barrier — 1-byte magic plaintexts exchanged inside the
  * encrypted ESP-NOW tunnel to verify that crypto_box works in BOTH
  * directions before the UI advances to KEYDER. Without this

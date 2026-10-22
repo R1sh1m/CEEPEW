@@ -48,3 +48,8 @@ CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 # (cached stream key) regardless of opt level.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
+# ChaCha20-Poly1305 is enabled so the same-board AEAD baseline (campaign X2)
+# can compare Ascon-128 against a software stream-cipher AEAD as well as
+# against the hardware-accelerated AES-GCM / AES-CCM path.
+CONFIG_MBEDTLS_CHACHAPOLY_C=y
+

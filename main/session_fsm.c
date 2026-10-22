@@ -96,9 +96,18 @@ typedef struct {
 
     /* Identity-degraded mode: peer sign_pk was never received over GATT,
      * but the user explicitly confirmed they wish to proceed without
-     * Ed25519 identity verification. When true, Ed25519 signature checks
-     * are skipped and the UI shows an "UNVERIFIED IDENTITY" banner. */
+     * Ed25519 identity verification. ISS-S01: this flag is now diagnostic
+     * only — it drives the UNVERIFIED IDENTITY banner and the retry prompt.
+     * It does NOT unlock a session: session_phase2_derive_key() consults
+     * session_pairing_may_activate(), which admits a degraded pairing only
+     * in a CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION build. */
     bool     identity_degraded;
+
+    /* ISS-S01: true once the peer's commitment matched our locally computed
+     * commitment. Together with the received peer sign_pk (which arrives in
+     * the AEAD payload sealed under the same session-code-derived key) this
+     * binds the key to the human-entered code. */
+    bool     peer_commitment_verified;
 } SessionCtx_t;
 
 /* Global session context (per-device; single active session at a time) */
@@ -114,6 +123,12 @@ static bool     s_test_nc_set = false;
 static uint64_t s_test_nc     = 0ULL;
 static bool     s_test_commitment_set = false;
 static uint8_t  s_test_commitment[CEEPEW_COMMITMENT_BYTES] = {0U};
+
+/* ISS-S02: online pairing-attempt counter. Deliberately file-scope rather
+ * than a SessionCtx_t field: session_phase1_init() memsets s_session at the
+ * start of every attempt, and the bound must survive across attempts until a
+ * session actually completes (or the device is reset). */
+static uint32_t s_pairing_attempt_count = 0U;
 
 /* Persistent WiFi MAC backup. Survives session_secure_zero_context() so
  * session_phase1_init() can restore it after every memset — critical for
@@ -138,6 +153,9 @@ static void session_init_ttl(void);
 static void session_secure_zero_context(void);
 static CeePewErr_t session_ordered_device_ids(uint8_t id_a[6], uint8_t id_b[6]);
 static CeePewErr_t session_clear_sync_barrier_internal(bool need_tx);
+/* ISS-S01: snapshot the peer identity facts consulted by the fail-closed
+ * pairing/transmit predicate. */
+static void session_current_peer_identity(SessionPeerIdentity_t *out);
 
 static CeePewErr_t session_derive_sign_seed(const uint8_t mac[6], uint8_t seed_out[32])
 {
@@ -318,6 +336,25 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     }
     CEEPEW_ASSERT(!all_zeros, CEEPEW_ERR_CRYPTO);
 
+    /* ISS-S02: bound the number of online pairing attempts. Each attempt is
+     * a full BLE discovery + GATT identity cycle (seconds, not milliseconds),
+     * so this budget is the online-guess bound on the 4-character code
+     * inside a pairing window. The count is reported at INFO so the runtime
+     * bound is visible in the log, and reset when a session reaches ACTIVE. */
+    if (s_pairing_attempt_count >= CEEPEW_PAIRING_MAX_ATTEMPTS) {
+        ESP_LOGE("session_fsm",
+                 "pairing attempt limit reached (%lu/%u) — refusing new attempt "
+                 "until a session completes or the device is reset",
+                 (unsigned long)s_pairing_attempt_count,
+                 (unsigned)CEEPEW_PAIRING_MAX_ATTEMPTS);
+        return CEEPEW_ERR_BUSY;
+    }
+    s_pairing_attempt_count++;
+    ESP_LOGI("session_fsm", "pairing attempt %lu/%u (code space 36^4 = %lu)",
+             (unsigned long)s_pairing_attempt_count,
+             (unsigned)CEEPEW_PAIRING_MAX_ATTEMPTS,
+             (unsigned long)CEEPEW_PAIRING_CODE_SPACE);
+
     /* Lock session FSM against re-entrant calls (e.g. unexpected
      * session_phase1_init) while we mutate s_session state.
      * NOTE: lock is set AFTER parameter validation asserts so that
@@ -418,13 +455,31 @@ CeePewErr_t session_phase2_derive_key(void){
         }
     }
 
-    /* Block key derivation if peer sign_pk is invalid and identity degraded mode is not confirmed.
-     * This prohibits proceeding with unauthenticated pairings. */
-    if (!s_session.peer_sign_pk_valid && !s_session.identity_degraded) {
-        ESP_LOGE("session_fsm", "derive_key ABORT: peer sign_pk invalid and identity not degraded");
-        /* Preserve session_code so the GATT sign_pk retry can recover. */
-        s_session_fsm_locked = false;
-        return CEEPEW_ERR_AUTH_FAIL;
+    /* ── ISS-S01: FAIL-CLOSED PEER IDENTITY ──────────────────────────────
+     * Advancing to ACTIVE requires a peer Ed25519 sign_pk that (a) arrived
+     * over the GATT identity payload sealed under the session-code-derived
+     * AEAD key, (b) is a canonical encoding, and (c) is bound to a peer
+     * commitment that matched ours. A degraded pairing (identity never
+     * received, attempt budget exhausted) is TERMINAL: the banner and the
+     * retry path stay available, but the FSM must never reach ACTIVE and
+     * the transmit path is refused. The escaped case is compiled in only
+     * when CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION=y. */
+    {
+        SessionPeerIdentity_t peer_id;
+        session_current_peer_identity(&peer_id);
+        if (!session_pairing_may_activate(&peer_id,
+                                          s_session.identity_degraded,
+                                          (CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED != 0))) {
+            ESP_LOGE("session_fsm",
+                     "derive_key ABORT: peer identity unverified "
+                     "(sign_pk=%d format=%d commitment=%d degraded=%d) — "
+                     "DEGRADED is terminal, ACTIVE refused",
+                     (int)peer_id.sign_pk_received, (int)peer_id.sign_pk_format_ok,
+                     (int)peer_id.commitment_bound, (int)s_session.identity_degraded);
+            /* Preserve session_code so the GATT sign_pk retry can recover. */
+            s_session_fsm_locked = false;
+            return CEEPEW_ERR_AUTH_FAIL;
+        }
     }
 
     /* Save region state for rollback on error */
@@ -559,9 +614,14 @@ CeePewErr_t session_phase2_derive_key(void){
     err = esl_register_callbacks(session_mac_lock_check, session_enforce_nonce_limit);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 
-    /* Initialize session-permuted Hamming FEC using the derived session key */
+    /* Initialize session-permuted Hamming FEC using the derived session key.
+     * ISS-F01: with FEC compiled out there is no permuted codec to seed, so
+     * no FEC state is created or later consulted (the RX path likewise skips
+     * the decode). */
+#if CEEPEW_FEC_ENABLED
     err = ecc_hamming_init_session(s_session.session_key);
     if (err != CEEPEW_OK) { goto error_cleanup; }
+#endif
     /* Wipe any stale messages (test artifacts, prior session leftovers) and
      * re-initialize the message store for the new session. Order matters:
      * wipe first (zeros all slots, resets count to 0), then init sets
@@ -578,6 +638,9 @@ CeePewErr_t session_phase2_derive_key(void){
     ceepew_secure_zero(ds_mix, sizeof(ds_mix));
     ceepew_secure_zero(commitment, sizeof(commitment));
     ceepew_secure_zero(hkdf_info, sizeof(hkdf_info));
+
+    /* ISS-S02: a completed pairing earns a fresh attempt budget. */
+    s_pairing_attempt_count = 0U;
 
     s_session_fsm_locked = false;
     return CEEPEW_OK;
@@ -723,9 +786,25 @@ CeePewErr_t session_get_peer_public_key(uint8_t peer_pk[32]){
     return CEEPEW_OK;
 }
 
-CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32])
+CeePewErr_t session_set_peer_public_key_checked(const uint8_t *peer_pk,
+                                                uint16_t peer_pk_len)
 {
     if (peer_pk == NULL) { return CEEPEW_ERR_NULL_PTR; }
+
+    /* ISS-S01: a key of the wrong length cannot be a usable sign_pk. Refuse
+     * it and leave the stored identity unverified rather than copying a
+     * short buffer and setting the "valid" flag. */
+    if (!session_peer_pk_length_ok(peer_pk_len)) {
+        ESP_LOGE("session_fsm",
+                 "set_peer_public_key REFUSED: length %u B (expected 32)",
+                 (unsigned)peer_pk_len);
+        return CEEPEW_ERR_BOUNDS;
+    }
+    if (!session_sign_pk_format_ok(peer_pk)) {
+        ESP_LOGE("session_fsm",
+                 "set_peer_public_key REFUSED: non-canonical Ed25519 encoding");
+        return CEEPEW_ERR_PARAM;
+    }
     if (s_session.phase < 2U) {
         ESP_LOGW("session_fsm", "set_peer_public_key deferred: phase=%u (expected >=2) — caller will retry",
                  (unsigned)s_session.phase);
@@ -737,6 +816,13 @@ CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32])
     /* Peer pubkey cache for the RX verify path: stage_rx_decrypt reads this
      * cached key instead of re-fetching/re-deriving per frame. */
     return CEEPEW_OK;
+}
+
+CeePewErr_t session_set_peer_public_key(const uint8_t peer_pk[32])
+{
+    /* Production call sites pass exactly 32 bytes; the checked variant is the
+     * single implementation so the host test exercises the same path. */
+    return session_set_peer_public_key_checked(peer_pk, 32U);
 }
 
 CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32])
@@ -923,10 +1009,52 @@ bool session_peer_sign_pk_valid(void)
     return s_session.peer_sign_pk_valid;
 }
 
+/* ISS-S01: build the identity triple from live session state. Any missing
+ * fact makes the predicate false (fail-closed). */
+static void session_current_peer_identity(SessionPeerIdentity_t *out)
+{
+    if (out == NULL) { return; }
+    out->sign_pk_received  = s_session.peer_sign_pk_valid;
+    out->sign_pk_format_ok = s_session.peer_sign_pk_valid &&
+                             session_sign_pk_format_ok(s_session.peer_sign_pk);
+    out->commitment_bound  = s_session.peer_commitment_verified;
+}
+
+bool session_peer_identity_verified(void)
+{
+    SessionPeerIdentity_t peer_id;
+    session_current_peer_identity(&peer_id);
+    return session_peer_identity_is_verified(&peer_id);
+}
+
+bool session_tx_permitted(void)
+{
+    SessionPeerIdentity_t peer_id;
+    session_current_peer_identity(&peer_id);
+    /* Same predicate as the pairing → ACTIVE transition, so an activated
+     * session and a transmittable session cannot diverge. */
+    return session_pairing_may_activate(&peer_id,
+                                        s_session.identity_degraded,
+                                        (CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED != 0));
+}
+
+uint32_t session_get_pairing_attempt_count(void)
+{
+    return s_pairing_attempt_count;
+}
+
 void session_set_identity_degraded(void)
 {
     s_session.identity_degraded = true;
-    ESP_LOGW("session_fsm", "Session marked IDENTITY-DEGRADED — Ed25519 peer verification disabled");
+#if CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED
+    ESP_LOGW("session_fsm",
+             "Session marked IDENTITY-DEGRADED — Ed25519 peer verification disabled "
+             "(CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION=y: legacy permissive path)");
+#else
+    ESP_LOGE("session_fsm",
+             "Session marked IDENTITY-DEGRADED — terminal: ACTIVE and all "
+             "transmission are refused until a verified re-pair");
+#endif
 }
 
 bool session_is_identity_degraded(void)
@@ -1363,8 +1491,13 @@ CeePewErr_t session_end(void){
     transport_hop_invalidate_key();
     /* Reset ESL callback registration state to allow re-registration */
     esl_reset_callbacks();
-    /* Reset session-permuted Hamming FEC to prevent stale permutation reuse */
+    /* Reset session-permuted Hamming FEC to prevent stale permutation reuse.
+     * ISS-F01: when FEC is compiled out there is no codec state to reset,
+     * and calling the deinit would pull the whole Hamming module into the
+     * image, defeating the ablation. */
+#if CEEPEW_FEC_ENABLED
     (void)ecc_hamming_deinit();
+#endif
     /* Stop channel hopping if active */
     (void)hal_radio_stop_channel_hopping();
     /* Secure securely zero X25519 ECDH key material */
@@ -1576,7 +1709,12 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
             diff |= (uint8_t)(local_commit[i] ^ peer_data[i]);
         }
         ceepew_secure_zero(local_commit, sizeof(local_commit));
-        return (diff == 0U) ? CEEPEW_OK : CEEPEW_ERR_AUTH_FAIL;
+        if (diff != 0U) { return CEEPEW_ERR_AUTH_FAIL; }
+        /* ISS-S01: the commitment matches, so the peer proved knowledge of
+         * the same session code. This is one half of the identity binding;
+         * the other half (the peer sign_pk) must also be present. */
+        s_session.peer_commitment_verified = true;
+        return CEEPEW_OK;
     }
 
     /* ── GATT paths (full 32B commitment, optional 64B signature) ───── */
@@ -1617,6 +1755,12 @@ CeePewErr_t session_verify_peer_commitment_with_sig(const uint8_t *peer_data, ui
     }
 
     ceepew_secure_zero(local_commit, sizeof(local_commit));
+    /* ISS-S01: commitment bound. The peer commitment matched, and (when a
+     * signature was carried) that signature verified against the peer
+     * sign_pk — the key that arrived in the AEAD payload sealed under the
+     * session-code-derived key. session_peer_identity_verified() requires
+     * this flag together with a received, canonically-encoded sign_pk. */
+    s_session.peer_commitment_verified = true;
     return CEEPEW_OK;
 }
 
@@ -1695,8 +1839,11 @@ CeePewErr_t session_wipe(void)
     err = crypto_ctx_destroy();
     if (err != CEEPEW_OK) { CEEPEW_LOG("SESSION", "crypto_ctx_destroy failed: %d", err); }
 
-    /* Reset session-permuted Hamming FEC */
+    /* Reset session-permuted Hamming FEC (ISS-F01: compiled out entirely
+     * when FEC is disabled, so the call is not present in the image). */
+#if CEEPEW_FEC_ENABLED
     (void)ecc_hamming_deinit();
+#endif
     /* Stop channel hopping if active */
     (void)hal_radio_stop_channel_hopping();
 

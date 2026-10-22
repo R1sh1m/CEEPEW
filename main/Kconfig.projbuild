@@ -183,6 +183,19 @@ menu "CEE-PEW Configuration"
                 latency analysis. Used to re-measure Full-mode TX timing
                 (Table VI). Disabled in production (default).
 
+        config CEEPEW_BENCH_AEAD
+            bool "Enable same-board AEAD and signature baseline (bench only)"
+            default n
+            help
+                When enabled, the boot diagnostic also runs the same-board
+                cryptographic baseline (campaign X2): Ascon-128 v1.2 with
+                and without associated data, the project's Ed25519
+                implementation, and - when the mbedTLS/PSA build provides
+                them - AES-256-GCM, AES-128-CCM and ChaCha20-Poly1305.
+                Every case emits a BENCHCASE line carrying the CPU
+                frequency read from the chip and an explicit hardware-AES
+                label. Disabled in production (default).
+
         config CEEPEW_BENCH_TIMING
             bool "Enable sync-pulse timing instrumentation (E5)"
             default n
@@ -204,17 +217,57 @@ menu "CEE-PEW Configuration"
                 Configured as open-drain with internal pull-up.
 
         config CEEPEW_FEC_DISABLE
-            bool "Disable Hamming(15,11) FEC (reliability ablation only)"
+            bool "Disable Hamming(15,11) FEC (DEFAULT: FEC is off)"
+            default y
+            help
+                Default ENABLED (FEC compiled out). The reliability campaign
+                (ISS-F01) corrected zero bits across every recorded run while
+                costing 36.4% wire overhead: 802.11 FCS discards corrupt frames
+                before they ever reach the FEC decoder, so the code never had a
+                population to repair. With this enabled the TX pipeline appends
+                the inner CRC-32 straight to the payload (no Hamming encode) and
+                the RX pipeline verifies the CRC and passes the payload through
+                (no Hamming decode), so no FEC state is initialised or consulted.
+
+                Set to 'n' to restore Hamming(15,11) single-bit correction as an
+                optional layer (the ablation build must be produced with
+                -D CONFIG_CEEPEW_FEC_DISABLE=n). BOTH devices MUST agree on this
+                setting, because the wire framing differs by 31 bytes per 58-byte
+                chunk: Full profile is 249 B with FEC and 191 B without.
+
+        config CEEPEW_PROFILE_LITE
+            bool "Lite profile: omit outer crypto_box and per-fragment Ed25519"
             default n
             help
-                Compile-time FEC ablation switch for the reliability study.
-                Leave DISABLED (default, production): the TX pipeline
-                Hamming-encodes each fragment before appending the inner CRC-32,
-                and the RX pipeline Hamming-decodes (single-bit correction)
-                after the CRC check. Enable to compile FEC OUT: frames then carry
-                the payload + inner CRC-32 only (smaller on air, no error
-                correction). BOTH devices MUST be flashed with the same setting,
-                since the wire framing differs.
+                When enabled, the transmit path drops the outer XSalsa20+HMAC
+                crypto_box layer and the per-fragment Ed25519 signature, leaving
+                Ascon-128 AEAD over the session key as the only confidentiality
+                and integrity layer. This is the "Lite" profile of the wire-budget
+                table (58-byte chunk: 109 B with FEC off, 138 B with FEC on,
+                versus 191 B / 249 B for Full).
+
+                Default 'n' keeps the Full 7-layer stack; behaviour is
+                byte-identical to the pre-flag build. Lite removes per-fragment
+                origin authentication and receiver-side key-compromise
+                containment: any holder of the shared Ascon key can forge frames
+                indistinguishably. Both devices MUST be built with the same
+                setting.
+
+        config CEEPEW_ALLOW_UNAUTH_SESSION
+            bool "Allow unauthenticated sessions (TEST BUILDS ONLY)"
+            default n
+            help
+                Escape hatch for the fail-closed identity policy (ISS-S01).
+                Default 'n': key derivation and every application transmit
+                require a peer Ed25519 sign_pk that arrived in the session-code
+                sealed GATT payload and matched the pairing commitment. The
+                DEGRADED pairing state is terminal, never a session.
+
+                Set to 'y' only to compile the pre-revision permissive path so a
+                host test can exercise the gate. A 'y' build still runs, but it
+                re-admits exactly the failure the revision exists to remove:
+                a session with an unverified peer identity and Ed25519 skipped.
+                Never ship firmware with this enabled.
 
     endmenu
 

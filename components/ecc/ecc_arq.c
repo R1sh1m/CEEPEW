@@ -187,9 +187,10 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
  * - Attempt 0: 100ms base ± 10% jitter
  * - Attempt 1: 200ms base ± 10% jitter
  * - Attempt 2: 400ms base ± 10% jitter
- * Max retries: 3 to span channel hopping boundaries.
+ * Max retries: CEEPEW_ARQ_MAX_RETRIES backoff-bounded retries, plus one
+ * hop-span attempt (ISS-F02).
  */
-#define CEEPEW_ARQ_EFFECTIVE_MAX_RETRIES 5U
+#define CEEPEW_ARQ_EFFECTIVE_MAX_RETRIES CEEPEW_ARQ_EFFECTIVE_ATTEMPTS
 
 CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint16_t payload_len){
     CEEPEW_ASSERT(peer_mac != NULL && payload != NULL, CEEPEW_ERR_NULL_PTR);
@@ -247,7 +248,7 @@ CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6], const uint8_t *payload, uint
                     vTaskDelay(pdMS_TO_TICKS(2));
                 }
 
-                uint8_t backoff_shift = (attempt < 3U) ? attempt : 2U;
+                uint8_t backoff_shift = (attempt < CEEPEW_ARQ_MAX_RETRIES) ? attempt : (uint8_t)(CEEPEW_ARQ_MAX_RETRIES - 1U);
                 uint16_t backoff_ms = ecc_arq_compute_backoff_ms(backoff_shift);
                 uint32_t backoff_start = (uint32_t)(esp_timer_get_time() / 1000ULL);
                 while ((uint32_t)(esp_timer_get_time() / 1000ULL) - backoff_start < backoff_ms) {

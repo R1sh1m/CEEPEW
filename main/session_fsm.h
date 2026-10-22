@@ -26,6 +26,160 @@ extern "C" {
 #endif
 
 /* ────────────────────────────────────────────────────────────────────── */
+/* Compile-time profile / policy switches                                 */
+/* ────────────────────────────────────────────────────────────────────── */
+/* sdkconfig symbols do not exist in host builds, so they are normalised to
+ * 0/1 macros here. Every conditional in this translation unit and in
+ * session_send.c reads the normalised name, never CONFIG_* directly. */
+
+/* Lite profile (ISS profile flag): no outer crypto_box, no per-fragment
+ * Ed25519 signature. Default 0 = Full stack, byte-identical to the
+ * pre-flag build. */
+#if defined(CONFIG_CEEPEW_PROFILE_LITE) && CONFIG_CEEPEW_PROFILE_LITE
+#define CEEPEW_PROFILE_LITE_ENABLED 1
+#else
+#define CEEPEW_PROFILE_LITE_ENABLED 0
+#endif
+
+/* Unauthenticated-session escape hatch (ISS-S01). Default 0: the degraded
+ * pairing path is compiled out and cannot reach ACTIVE. */
+#if defined(CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION) && CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION
+#define CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED 1
+#else
+#define CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED 0
+#endif
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Pairing code space and attempt bound (ISS-S02)                         */
+/* ────────────────────────────────────────────────────────────────────── */
+/* Ground truth read from the implementation, not from the manuscript:
+ *
+ *   - The user selects CEEPEW_PAIRING_CODE_CHARS = 4 characters with the
+ *     potentiometer. The alphabet is CODE_CHARSET in
+ *     components/ceepew_hal/ui_manager.c ("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+ *     i.e. CEEPEW_PAIRING_CODE_ALPHABET = 36 symbols, uppercase, single case.
+ *   - The CONFIRM screen (render_confirm(), ui_manager.c) draws exactly those
+ *     four entered bytes in a 2x2 matrix. The displayed code is NOT derived
+ *     from anything: displayed == entered. The peer comparison is the
+ *     commitment match, not a second code read off the display.
+ *   - The 32-byte session code consumed by session_phase2_initiate() is the
+ *     four ASCII bytes repeated eight times (task_session_build_session_code()).
+ *   - "0000" is rejected (ui_manager.c all-zero guard), so the reachable code
+ *     space is CEEPEW_PAIRING_CODE_SPACE - 1.
+ *
+ * Entropy: log2(36^4) = 20.68 bits of code space, of which the user supplies
+ * whatever they choose (no stretching is applied). The online-guess work
+ * factor inside one pairing window is bounded by CEEPEW_PAIRING_MAX_ATTEMPTS
+ * full BLE+GATT identity cycles, since each attempt costs a discovery and a
+ * GATT connection, not a fast local test. */
+#define CEEPEW_PAIRING_CODE_CHARS        4U
+#define CEEPEW_PAIRING_CODE_ALPHABET     36U    /* 0-9, A-Z */
+#define CEEPEW_PAIRING_CODE_SPACE        1679616UL /* 36^4, exactly */
+#define CEEPEW_PAIRING_MAX_ATTEMPTS      10U    /* online attempts per boot */
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Peer identity policy (ISS-S01, fail-closed)                            */
+/* ────────────────────────────────────────────────────────────────────── */
+/* The three facts that together mean "the peer's Ed25519 sign_pk is
+ * verified". They are kept as a plain POD so the policy below is compiled
+ * and unit-tested on the host without pulling in ESP-IDF, while the
+ * firmware feeds it from the live session context.
+ *
+ *   sign_pk_received : session_set_peer_public_key() accepted a 32-byte key
+ *   sign_pk_format_ok: that key is a canonical Ed25519 encoding (RFC 8032)
+ *   commitment_bound : the peer commitment matched our locally computed
+ *                      commitment AND the key arrived in the GATT payload
+ *                      sealed under the session-code-derived AEAD key
+ */
+typedef struct {
+    bool sign_pk_received;
+    bool sign_pk_format_ok;
+    bool commitment_bound;
+} SessionPeerIdentity_t;
+
+/**
+ * @brief Canonical-encoding check for a 32-byte Ed25519 public key.
+ *
+ * Rejects the all-zero key and any non-canonical y (y >= 2^255-19, RFC 8032
+ * §5.1.3). This is a format check only; cryptographic validity is
+ * established by the signature verification itself.
+ *
+ * @param pk 32-byte candidate key (NULL fails closed)
+ * @return true when the encoding is acceptable
+ */
+static inline bool session_sign_pk_format_ok(const uint8_t pk[32])
+{
+    static const uint8_t p_le[32] = {
+        0xEDU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+        0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+        0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+        0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0x7FU
+    };
+    if (pk == NULL) { return false; }
+
+    uint8_t nonzero = 0U;
+    for (uint8_t i = 0U; i < 32U; i++) { nonzero |= pk[i]; }
+    if (nonzero == 0U) { return false; }
+
+    /* Compare y (sign bit masked) against p, most-significant byte first. */
+    for (int i = 31; i >= 0; i--) {
+        uint8_t a = pk[i];
+        if (i == 31) { a = (uint8_t)(a & 0x7FU); }
+        if (a < p_le[i]) { return true; }
+        if (a > p_le[i]) { return false; }
+    }
+    return false;  /* y == p is not a canonical encoding */
+}
+
+/**
+ * @brief Length gate for a received Ed25519 public key.
+ * @param pk_len Received length in bytes; must be exactly 32.
+ */
+static inline bool session_peer_pk_length_ok(uint16_t pk_len)
+{
+    return (pk_len == 32U);
+}
+
+/**
+ * @brief Is the peer identity verified? Fail-closed on a NULL argument.
+ */
+static inline bool session_peer_identity_is_verified(const SessionPeerIdentity_t *id)
+{
+    if (id == NULL) { return false; }
+    return id->sign_pk_received && id->sign_pk_format_ok && id->commitment_bound;
+}
+
+/**
+ * @brief May the pairing FSM advance to ACTIVE?
+ *
+ * @param id                peer identity facts for this pairing
+ * @param degraded          true when the DEGRADED path was entered
+ * @param allow_unauth      true only in a CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION build
+ *
+ * Without the escape hatch a degraded pairing can never activate, whatever
+ * the user confirmed on the degraded screen: DEGRADED is terminal.
+ */
+static inline bool session_pairing_may_activate(const SessionPeerIdentity_t *id,
+                                                bool degraded,
+                                                bool allow_unauth)
+{
+    if (session_peer_identity_is_verified(id)) { return true; }
+    if (allow_unauth && degraded) { return true; }
+    return false;
+}
+
+/**
+ * @brief Transmit gate shared by the session send path.
+ *
+ * @param identity_verified result of session_peer_identity_verified()
+ * @return CEEPEW_OK, or CEEPEW_ERR_AUTH_FAIL when identity is unverified
+ */
+static inline CeePewErr_t session_tx_identity_gate(bool identity_verified)
+{
+    return identity_verified ? CEEPEW_OK : CEEPEW_ERR_AUTH_FAIL;
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
 /* Phase 1: Discovery (no encryption)                                   */
 /* ────────────────────────────────────────────────────────────────────── */
 
@@ -303,13 +457,71 @@ bool session_peer_wifi_mac_valid(void);
 /* Check if the peer's Ed25519 sign key has been received.
  * Returns false until session_set_peer_public_key() has been called.
  * Both this and session_peer_box_pubkey_valid() MUST return true before
- * the UI is permitted to transition to the chat screen. */
+ * the UI is permitted to transition to the chat screen.
+ *
+ * NOTE: receipt is not verification. Use session_peer_identity_verified()
+ * for the fail-closed identity predicate that gates transmission. */
 bool session_peer_sign_pk_valid(void);
+
+/* Fail-closed peer identity predicate (ISS-S01).
+ *
+ * True only when all three hold:
+ *   1. a peer Ed25519 sign_pk was received over the GATT identity payload,
+ *   2. it passed the canonical-encoding format check, and
+ *   3. it is bound to the pairing commitment, i.e. the peer commitment
+ *      matched the locally computed one and the key arrived inside the
+ *      session-code-sealed payload (both facts require the same human code).
+ *
+ * Every application-data transmit path must refuse with CEEPEW_ERR_AUTH_FAIL
+ * when this returns false. Cleared by session_end()/session_wipe() and by
+ * every session_phase1_init(). */
+bool session_peer_identity_verified(void);
+
+/* True when this session may transmit application data.
+ *
+ * Composed from the SAME predicate that gates the pairing → ACTIVE
+ * transition (session_pairing_may_activate), so "reached ACTIVE" and
+ * "may send" cannot drift apart. In a default build this is exactly
+ * session_peer_identity_verified(); in a CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION
+ * build it additionally re-admits a user-confirmed degraded session. */
+bool session_tx_permitted(void);
+
+/* Length-checked peer Ed25519 sign_pk setter.
+ *
+ * Behaves like session_set_peer_public_key() but rejects any length other
+ * than 32 bytes with CEEPEW_ERR_BOUNDS and leaves the stored identity
+ * unverified. The 32-byte wrapper above delegates here, so a production
+ * caller and the fail-closed host test take the same path.
+ *
+ * PARAMETERS:
+ *   peer_pk:     pointer to the received key bytes (not NULL)
+ *   peer_pk_len: received length in bytes (must be 32)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored (still subject to commitment binding)
+ *   CEEPEW_ERR_NULL_PTR / CEEPEW_ERR_BOUNDS / CEEPEW_ERR_PARAM
+ */
+CeePewErr_t session_set_peer_public_key_checked(const uint8_t *peer_pk,
+                                                uint16_t peer_pk_len);
+
+/* Number of pairing attempts started since boot / last successful session.
+ * Incremented once per session_phase2_initiate() and bounded by
+ * CEEPEW_PAIRING_MAX_ATTEMPTS; the counter is reset when key derivation
+ * reaches ACTIVE and on session_wipe(). Exposed for the status screen and
+ * for the runtime log line that reports "attempt n/limit". */
+uint32_t session_get_pairing_attempt_count(void);
 
 /* Mark the session as identity-degraded (peer sign_pk was never received
  * but the user explicitly confirmed they wish to proceed without identity
- * verification). When set, Ed25519 signature verification is skipped and
- * the UI displays an "UNVERIFIED IDENTITY" banner throughout the chat.
+ * verification).
+ *
+ * ISS-S01: without CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION=y this no longer
+ * unlocks a session. The flag is still recorded so the UI can show the
+ * UNVERIFIED IDENTITY banner and offer a retry, but DEGRADED is terminal:
+ * session_phase2_derive_key() refuses to advance to ACTIVE and the transmit
+ * path refuses every frame. In an escape-hatch build the legacy permissive
+ * behaviour is restored verbatim so the gate can be exercised on the host.
+ *
  * Must be called before session_phase2_derive_key(). */
 void session_set_identity_degraded(void);
 
