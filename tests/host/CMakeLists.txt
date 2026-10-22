@@ -94,6 +94,26 @@ target_link_libraries(test_security_utils PRIVATE ceepew_portable)
 target_include_directories(test_security_utils PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_security_utils COMMAND test_security_utils)
 
+# test_fail_closed -- ISS-S01/S02: fail-closed peer-identity policy and the
+# pairing code-space constants. The policy predicates are static inline in
+# main/session_fsm.h, so no ESP-IDF runtime is needed; only the main/ header
+# directory is added to the include path.
+add_executable(test_fail_closed
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_fail_closed.c
+)
+target_link_libraries(test_fail_closed PRIVATE ceepew_portable)
+target_include_directories(test_fail_closed PRIVATE ${COMMON_INCLUDES} ${COMPONENT_DIR}/main)
+add_test(NAME test_fail_closed COMMAND test_fail_closed)
+
+# test_arq_attempts -- ISS-F02: the transmit attempt budget is derived from
+# one place and cannot drift from the configured retry maximum.
+add_executable(test_arq_attempts
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_arq_attempts.c
+)
+target_link_libraries(test_arq_attempts PRIVATE ceepew_portable)
+target_include_directories(test_arq_attempts PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_arq_attempts COMMAND test_arq_attempts)
+
 # test_side_channel — empirical constant-time verification harness (dudect)
 add_executable(test_side_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/test_side_channel.c

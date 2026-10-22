@@ -18,6 +18,9 @@
 #include "session_fsm.h"
 #include "session_msgstore.h"
 #include "crypto_hkdf.h"
+#if CONFIG_CEEPEW_BENCH_AEAD
+#include "crypto_bench.h"
+#endif
 #include "task_arch.h"
 #include <esp_log.h>
 #include <stdint.h>
@@ -702,4 +705,16 @@ void integration_tests_run_all(void){
     } else {
         ESP_LOGE(TAG, "DIAGNOSTIC: %u SUBSYSTEM(S) FAILED", (unsigned)report_failed);
     }
+
+#if CONFIG_CEEPEW_BENCH_AEAD
+    /* Same-board AEAD and signature baseline (campaign X2).
+     * Runs after the subsystem report so that a failing diagnostic does
+     * not suppress the timing baseline. Emits one BENCHCASE line per
+     * case plus a BENCHMETA line; tools/campaign/run_x2_aead.py parses
+     * them. Bench builds only (CONFIG_CEEPEW_BENCH_AEAD, default n). */
+    {
+        static crypto_bench_result_t s_aead_bench_result;
+        (void)crypto_bench_run(30U, &s_aead_bench_result);
+    }
+#endif
 }
