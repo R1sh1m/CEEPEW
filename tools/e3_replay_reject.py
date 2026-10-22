@@ -3,10 +3,10 @@
 
 Parses dual-device capture logs to verify that frames injected by the E3 replay
 hook are rejected by the peer, using time-correlated matching rather than app-level
-sequence accounting. A replayed frame can be caught by an earlier layer (e.g. the
-ESL header/MAC/replay check, err=3) before reaching the replay-window commit
-(transport_replay_commit, err=17), so rejections are matched regardless of err code
-and each match is classified by the layer that caught it.
+sequence accounting. A replayed frame is caught by the ESL sliding-window replay
+check (err=6, CEEPEW_ERR_TRANSPORT) before it can reach the commit-time recheck
+(transport_replay_commit, err=17, CEEPEW_ERR_REPLAY), so rejections are matched
+regardless of err code and each match is classified by the layer that caught it.
 
 CRITICAL (evidence class): because ARQ retransmits, a dropped replayed frame can
 be followed by a clean retry of the SAME application sequence number. So app-level
@@ -18,7 +18,9 @@ Patterns extracted:
   1. Replay armed (sender):   [BENCH58_REPLAY] armed
   2. Replay injected (sender): [BENCH58_REPLAY] replayed N B with stale esl header (fresh arq seq downstream)
   3. Rejection (receiver): any Discard: line (err=N) — matched regardless of err code;
-     err=17 => replay-window commit (transport_replay_commit), err=3 => ESL header/MAC/replay check
+     err=6 => ESL sliding-window replay check (expected first defence),
+     err=17 => replay-window commit (transport_replay_commit, defence in depth),
+     err=3 => ESL header/MAC check, err=5 => AEAD tag verification
   4. All other Discard: lines (for category breakdown)
 
 Timestamps: lines begin with <seconds>.<frac> (host receive time) and contain the
@@ -419,6 +421,13 @@ class ReplayRejectAnalyzer:
         for r in err17_rejects:
             err17_by_device[r.device] += 1
 
+        # err=6 counts: the ESL sliding-window replay check, the first
+        # defence a replayed frame meets.
+        err6_rejects = [r for r in self.reject_events if r.err == 6]
+        err6_by_device: Dict[str, int] = defaultdict(int)
+        for r in err6_rejects:
+            err6_by_device[r.device] += 1
+
         return {
             "run_id": run_id,
             "window_seconds": window_seconds,
@@ -434,6 +443,8 @@ class ReplayRejectAnalyzer:
                 "by_device_kind": {k: dict(v) for k, v in rejects_by_device_kind.items()},
                 "err17_total": len(err17_rejects),
                 "err17_by_device": dict(err17_by_device),
+                "err6_total": len(err6_rejects),
+                "err6_by_device": dict(err6_by_device),
             },
             "matching": {
                 "matched_count": matched_count,
@@ -492,11 +503,34 @@ def fmt_us(us: Optional[int]) -> str:
 
 
 def reject_layer(reject: RejectEvent) -> str:
-    """Classify which layer caught a matched rejection, by err code."""
+    """Classify which layer caught a matched rejection, by err code.
+
+    The mapping is taken from the CEE-PEW error enum in
+    components/ceepew_common/hal_ui_types.h and from the log vocabulary of
+    components/transport/transport_esl.c:
+
+      err=17 CEEPEW_ERR_REPLAY   transport_replay_commit, the commit-time
+                                 recheck that runs after AEAD authentication
+      err=6  CEEPEW_ERR_TRANSPORT the ESL sliding-window replay check
+                                 ("ESL discard: replay detected (seq=N)"),
+                                 which is the FIRST defence a replayed frame
+                                 meets
+      err=3  CEEPEW_ERR_PARAM     the ESL header / MAC check
+      err=5  CEEPEW_ERR_CRYPTO    an AEAD tag failure (Ascon or crypto_box)
+
+    A replayed frame is expected to be caught by err=6, because the ESL
+    window rejects it before the frame can reach the commit path. The
+    err=17 path is a defence in depth for the case where the window and the
+    commit sequence disagree; it is not expected to fire for a plain replay.
+    """
     if reject.err == 17:
         return "replay-window commit (transport_replay_commit)"
+    if reject.err == 6:
+        return "ESL sliding-window replay check"
     if reject.err == 3:
-        return "ESL header/MAC/replay check"
+        return "ESL header/MAC check"
+    if reject.err == 5:
+        return "AEAD tag verification"
     return f"unexpected layer (err={reject.err})"
 
 
@@ -525,12 +559,20 @@ def generate_report(data: Dict[str, Any]) -> str:
     rej = data["rejections"]
     lines.append("-- rejection events (receiver side, ALL categories) --")
     lines.append(f"  total rejections     : {rej['total']}")
-    lines.append(f"  err=17 (CEEPEW_ERR_REPLAY) total : {rej['err17_total']}")
+    lines.append(f"  err=6  (CEEPEW_ERR_TRANSPORT, ESL sliding-window replay check) total : {rej['err6_total']}")
+    lines.append(f"  err=17 (CEEPEW_ERR_REPLAY, commit-time recheck) total : {rej['err17_total']}")
     for device, count in sorted(rej["err17_by_device"].items()):
         lines.append(f"  [{device}] err=17 count: {count}")
     lines.append(f"  by kind: {rej['by_kind']}")
     for device, kinds in sorted(rej["by_device_kind"].items()):
         lines.append(f"  [{device}]: {dict(kinds)}")
+    if rej["err17_total"] == 0:
+        lines.append("")
+        lines.append("  NOTE: the commit-time recheck (err=17) was never exercised. Every replayed")
+        lines.append("  frame was caught earlier by the ESL sliding window (err=6), which rejects a")
+        lines.append("  stale sequence number before the frame reaches the commit path. The err=17")
+        lines.append("  path is defence in depth against a window/commit disagreement, not the")
+        lines.append("  expected first defence for a replay.")
     lines.append("")
 
     # Match summary
@@ -539,11 +581,11 @@ def generate_report(data: Dict[str, Any]) -> str:
     lines.append(f"  MATCHED {match['matched_count']} / {data['replay_injections']['total']}")
     if match.get("matched_by_err"):
         err_parts = []
-        for ec in (17, 3):
+        for ec in (6, 17, 3, 5):
             if match["matched_by_err"].get(ec, 0):
                 err_parts.append(f"err={ec}: {match['matched_by_err'][ec]}")
         for ec in sorted(match["matched_by_err"]):
-            if ec not in (17, 3) and match["matched_by_err"][ec]:
+            if ec not in (6, 17, 3, 5) and match["matched_by_err"][ec]:
                 err_parts.append(f"err={ec}: {match['matched_by_err'][ec]}")
         if err_parts:
             lines.append(f"  matched rejections by err code: {', '.join(err_parts)}")
@@ -680,14 +722,15 @@ def generate_markdown_report(data: Dict[str, Any]) -> str:
     lines.append("")
     rej = data["rejections"]
     lines.append(f"- Total: {rej['total']}")
-    lines.append(f"- err=17 (CEEPEW_ERR_REPLAY): {rej['err17_total']}")
+    lines.append(f"- err=6 (CEEPEW_ERR_TRANSPORT, ESL sliding-window replay check): {rej['err6_total']}")
+    lines.append(f"- err=17 (CEEPEW_ERR_REPLAY, commit-time recheck): {rej['err17_total']}")
     lines.append(f"- By kind: {rej['by_kind']}")
     lines.append("")
-    lines.append("| Device | replay_commit | replay_seq_unavail | esl | box | ascon | pipeline | other | err=17 |")
-    lines.append("|--------|---------------|--------------------|-----|-----|-------|----------|-------|--------|")
+    lines.append("| Device | replay_commit | replay_seq_unavail | esl | box | ascon | pipeline | other | err=6 | err=17 |")
+    lines.append("|--------|---------------|--------------------|-----|-----|-------|----------|-------|-------|-------|")
     for device in sorted(rej["by_device_kind"].keys()):
         kinds = rej["by_device_kind"][device]
-        lines.append(f"| {device} | {kinds.get('replay_commit', 0)} | {kinds.get('replay_seq_unavail', 0)} | {kinds.get('esl', 0)} | {kinds.get('box', 0)} | {kinds.get('ascon', 0)} | {kinds.get('pipeline', 0)} | {kinds.get('other', 0)} | {rej['err17_by_device'].get(device, 0)} |")
+        lines.append(f"| {device} | {kinds.get('replay_commit', 0)} | {kinds.get('replay_seq_unavail', 0)} | {kinds.get('esl', 0)} | {kinds.get('box', 0)} | {kinds.get('ascon', 0)} | {kinds.get('pipeline', 0)} | {kinds.get('other', 0)} | {rej['err6_by_device'].get(device, 0)} | {rej['err17_by_device'].get(device, 0)} |")
     lines.append("")
 
     lines.append("## Matching Results")
@@ -921,8 +964,22 @@ def run_self_test() -> int:
             errors.append(f"match[1]: expected DEVICE_A, got {m1.reject.device}")
         elif m1.delta_t_us is None or not (390000 <= m1.delta_t_us <= 410000):
             errors.append(f"match[1]: expected delta_t ~400000 us, got {m1.delta_t_us}")
-        elif reject_layer(m1.reject) != "ESL header/MAC/replay check":
-            errors.append(f"match[1]: expected ESL layer label, got {reject_layer(m1.reject)}")
+        elif reject_layer(m1.reject) != "ESL header/MAC check":
+            errors.append(f"match[1]: expected ESL header/MAC label, got {reject_layer(m1.reject)}")
+
+        # Layer labels for the other two error codes that a replay can meet.
+        # err=6 is the ESL sliding-window replay check (the expected first
+        # defence), err=17 is the commit-time recheck.
+        class _Probe:
+            def __init__(self, err):
+                self.err = err
+
+        if reject_layer(_Probe(6)) != "ESL sliding-window replay check":
+            errors.append(f"err=6 layer label wrong: {reject_layer(_Probe(6))}")
+        if reject_layer(_Probe(17)) != "replay-window commit (transport_replay_commit)":
+            errors.append(f"err=17 layer label wrong: {reject_layer(_Probe(17))}")
+        if reject_layer(_Probe(5)) != "AEAD tag verification":
+            errors.append(f"err=5 layer label wrong: {reject_layer(_Probe(5))}")
 
         # match[2]: DEVICE_B@200.0 -> UNMATCHED (no peer rejection within window)
         m2 = matches[2]

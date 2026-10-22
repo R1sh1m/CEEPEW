@@ -18,6 +18,7 @@ Usage:
 
 import sys
 import os
+import re
 import argparse
 import subprocess
 import time
@@ -79,6 +80,24 @@ def find_cmake_bin():
     return None
 
 
+def find_ctest_bin():
+    """Locate a ctest executable that matches the cmake used for the host build."""
+    try:
+        res = subprocess.run(["ctest", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0:
+            return "ctest"
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    # Fallback search on Windows: ctest ships next to cmake
+    espressif_cmake = os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake")
+    if os.path.exists(espressif_cmake):
+        for root, dirs, files in os.walk(espressif_cmake):
+            if "ctest.exe" in files:
+                return os.path.join(root, "ctest.exe")
+    return None
+
+
 def find_host_gcc():
     candidates = [
         "C:/msys64/ucrt64/bin/gcc.exe",
@@ -89,6 +108,66 @@ def find_host_gcc():
         if os.path.exists(candidate):
             return candidate
     return None
+
+
+# Suites excluded from the standard host run: the fuzz smoke harnesses need
+# external seed corpora and are driven by the dedicated fuzz workflow
+# (`python tools/ceepew_pipeline.py --mode fuzz`).
+HOST_TEST_EXCLUDE_PREFIX = "fuzz_smoke_"
+
+# Fallback list, used only when ctest cannot enumerate the build tree.
+HOST_TEST_FALLBACK = [
+    "test_security_utils",
+    "test_fail_closed",
+    "test_arq_attempts",
+    "test_side_channel",
+    "test_ascon",
+    "test_hamming",
+    "test_sha256",
+    "test_hkdf",
+    "test_eddsa",
+    "test_huffman",
+    "test_session_pairing",
+    "test_arq_sync",
+    "test_arq_fault_injection",
+    "test_replay_window",
+    "test_replay_vectors",
+    "test_ui_navigator",
+    "test_pfs_auth",
+]
+
+
+def _discover_host_tests(build_dir):
+    """Enumerate the host test suites registered in tests/host/CMakeLists.txt.
+
+    CTest is the single source of truth: every suite registered with
+    add_test() is executed, so a new suite cannot be silently skipped by a
+    stale hard-coded list. Returns an empty list when discovery fails.
+    """
+    ctest_bin = find_ctest_bin()
+    if ctest_bin:
+        res = None
+        try:
+            res = subprocess.run(
+                [ctest_bin, "-N", "-E", "^" + HOST_TEST_EXCLUDE_PREFIX],
+                cwd=build_dir, capture_output=True, text=True)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            res = None
+        if res is not None and res.returncode == 0:
+            names = []
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                # ctest pads the test number: "Test  #1: name" for a single
+                # digit and "Test #10: name" for two, so the number field
+                # must be matched with a regex, not a literal prefix.
+                m = re.match(r"^Test\s+#\d+:\s+(\S+)$", line)
+                if m:
+                    name = m.group(1)
+                    if not name.startswith(HOST_TEST_EXCLUDE_PREFIX):
+                        names.append(name)
+            if names:
+                return names
+    return list(HOST_TEST_FALLBACK)
 
 
 def run_host_tests(enable_coverage=False):
@@ -128,25 +207,14 @@ def run_host_tests(enable_coverage=False):
         print("[FAIL] Host test compilation failed.")
         return False
 
-    # Execute tests using CTest or direct binaries
+    # Execute tests using CTest discovery so a newly registered suite is
+    # never silently skipped (the historical hard-coded list drifted out of
+    # sync with tests/host/CMakeLists.txt at least twice).
     print("--> Running Host Tests...")
-    test_binaries = [
-        "test_security_utils",
-        "test_side_channel",
-        "test_ascon",
-        "test_hamming",
-        "test_sha256",
-        "test_hkdf",
-        "test_eddsa",
-        "test_huffman",
-        "test_session_pairing",
-        "test_arq_sync",
-        "test_arq_fault_injection",
-        "test_replay_window",
-        "test_replay_vectors",
-        "test_ui_navigator",
-        "test_pfs_auth"
-    ]
+    test_binaries = _discover_host_tests(build_dir)
+    if not test_binaries:
+        print("[FAIL] No host test suites were discovered.")
+        return False
 
     passed = 0
     failed = 0

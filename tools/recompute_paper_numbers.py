@@ -59,6 +59,14 @@ def run_recomputations() -> list[RecomputeItem]:
     record("WB-FULL-CFEC", "Full Cfec (Pc=58)", "ceil(ceil(8*Csig/11)*15/8) + 4", "220 B", f"{cfec_bytes} B")
     record("WB-FULL-CWIRE", "Full Cwire (Pc=58)", "Cfec + 24 + 4 + 1", "249 B", f"{cwire} B")
 
+    # 1b. Full Profile with the Hamming layer compiled out. This is the
+    #     shipping default since the FEC ablation (ISS-F01): the wire frame
+    #     is Csig + 24 (ESL header) + 4 (ESL CRC) + 1 (ARQ sequence byte).
+    cwire_full_nofec = csig + 24 + 4 + 1
+    record("WB-FULL-NOFEC", "Full Cwire no FEC (Pc=58)", "Csig + 24 + 4 + 1", "187 B", f"{cwire_full_nofec} B")
+    record("WB-FULL-DELTA", "FEC overhead on the Full wire frame", "249 - 187", "62 B",
+           f"{cwire - cwire_full_nofec} B")
+
     # 2. Lite Profile (no box, no signature)
     fin_lite = pc + 2
     cascon_lite = fin_lite + 16  # 76
@@ -73,10 +81,12 @@ def run_recomputations() -> list[RecomputeItem]:
 
     # 3. Efficiencies
     eff_full_fec = 58 / 249 * 100
+    eff_full_nofec = 58 / cwire_full_nofec * 100
     eff_lite_fec = 58 / 138 * 100
     eff_lite_nofec = 58 / 105 * 100
 
     record("EFF-FULL-FEC", "Full+FEC efficiency", "58 / 249", "23.3%", f"{eff_full_fec:.1f}%")
+    record("EFF-FULL-NOFEC", "Full no-FEC efficiency (shipping default)", "58 / 187", "31.0%", f"{eff_full_nofec:.1f}%")
     record("EFF-LITE-FEC", "Lite+FEC efficiency", "58 / 138", "42.0%", f"{eff_lite_fec:.1f}%")
     record("EFF-LITE-NOFEC", "Lite no-FEC efficiency", "58 / 105", "55.2%", f"{eff_lite_nofec:.1f}%")
 
@@ -140,6 +150,10 @@ def run_recomputations() -> list[RecomputeItem]:
     at_lite = airtime_ms(138 + 39 + 4) # 181 B
     at_74 = airtime_ms(74 + 39 + 4)    # 117 B
     at_86 = airtime_ms(86 + 39 + 4)    # 129 B
+    at_187 = airtime_ms(187 + 39 + 4)  # 230 B
+    at_105 = airtime_ms(105 + 39 + 4)  # 148 B
+    at_187_data_ack = at_187 + 0.010 + at_ack
+    at_105_data_ack = at_105 + 0.010 + at_ack
 
     record("AIR-249-MPDU", "249B payload airtime", "192us + 8us * (288 + 4)", "2.528 ms", f"{at_249:.3f} ms")
     record("AIR-ACK", "14B MAC ACK airtime", "192us + 8us * 14", "0.30 ms", f"{at_ack:.3f} ms",
@@ -150,6 +164,10 @@ def run_recomputations() -> list[RecomputeItem]:
     record("AIR-LITE", "Lite (138B) airtime", "192us + 8us * 181", "1.640 ms", f"{at_lite:.3f} ms")
     record("AIR-74", "74B payload airtime", "192us + 8us * 117", "1.13 ms", f"{at_74:.2f} ms")
     record("AIR-86", "86B payload airtime", "192us + 8us * 129", "1.22 ms", f"{at_86:.2f} ms")
+    record("AIR-187-MPDU", "187B payload airtime (Full, no FEC)", "192us + 8us * 230", "2.032 ms", f"{at_187:.3f} ms")
+    record("AIR-187-DATA-ACK", "187B Data + SIFS + ACK", "2.032 + 0.010 + 0.304", "2.35 ms", f"{at_187_data_ack:.2f} ms")
+    record("AIR-105-MPDU", "105B payload airtime (Lite, no FEC)", "192us + 8us * 148", "1.376 ms", f"{at_105:.3f} ms")
+    record("AIR-105-DATA-ACK", "105B Data + SIFS + ACK", "1.376 + 0.010 + 0.304", "1.69 ms", f"{at_105_data_ack:.2f} ms")
 
     # 8. Cycles to time. Measured counters run on the fixed 160 MHz build clock
     #    (CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=160, CONFIG_PM_ENABLE unset => no DFS);

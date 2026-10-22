@@ -1,38 +1,93 @@
+﻿#!/usr/bin/env python3
+"""Banned-token lint. Implementation: the global ``paperqa`` package.
+
+This file is a compatibility shim. The check itself lives in
+``~/.config/opencode/pipelines/paperqa`` so the same rules run in every
+project. The printed report and the exit status are unchanged.
+
+One deliberate difference from the pre-shim version: tokens are matched on word
+boundaries, so ``pending`` no longer fires inside ``depending``, and the count
+agrees with the one ``publication_gate`` enforces.
+"""
+
+from __future__ import annotations
+
+import os
 import sys
+from pathlib import Path
 
-BANNED = [
-    'delve', 'crucial', 'pivotal', 'seamless', 'leverage', 'holistic',
-    'landscape', 'it is important to note', 'notably', 'crucially',
-    'superseded', 'pending', 'placeholder', 'todo', 'now fixed',
-    'zero-heap', 'state-of-the-art', 'novel', 'robust', 'comprehensive',
-    'in conclusion', 'in summary', 'furthermore,', 'moreover,',
-]
+INSTALL_HINT = (
+    "ERROR: the paperqa package is not installed.\n"
+    "Install it with:\n"
+    '    uv tool install --editable "$HOME/.config/opencode/pipelines/paperqa"\n'
+    "or point PAPERQA_HOME at the package checkout.\n"
+)
 
-def main(path):
-    text = open(path, encoding='utf-8').read()
-    low = text.lower()
+PAPERQA_HOME = Path(
+    os.environ.get(
+        "PAPERQA_HOME",
+        Path.home() / ".config" / "opencode" / "pipelines" / "paperqa",
+    )
+)
+def _bootstrap() -> None:
+    """Make the shared package importable from any interpreter."""
+    try:
+        import paperqa  # noqa: F401
+        return
+    except ImportError:
+        pass
+    src = PAPERQA_HOME / "src"
+    if not src.is_dir():  # pragma: no cover - environment guard
+        sys.stderr.write(INSTALL_HINT)
+        raise SystemExit(2)
+    sys.path.insert(0, str(src))
+
+
+_bootstrap()
+
+try:
+    from paperqa import lint as _lint
+    from paperqa import textstats as _stats
+except ImportError:
+    sys.stderr.write(INSTALL_HINT)
+    raise SystemExit(2)
+
+# Public name kept: publication_gate.py and older scripts import it from here.
+BANNED = list(_lint.CEEPEW_BANNED)
+
+WORDS_PER_PAGE = 900
+EM_DASH_LIMIT = 2
+
+
+def main(path: str) -> int:
+    text = _stats.read_text(path)
     found = 0
     for word in BANNED:
-        count = low.count(word)
+        count = _stats.count_word(text, word)
         if count:
-            print(f'BANNED  {word!r:40s}  count={count}')
+            print("BANNED  %40r  count=%d" % (word, count))
             found += 1
-    paragraphs = [p for p in text.split('\n\n') if p.strip()]
-    pages = max(1, len(text.split()) // 900)
-    em_dashes = text.count('\u2014')
-    print(f'em dashes per page: {em_dashes / pages:.1f}  (limit: 2)')
+
+    paragraphs = [p for p in text.split("\n\n") if p.strip()]
+    pages = max(1, len(text.split()) // WORDS_PER_PAGE)
+    em_dashes = text.count("\u2014") + text.count("---")
+    print("em dashes per page: %.1f  (limit: %d)" % (em_dashes / pages, EM_DASH_LIMIT))
+
     lengths = [len(p.split()) for p in paragraphs]
     if lengths:
-        print(f'paragraphs: {len(lengths)}  min/max words: {min(lengths)}/{max(lengths)}')
+        print("paragraphs: %d  min/max words: %d/%d"
+              % (len(lengths), min(lengths), max(lengths)))
     for i, p in enumerate(paragraphs):
-        if p.count('(') > 3:
-            print(f'many parentheses in paragraph {i + 1}')
-    if found == 0:
-        print('PASS: no banned tokens found')
-    # Extend: check that every number in the text appears in results/registry.json
+        if p.count("(") > 3:
+            print("many parentheses in paragraph %d" % (i + 1))
 
-if __name__ == '__main__':
+    if found == 0:
+        print("PASS: no banned tokens found")
+    return 0
+
+
+if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print('Usage: python tools/paper_lint.py <latex_or_text_file>')
+        print("Usage: python tools/paper_lint.py <latex_or_text_file>")
         sys.exit(1)
-    main(sys.argv[1])
+    sys.exit(main(sys.argv[1]))
