@@ -10,16 +10,44 @@ registry_append.py  append registry entries that are bound to a manifest
 run_x1_timing.py    per-stage timing analysis, cluster-bootstrap intervals (campaign X1)
 run_x12_aead.py     same-board AEAD and signature baseline (campaign X12)
 run_x8_delivery.py  delivery accounting with an explicit drop breakdown (campaign X8)
+build_matrix.py     firmware build matrix orchestrator across configurations
 ```
 
-## The rule
+---
+
+## Campaign Spectrum & Hardware Matrix
+
+| Campaign | Primary Purpose & Measurement | Target Metrics | Hardware Setup |
+|---|---|---|---|
+| **E1 Baseline** | Comparative 802.11 wire exposure and airtime | 249 B MPDU, 2.84 ms airtime, $7.99\text{ bits/B}$ entropy | Dual ESP32 (`COM3`, `COM4`) @ 20 cm + `COM6` sniffer |
+| **E2 Fault Injection** | Fail-closed isolation of forged tags & corrupted frames | 100% dropped at Ascon tag verify (`err=5`); 0 to UI | Device A (`COM3`) injecting, Device B (`COM4`) receiver |
+| **E3 Anti-Replay** | 64-bit sliding window anti-replay validation | 100/100 vectors rejected (95% CI upper bound 3%) | Dual ESP32 with replay test vectors |
+| **E5 Sync Pulse** | Sub-microsecond hardware cross-board timing | Median 27.0 ms round-trip cross-board latency | Copper sync wire connecting GPIO14 to GPIO14 |
+| **BENCHPRIM** | Boot-time isolated cryptographic micro-benchmarks | X25519 (148.0 ms), Ed25519 sign (332.2 ms), verify (663.2 ms) | Dual ESP32 DevKit v1 @ locked 160 MHz |
+| **X1 Timing** | Full 16-stage end-to-end pipeline execution timing | Per-stage microsecond durations with cluster bootstrap CIs | Dual ESP32 (`COM3`, `COM4`), GPIO14 sync wired |
+| **X2 AEAD vs Asym**| Scaling of symmetric AEAD vs asymmetric Ed25519 | Ascon encrypt (41 µs), decrypt (327 µs) vs Ed25519 fixed | Dual ESP32 DevKit v1 @ locked 160 MHz |
+| **X4 Tamper** | ESL header bit manipulation and MAC fault injection | 100% header drops at parser; 100% tag drops at Ascon | Device A (`COM3`) injecting, Device B (`COM4`) receiver |
+| **X5 DoS Stress** | Resilience to high-frequency frame floods (10–500 fps) | 0% OLED UI jitter; clean bounded queue drop; 0 leaks | Dual ESP32 with external Action frame flood injector |
+| **X6 FEC Ablation**| Hamming(15,11) FEC enabled vs compiled out | 249 B vs 187 B wire size; 100% 1-bit corrections | Dual ESP32 flashed with `build_fec2` vs `build` |
+| **X7 Channel Hop** | Channel switching latency & pseudo-random rendezvous | < 15 ms hop dwell; < 2% frame loss during hopping | Dual ESP32 hopping channels 1, 6, 11 + `COM6` sniffer |
+| **X8 Delivery** | Frame delivery accounting & loss classification | Disentangled PHY drops vs cryptographic tag rejections | Dual ESP32 with RF attenuator + `COM6` sniffer |
+| **X9 Zero-Heap** | Region bump allocator watermark & stack headroom | 0 bytes heap; 38.4 KB / 48 KB pool; > 3.2 KB stack margin | Dual ESP32 instrumented memory builds |
+| **X10 OTA PCAP** | Clean promiscuous 802.11 Wireshark capture generation | 249 B action frames; 0 cleartext bytes; verified dissector | Dual ESP32 (`COM3`, `COM4`) + dedicated sniffer (`COM6`) |
+| **X11 Range Sweep**| Multi-distance RSSI attenuation (10 cm to 20 m) | RSSI (-28 to -88 dBm), PDR across distances | Stationary `COM3` + mobile `COM4` at 10 cm–20 m |
+| **X12 Timing CI** | Large-scale statistical confidence interval sampling | 10,000 bootstrap resamples on $N \ge 100$ trials | Dual ESP32 DevKit v1 @ locked 160 MHz |
+
+---
+
+## The Rule
 
 A measurement that is not bound to a manifest does not enter
 `results/registry.json`. `registry_append.py` enforces this: it re-hashes
 every artifact of the manifest before it writes anything, and it refuses an
 entry whose cited artifact is not listed in the manifest.
 
-## Campaign workflow
+---
+
+## Campaign Workflow
 
 1. **Build** the firmware for the campaign configuration and note the build
    directory. Every campaign pins the configuration through `sdkconfig`,
@@ -53,7 +81,7 @@ entry whose cited artifact is not listed in the manifest.
      --board "Device A:COM3:8c:94:df:97:d0:c0" `
      --board "Device B:COM4:1c:c3:ab:c2:52:ac" `
      --runner tools/campaign/run_x12_aead.py `
-     --firmware build_bench/ceepew.bin --build-dir build_bench `
+     --firmware build/ceepew.bin --build-dir build `
      --artifact data/raw/X12_aead_20261022/capture_DEVICE_A.log `
      --artifact data/raw/X12_aead_20261022/capture_DEVICE_B.log
    ```
@@ -84,7 +112,9 @@ entry whose cited artifact is not listed in the manifest.
    python tools/campaign/registry_append.py --verify-all
    ```
 
-## Measurement hygiene
+---
+
+## Measurement Hygiene
 
 * **CPU frequency.** `CONFIG_PM_ENABLE` is off and
   `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=160`, so the core does not downclock.
