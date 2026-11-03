@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Continue'
-Set-Location 'C:\Users\Rishi Misra\Desktop\Code\Projects\CEEPEW'
+Set-Location '[REPO_ROOT]'
 $log = 'data\raw\_tooling'
 New-Item -ItemType Directory -Force -Path $log | Out-Null
 

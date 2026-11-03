@@ -93,12 +93,12 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "Forged frames NEVER excluded; forged_count_TX must equal authenticator rejects | HW-ACK subtype 0x1d counted separately, excluded from entropy analysis | No frame excluded for being a timing outlier | Capture-integrity gap reported with cause, never silently dropped",
-  "operator": "rishi",
+  "operator": "bench-operator",
   "notes": "E2(b) BENCH58 built-in forge path: every 10th frame (seq 9,19,...,79) corrupts one box byte; expect Ascon-128 tag reject (err=5) on RX, 0 forged frames to app layer",
   "raw_files": {
-    "RUN_NOTES.md": "f92b0d320fde7d4527c96136a44a8b194a54ce8ae89054917b8b0b6fc1504eeb",
-    "capture_DEVICE_A.log": "65bfcebbe2bd25f840f761c62243ff6d791d3b0f8f1f6c2dd59b88eae8807537",
-    "capture_DEVICE_B.log": "d3d3006e65dadac46c196593bb30b5d2926857af30ff22718c473f368bfba016",
+    "RUN_NOTES.md": "7b9909ff2461396f8324b79077ccb2bc48f0275c1cdc61787473eba9e9c03870",
+    "capture_DEVICE_A.log": "c7e9d74c4888df949cd1b2b856b2ecba0bd683c499ae03c6de29aef39fa4aa1b",
+    "capture_DEVICE_B.log": "d900f299ea87980f66ec8a14abc1df4b8b7c37a8150a999e79befb876c7b455a",
     "capture_dual.log": "4f366fee218e425a14b4844d16c28da649db08ba042dc6973d277a340a403624"
   },
   "expected_raw_files": [
@@ -110,8 +110,8 @@
     {
       "step": "monitor",
       "cmd": [
-        "C:\\Users\\Rishi Misra\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "python.exe",
+        "tools\\ceepew_monitor.py",
         "--port",
         "COM3",
         "--port",
@@ -130,9 +130,9 @@
     {
       "step": "split_dual_log",
       "cmd": [
-        "C:\\Users\\Rishi Misra\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E2b_forged_rejection_20261018\\capture_dual.log",
+        "python.exe",
+        "tools\\capture\\split_dual_log.py",
+        "data\\raw\\E2b_forged_rejection_20261018\\capture_dual.log",
         "--outdir",
         "data\\raw\\E2b_forged_rejection_20261018",
         "--prefix",

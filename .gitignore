@@ -10,6 +10,7 @@ _out/
 sdkconfig
 sdkconfig.old
 sdkconfig.bak
+sdkconfig.prod_test
 *.pem
 *.key
 keys/

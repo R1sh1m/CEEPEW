@@ -87,7 +87,7 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "",
-  "operator": "rishi",
+  "operator": "bench-operator",
   "notes": "X1 timing campaign: x25519, ed25519 sign/verify at 160MHz. Triple capture with sniffer on COM6.",
   "raw_files": {
     "capture_dual.log": "2e9a4f9f15a1f7fc7e4e898d3925c9958d1258e1734b1ce3448aebb48632769e",

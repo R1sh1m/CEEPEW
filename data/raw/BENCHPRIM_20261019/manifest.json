@@ -89,12 +89,12 @@
   "n_completed": 150,
   "n_excluded": 0,
   "exclusion_rule": "None. All 25 samples per primitive per device reported including sample 0 and outliers; err!=0 counted, not dropped; a missing set is an apparatus failure, not an exclusion.",
-  "operator": "Rishi Misra",
+  "operator": "bench-operator",
   "notes": "On-device primitive micro-bench at session-task start: X25519 shared secret, Ed25519 sign, Ed25519 verify. N=25 per primitive per device, msg_len=58 bytes 0x41. No UART print inside timed regions. Toolchain ESP-IDF v6.0.2; sdkconfig byte-identical to sealed E5 build_cap_timing (generated 9bdf5de9...). Both images built after the DRAM link fix (row buffer on task stack; ring cap 288 B). Full pre-registration in RUN_NOTES.md.\nSealed 2026-10-19. Flash applied with esptool 115200 (options before write-flash); pre-registered idf.py command not used (see RUN_NOTES). Capture window 180 s vs pre-registered 120 s (margin only; no measurement parameter changed). All 150 timed calls emitted (begin/end on both devices); strict parse 147/150 (3 DEVICE_B lines mangled in 115200 transit); recovery: 2 exact + 1 digit-bounded [331800,331899], median-insensitive; 149 exact values; err=0 for all 150. Pre-reg prose said no BENCH_58B but the config has CONFIG_CEEPEW_BENCH_58B=1 (same as sealed E5 build_cap_timing); the BENCH58 campaign also runs later in the same boot; no session traffic during the timed window. BENCHKAT FAIL line pre-existing since E1_B_ccmp_20261017 (40 files) - separate lane. n_completed=150 (unit: one timed primitive call), n_excluded=0 (rule: None). Confirmation re-capture sealed separately as BENCHPRIM_20261019_R2 (150/150 strict).",
   "raw_files": {
-    "RUN_NOTES.md": "0a27fcba4a439f95624e52fd5b86f80018fb949a8d060395202629a908626470",
-    "capture_DEVICE_A.log": "82458a497a8190a7369c2c4a4021924e0555d7b51bdfe17915b477e121329eba",
-    "capture_DEVICE_B.log": "df6ed46844d502f69ce0f7cb61abb535d773344e12a24aea8363931839137760",
+    "RUN_NOTES.md": "e0dfc79fdabf151626c55f2a84759c12bb23c9aaafe30bc6fa8defca694eba06",
+    "capture_DEVICE_A.log": "1d59fb2a4c68d3d5f05fd18f8103856670cb28fffb86037da33addb090a01cb9",
+    "capture_DEVICE_B.log": "2bb9a585c860ebefeb8a567a1b47005389626058906e66498638406e46c0bb31",
     "capture_dual.log": "866af597f8bc3a24cc1a80dcb7ac14e7133194efdfb314626889a2a2bdfff5a1",
     "flash_COM3.log": "c26fc61ba5fc6ce696b05006fac04240167306228b70c43b9849832bb6100129",
     "flash_COM4.log": "309a48a93f00269d73c0a057aca1e7f737b36aedb0cac372719e72826f724032"

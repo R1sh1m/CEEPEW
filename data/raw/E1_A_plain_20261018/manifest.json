@@ -115,12 +115,12 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "Capture-integrity gap = TX count minus captured frames, reported with cause",
-  "operator": "Rishi Misra",
+  "operator": "bench-operator",
   "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads",
   "raw_files": {
-    "RUN_NOTES.md": "946c67fe85c5a6ec260d89c90c9fe90faa763e83ac8d10f874dde755c3e24832",
-    "capture_DEVICE_A.log": "cf64faf50f2bd80ce842530f6c1f921d4d730fad5be3f01a9273829ee4a41ff3",
-    "capture_DEVICE_B.log": "7386f6aa8804c81f3ba003bc3d9a22eb371e724871191027179abdce358c03e9",
+    "RUN_NOTES.md": "27f81337fc53c786c36f2c2becdad65d32886e3298219097d2c9a45defeb8f44",
+    "capture_DEVICE_A.log": "21b2c05d508ead42273a535a53675f4c45f2cd82c04f7e98b783ef2eecb64454",
+    "capture_DEVICE_B.log": "8f0b6ddcf9b988450ed46581a3df5d78ac8feaa4fa4691701748d4526ff7f0b7",
     "capture_dual.log": "5b521ef8064c5b5a3649371045a002eb78600315f62b9c5fff6f9d41fe0bcdde"
   },
   "expected_raw_files": [
@@ -132,8 +132,8 @@
     {
       "step": "monitor",
       "cmd": [
-        "C:\\Users\\Rishi Misra\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "python.exe",
+        "tools\\ceepew_monitor.py",
         "--port",
         "COM3",
         "--port",
@@ -152,9 +152,9 @@
     {
       "step": "split_dual_log",
       "cmd": [
-        "C:\\Users\\Rishi Misra\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E1_A_plain_20261018\\capture_dual.log",
+        "python.exe",
+        "tools\\capture\\split_dual_log.py",
+        "data\\raw\\E1_A_plain_20261018\\capture_dual.log",
         "--outdir",
         "data\\raw\\E1_A_plain_20261018",
         "--prefix",

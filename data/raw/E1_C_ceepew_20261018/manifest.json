@@ -115,15 +115,15 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "Capture-integrity gap = TX count minus captured frames, reported with cause",
-  "operator": "Rishi Misra",
+  "operator": "bench-operator",
   "notes": "hopping OFF, fixed channel 1, 5s inter-message, BENCH58 58-byte payloads, 10% forged (every 10th), CEE-PEW full (CCMP+ESL+Ed25519)",
   "raw_files": {
-    "RUN_NOTES.md": "a5acd39e527ab729fb6aeb8734ed50f2676ad6372a3b19be84506cd21132aa0a",
+    "RUN_NOTES.md": "a67abd9a0d35dc12cadb5d4fd5342ff0451f0c6d005711be4b5a10b8f05cfd07",
     "capture_DEVICE_A.log": "d2c82fda20856a458d918abebbae9d30a0a7fdd2486d68c5ead54b656597fae3",
-    "capture_DEVICE_B.log": "05f397353ef8127b27b5f7e2260b0c39db357aeb4957207da43f46a18b9f7bff",
+    "capture_DEVICE_B.log": "627310614fa4f547346b67e62604aa3a60ddcc66bf6fe484b12db87e07e3994b",
     "capture_dual.log": "fec139ed045e417575a53750abd2985f272401f1d9b5c4a953db6d09eb3add86",
-    "flash_COM3.log": "23a1f94076b31d00432c7c91c07347987918ae9bec108ec81be65d7012d47888",
-    "flash_COM4.log": "3a193ed35fd557aedfba815e4dab5b4863aa81f7b0739bbea3ef7c1e0b3be9b9"
+    "flash_COM3.log": "489374148a40f6ad7b4de17b445518e8fd96c2a5d525d00294dcc1b7dd6de05a",
+    "flash_COM4.log": "93ba674d20c85da0bffad81fbf7e2b5a51e4fcf51a21e9075782aaec3b0b60c8"
   },
   "expected_raw_files": [
     "capture_dual.log",
@@ -165,7 +165,7 @@
       "step": "monitor",
       "cmd": [
         "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "tools\\ceepew_monitor.py",
         "--port",
         "COM3",
         "--port",
@@ -185,8 +185,8 @@
       "step": "split_dual_log",
       "cmd": [
         "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E1_C_ceepew_20261018\\capture_dual.log",
+        "tools\\capture\\split_dual_log.py",
+        "data\\raw\\E1_C_ceepew_20261018\\capture_dual.log",
         "--outdir",
         "data\\raw\\E1_C_ceepew_20261018",
         "--prefix",

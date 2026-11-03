@@ -1,6 +1,6 @@
 # data/ — CEE-PEW Experimental Datasets & Evidence Package
 
-This directory houses the empirical over-the-air (OTA) and serial capture datasets supporting the evaluation in the CEE-PEW paper (IEEE ICITIIT 2027).
+This directory contains the empirical over-the-air (OTA) packet captures, serial monitor logs, timing benchmarks, and derived analysis outputs supporting the evaluation of the CEE-PEW system.
 
 ---
 
@@ -8,77 +8,91 @@ This directory houses the empirical over-the-air (OTA) and serial capture datase
 
 ```
 data/
-├── raw/                     Read-only hardware captures and sealed manifests
-│   ├── E1_A_plain_20261018/ Mode A: Plain unencrypted ESP-NOW baseline
-│   ├── E1_B_ccmp_20261017/  Mode B: Hardware AES-CCMP ESP-NOW baseline (PCAPs, logs, SHA256SUMS)
-│   ├── E1_B_ccmp_20261018/  Mode B: 80-frame CCMP capture run with 10% forged frames
-│   └── E1_C_ceepew_20261018/Mode C: Full CEE-PEW layered protocol (ESL + Ascon + Ed25519)
-├── derived/                 Processed analysis outputs, stage timings, and reports
-│   ├── bench58_today_stages.csv   Per-stage microsecond timing benchmarks across TX and RX
-│   ├── E1_A_plain_20261017/       Mode A tshark dissected fields and entropy histograms
-│   ├── E1_B_ccmp_20261017/        Mode B tshark dissected fields and entropy histograms
-│   ├── E1_C_ceepew_20261017/      Mode C analysis reports
-│   └── E1_C_slim_20261017/        Mode C slim profile reports
-└── manifests/               Experiment roll-up catalog
+├── raw/                     Read-only hardware captures, PCAPs, serial logs, and sealed manifests
+│   ├── BENCHPRIM_20261019/  Hardware crypto primitive benchmarks (X25519, Ed25519 sign/verify)
+│   ├── E1_A_plain_*/        Mode A: Plain unencrypted 802.11 ESP-NOW baseline
+│   ├── E1_B_ccmp_*/         Mode B: Hardware AES-CCMP baseline (PCAPs, logs, SHA256SUMS)
+│   ├── E1_C_ceepew_*/       Mode C: Full CEE-PEW layered protocol (ESL + Ascon-128a + Ed25519)
+│   ├── E2a_plain_*/         Mode A: Cleartext stimulus injection
+│   ├── E2b_forged_*/        Mode C: 100% cryptographic rejection of forged frames
+│   ├── E3_replay_*/         Anti-replay validation with 64-bit sliding window
+│   ├── E5_sync_pulse_*/     Dual-device GPIO14 hardware sync pulse timing
+│   ├── X1_*/                Cryptographic execution timing sweeps across trials
+│   ├── X4_header_tamper_*/  Header tampering & MAC authentication fault injection
+│   ├── X5_dos_rate_*/       High-throughput DoS and burst packet rate sweeps
+│   ├── X6_fec_ablation_*/   Hamming(15,11) FEC ablation (with FEC vs without FEC)
+│   ├── X7_channel_hop_*/    Channel hopping synchronization & handoff convergence
+│   ├── X8_delivery_*/       Delivery reliability under RF attenuation & packet drop
+│   ├── X9_memory_*/         Zero-heap static region allocator memory bounds & task stack depth
+│   ├── X10_clean_capture_*/ Clean promiscuous over-the-air Wireshark captures (PCAPs)
+│   ├── X11_multi_distance_*/Multi-distance reception & RSSI sweeps (10 cm to 20 m)
+│   └── X12_*/               Statistical confidence intervals and timing medians
+├── derived/                 Processed analysis outputs, stage timings, and summaries
+│   ├── bench58_today_stages.csv  Per-stage microsecond timing benchmarks across TX and RX
+│   ├── X6_fec_ablation_*.json    FEC recovery rates and comparative performance
+│   ├── X8_delivery_*.json        Delivery statistics and ARQ attempt distribution
+│   ├── X12_*.json                Timing medians and 95% bootstrap confidence intervals
+│   └── wireshark_views/          Dissected fields and entropy histograms
+└── manifests/               Master run registry
     └── index.json           Master run registry tracking state, planned vs completed counts
 ```
 
 ---
 
-## 2. Evidence Sealing & Provenance Protocol
+## 2. Experimental Campaigns Map
+
+| Campaign | Focus & Methodology | Primary Dataset | Evidence Class |
+|---|---|---|:---:|
+| **E1 Baseline** | Over-the-air wire exposure, frame airtime, and cleartext leakage comparison across Plain (A), CCMP (B), and CEE-PEW (C) | `data/raw/E1_*` | `M-HW` |
+| **E2 Fault Injection** | Verification that corrupted ciphertexts and forged authentication tags are dropped with 0 cleartext leakage | `data/raw/E2b_*` | `M-HW` |
+| **E3 Anti-Replay** | Validation that duplicate, out-of-order, and delayed sequence frames are rejected by the 64-bit sliding window | `data/raw/E3_*` | `M-HW` |
+| **E5 Sync Pulse** | Sub-microsecond hardware timing synchronization using GPIO14 pulse capture | `data/raw/E5_*` | `M-HW` |
+| **BENCHPRIM** | On-chip hardware execution duration of X25519 ECDH, Ed25519 sign, and Ed25519 verify at 160 MHz | `data/raw/BENCHPRIM_*` | `M-HW` |
+| **X4 Tamper** | Selective byte corruption of ESL headers and Ascon authentication tags | `data/raw/X4_*` | `M-HW` |
+| **X5 DoS Stress** | Receiver throughput and queue starvation behavior under high-frequency unauthenticated packet flooding | `data/raw/X5_*` | `M-HW` |
+| **X6 FEC Ablation** | Frame delivery rate comparison with Hamming(15,11) FEC enabled vs disabled | `data/raw/X6_*` | `M-HW` |
+| **X7 Frequency Hop** | Channel switching latency and packet loss during synchronized pseudo-random hopping | `data/raw/X7_*` | `M-HW` |
+| **X8 Reliability** | End-to-end delivery success under multi-obstacle RF path loss and packet drops | `data/raw/X8_*` | `M-HW` |
+| **X9 Zero-Heap** | Region allocator watermark auditing and FreeRTOS task high-water mark verification | `data/raw/X9_*` | `M-HW` |
+| **X10 OTA Capture** | Promiscuous 802.11 sniffer captures validating 249 B wire frames and Shannon entropy ($7.99\text{ bits/B}$) | `data/raw/X10_*` | `M-HW` |
+| **X11 Range Sweep** | Signal strength (RSSI) and packet reception rate across distances from 10 cm to 20 m | `data/raw/X11_*` | `M-HW` |
+| **X12 Timing CI** | High-repetition execution timing across 100+ trials with 95% bootstrap confidence intervals | `data/raw/X12_*` | `M-HW` |
+
+---
+
+## 3. Evidence Sealing & Provenance Protocol
 
 To ensure reproducible research and prevent post-hoc data tampering:
 1. Every experimental run in `data/raw/<run_id>/` contains a `manifest.json` generated by [`tools/bench_manifest.py`](../tools/bench_manifest.py).
 2. The manifest records:
-   - Run ID, UTC timestamp, and git commit hash
-   - Exact hardware roles (`COM3=transmitter`, `COM5=promiscuous capture/receiver`)
-   - Channel configuration (Channel 1 fixed, hopping off for controlled RF capture)
-   - Transmitter-to-receiver distance (20 cm)
-   - Planned vs completed trial count ($N=80$)
+   - Run ID, UTC timestamp, git commit hash, and dirty tree status
+   - Exact hardware roles (`COM3=Device A`, `COM4=Device B`, `COM6=Sniffer`)
+   - Channel configuration, antenna distance, and environmental conditions
+   - Compiled firmware flags and application binary SHA-256 hash
    - Pre-declared exclusion rules (written **before** the run commenced)
 3. Once a run is sealed, `SHA256SUMS.txt` is generated, and the manifest state transitions permanently from `open` to `sealed`.
 
 To verify the cryptographic integrity of any sealed run:
-```powershell
-python tools/bench_manifest.py verify --run-id E1_B_ccmp_20261017
+```bash
+python tools/bench_manifest.py verify --run-id BENCHPRIM_20261019
 ```
 
 ---
 
-## 3. Experiment Descriptions
-
-### Experiment E1: Comparative Over-the-Air Framing & Cleartext Visibility
-- **Objective**: Compare the wire exposure and airtime behavior of three configurations under identical $58\text{ B}$ payloads (`BENCH58` stimulus):
-  - **Mode A (Plain ESP-NOW)**: Standard Espressif vendor action frames without encryption.
-  - **Mode B (ESP-NOW CCMP)**: Standard driver-level AES-128-CCM encryption.
-  - **Mode C (CEE-PEW Full)**: 7-layer cryptographic stack with ESL encapsulation, Ascon-128 AEAD, Ed25519, and Hamming(15,11) FEC.
-- **Key Findings**:
-  - In Mode A, application message strings (`'A'` character sequences) survive in cleartext over the air.
-  - In Mode C, full payload entropy (~7.9+ bits/byte) is observed with zero recognizable cleartext or header leakage.
-  - 10/10 over-the-air forged frames injected in Mode B/C were rejected at the cryptographic verification stage with zero leakage into the application layer.
-
-### Experiment E2: Fault Injection & Cleartext Rejection
-- **Objective**: Verify that a receiver expecting CEE-PEW framing completely drops raw ESP-NOW payloads, forged AEAD authentication tags, and replayed sequence counters.
-- **Stimulus**: Hardware injection of corrupted ciphertexts (1 in 10 frames) and unencapsulated packets.
-- **Pass Criterion**: 100% rejection rate with zero state poisoning or application queue delivery.
-
----
-
-## 4. Derived Stage Timings
+## 4. Key Derived Timing Benchmarks
 
 Per-stage execution times on the ESP32 (measured via `esp_timer_get_time()` inside the firmware instrumented builds) are recorded in [`data/derived/bench58_today_stages.csv`](derived/bench58_today_stages.csv):
 
-```csv
-stage,label,n,median_us,p25_us,p75_us,p95_us,p99_us,min_us,max_us,err_histogram
-sign_us,Ed25519 sign (TX),114,332183.0,332067.5,332280.0,332392.0,332460.1,331861.0,332475.0,err0:114
-box_us,XSalsa20/HMAC box open (RX),106,1458.5,1321.2,1548.0,1673.8,1877.4,1158.0,1992.0,err0:96;err5:10
-ascon_us,Ascon-128 AEAD decrypt+verify (RX),98,327.5,313.2,402.8,476.1,525.2,17.0,530.0,err0:97;err5:1
-edverify_us,Ed25519 verify (RX),99,662674.0,662604.0,662738.0,662863.4,662943.0,662432.0,662990.0,err0:99
-```
+| Stage | Operation Description | Sample Count ($N$) | Median ($\mu\text{s}$) | Median ($\text{ms}$) | Verdict |
+|---|---|:---:|:---:|:---:|:---:|
+| `sign_us` | Ed25519 Signature Generation (TX) | 114 | 332,183.0 | 332.18 ms | Complete (0 errors) |
+| `box_us` | XSalsa20/HMAC Box Opening (RX) | 106 | 1,458.5 | 1.46 ms | 10/10 forged rejected |
+| `ascon_us` | Ascon-128a AEAD Decrypt + Verify (RX) | 98 | 327.5 | 0.33 ms | Complete (0 errors) |
+| `edverify_us` | Ed25519 Signature Verification (RX) | 99 | 662,674.0 | 662.67 ms | Complete (0 errors) |
 
 ---
 
-## 5. PCAP Dissection with Wireshark
+## 5. Packet Inspection with Wireshark
 
 To inspect captured 802.11 ESP-NOW action frames directly:
 1. Open any `.pcap` from `data/raw/` (e.g. `data/raw/E1_B_ccmp_20261017/DEVICE_A.pcap`) in Wireshark.
@@ -88,5 +102,12 @@ To inspect captured 802.11 ESP-NOW action frames directly:
    ```
 3. Load the CEE-PEW Wireshark dissector plugin:
    ```bash
-   wireshark -X lua_script:tools/wireshark/ceepew_dissector.lua <path_to_pcap>
+   wireshark -X lua_script:tools/capture/wireshark/ceepew_espnow.lua <path_to_pcap>
    ```
+
+---
+
+## 6. Canonical Results Registry
+
+All quantitative claims made in the documentation and paper are mapped directly to entries in the central ledger:
+👉 [`results/registry.json`](../results/registry.json)

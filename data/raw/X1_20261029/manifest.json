@@ -120,7 +120,7 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "",
-  "operator": "rishi",
+  "operator": "bench-operator",
   "notes": "X1 timing campaign",
   "raw_files": {},
   "expected_raw_files": [],

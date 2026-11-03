@@ -93,12 +93,12 @@
   "n_completed": 0,
   "n_excluded": 0,
   "exclusion_rule": "HW-ACK subtype 0x1d excluded from length/entropy analysis (counted separately) | Truncated captures (<28 B) flagged non_full_size but NOT excluded from rejection counts | No frame excluded for being a timing outlier | Capture-integrity gap = BENCH58_TX minus captured frames, reported with cause",
-  "operator": "rishi",
+  "operator": "bench-operator",
   "notes": "E2(a) mode-mismatch: plain ESP-NOW frames into a CEE-PEW receiver; expect ESL-stage reject on COM5, 0 frames to app layer | RESULT: 0 BENCH58 frames injected (gate never satisfied), 0 sessions, 0 app messages, 11 post-derive sync timeouts, 25 PAIRING_FAILED, 628 Discard events (DEVICE_A 616: 264 FEC length-trailer + 352 RX decrypt-pipeline; DEVICE_B 12: ESL transport header/MAC/replay check failed). See RUN_NOTES.md.",
   "raw_files": {
-    "RUN_NOTES.md": "b71edd8d4ebd3d013832f6a8ae0f279a9933418f3472b3752b2baf317e49e1db",
-    "capture_DEVICE_A.log": "18a6de9ecadd2ba3bf3ac9f561577dcdc6d98d2b0c7af043b1f005991916606e",
-    "capture_DEVICE_B.log": "b75a8352ab3c4d83906a81731753c389c698cdf2928808b5de53f8ae4108ff13",
+    "RUN_NOTES.md": "d676e5fa5d76434c89015789a45b6a8b81c8456de5282e9f40cda6426b88e087",
+    "capture_DEVICE_A.log": "03056f1ab8c2ffc937a7e8d8fdb5dc6055942e13dba12e9c960a53b4d9d45f35",
+    "capture_DEVICE_B.log": "614322c5962397dc2ae5df4cd9afcd7babca8a8f6de9f59de75225d623c7c4c8",
     "capture_dual.log": "b57340cd43d28475402c7e66f290840219c8f64c48dcfec922f5bb1b0837e3f6",
     "flash_COM3.log": "3f734ed06ebf4fadf8096d43e1d5e0cae03b1d230c36791c9bfe3fa0384a4545"
   },
@@ -112,8 +112,8 @@
     {
       "step": "monitor",
       "cmd": [
-        "C:\\Users\\Rishi Misra\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "python.exe",
+        "tools\\ceepew_monitor.py",
         "--port",
         "COM3",
         "--port",
@@ -132,9 +132,9 @@
     {
       "step": "split_dual_log",
       "cmd": [
-        "C:\\Users\\Rishi Misra\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E2a_plain_injection_20261018\\capture_dual.log",
+        "python.exe",
+        "tools\\capture\\split_dual_log.py",
+        "data\\raw\\E2a_plain_injection_20261018\\capture_dual.log",
         "--outdir",
         "data\\raw\\E2a_plain_injection_20261018",
         "--prefix",

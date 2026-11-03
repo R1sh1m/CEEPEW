@@ -115,13 +115,13 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "",
-  "operator": "Rishi Misra",
+  "operator": "bench-operator",
   "notes": "",
   "raw_files": {
     "DEVICE_A.pcap": "25a96b7c42882fc38e5d548c7c196d26cec691050fc7047af4fbace9333cff21",
     "DEVICE_B.pcap": "414e321ee5657a5c5e9d9ffedcf985119f2ad30e1c61f64545d5ef81e40b3413",
-    "capture_DEVICE_A.log": "432d9035015639c58363c4563239ec4b2f00ab45bab7ecb05517fe24bb79f8f0",
-    "capture_DEVICE_B.log": "bd4b9eb6f612835fcd9ca4bc8f3231bd9eccd6a33638bcefd9f2caf0c457013d",
+    "capture_DEVICE_A.log": "7df93016dd9558b0feb31697438bfeaa0a4ef033d49c1a3ec08844831c68b8c5",
+    "capture_DEVICE_B.log": "29a016bfb4f4adf838d0ce1bb6c6d7d903ad88325e3e50bc412aeb51a50a0cc2",
     "capture_dual.log": "e7c226620030e60c9f574c45d155764d1421b544041f1e1c71321daf07af9091"
   },
   "expected_raw_files": [],

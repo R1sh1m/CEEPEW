@@ -93,12 +93,12 @@
   "n_completed": 150,
   "n_excluded": 0,
   "exclusion_rule": "None. Same as BENCHPRIM_20261019: all samples including sample 0 and outliers reported; err!=0 counted, not dropped; UART-mangled lines handled by the documented recovery pass, values never invented.",
-  "operator": "Rishi Misra",
+  "operator": "bench-operator",
   "notes": "Confirmation re-capture declared before data collection: attempt 1 (BENCHPRIM_20261019) emitted all 150 samples but the 115200 console mangled 3 DEVICE_B lines (2 recovered exactly, 1 bounded, median-insensitive). Same image e1ca1b5a80efe6d70d8abbf54452e80b63bf95eae9717b6233d83832ff2930ce (no reflash; monitor reset re-boots). Purpose: complete set + reproducibility check. Attempt 1 kept and sealed; R2 does not supersede it. Full pre-registration in RUN_NOTES.md.\nSealed 2026-10-19. Confirmation re-capture (reset-only, no reflash; same image e1ca1b5a80efe6d70d8abbf54452e80b63bf95eae9717b6233d83832ff2930ce). 120 s window as pre-registered. Strict 150/150, completeness PASS, no UART mangling; err=0 for all 150 calls. Medians reproduce BENCHPRIM_20261019 within 155 us. n_completed=150 (unit: one timed primitive call), n_excluded=0 (rule: None).",
   "raw_files": {
-    "RUN_NOTES.md": "e175dcb1e655676edf5e39689c6f283ece711ff8b8300f5d21887af4a4740c80",
-    "capture_DEVICE_A.log": "8f19ee2b4dd63d4b681afac534bf7bde4471d1b3d29e7c34e31c3cbfd824f900",
-    "capture_DEVICE_B.log": "72f584a91ae5db3b03f59b1420e4c12152dfb572ec0ab1e38e4e52483e6eb493",
+    "RUN_NOTES.md": "ed5752dd32333ba91dc2a3e12994964d607a8a5d753476cc4f361cf5d03153d6",
+    "capture_DEVICE_A.log": "095efd14db64ff37b384385994824a5d0daf62ef600362ab781c7bbfbc969097",
+    "capture_DEVICE_B.log": "330e76eabb0e0d7a91f2adba0ddbbc754fab72c07cd9cc0570bc254113890ad3",
     "capture_dual.log": "9b4a18f3834e718bab4a15c79a9199241d431bd0065260567c0b0ffd2dba74fc"
   },
   "expected_raw_files": [

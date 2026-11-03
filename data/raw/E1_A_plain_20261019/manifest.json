@@ -87,16 +87,16 @@
   "n_completed": 160,
   "n_excluded": 0,
   "exclusion_rule": "None. No frame, ring row, pairing cycle or session excluded; capture-integrity gap (TX frames minus peer-captured ring rows) reported with cause. Failed pairing cycles reported as observations.",
-  "operator": "Rishi Misra",
+  "operator": "bench-operator",
   "notes": "hopping OFF, fixed channel 1, 5 s inter-message, BENCH58 58-byte payloads. Retry of E1_A_plain_20261018 after capture-instrument repair: DUT-OUI ring guard restored, single-write row emission, logger row buffer moved to task stack (DRAM link fix), ring payload cap 300->288 B (protocol bound 278 B; no truncation). Toolchain ESP-IDF v6.0.2; sdkconfig byte-identical to sealed 20261018 build. Full pre-registration in RUN_NOTES.md.\nProvenance (pre-seal): flash_COM4.log never existed (manual COM4 flash output console-only); flash_COM3.log holds the failed 460800 idf.py attempts, not the successful manual flash. Manual conversion/analysis command records appended (reconstructed=1: canonical argv; the driver pcap step was skipped because it expects capture_COM3/COM4.log names). See RUN_NOTES.md Results for gate outcomes and classification.\nn_completed unit: one BENCH58 transmission attempt by one board; [BENCH58_DONE] sent=80 on both boards -> 160/160. n_excluded = 0 (rule: None). Outcome: pre-registered acceptance check 2 (literal 0x41 run >=4 on air) fails by construction (message is Huffman-compressed before fragmentation, then Hamming(15,11)-encoded; no literal application bytes can reach the radio) -> classified as APPARATUS/DESIGN FAILURE of the acceptance test, not a protocol result. Check 1 (DUT MAC frame) PASS: 91 peer-DUT frames per pcap. Check 3 verdict recorded verbatim (NOT VISIBLE) but not interpretable as a cleartext-negative. Full evidence + author flags: RUN_NOTES.md Results.",
   "raw_files": {
-    "RUN_NOTES.md": "1cf87b55c7f239559fd75e468ea8abc74630f86f2b7e1aca5f6a859551ed7f5b",
-    "capture_DEVICE_A.log": "3187db72408fa3675408b575545da6a3a8111b3079e286a5496486e36ff0460d",
+    "RUN_NOTES.md": "31ecf109dee510d28c3edf92a17956e44d235d310e55b2895ddc523b458db342",
+    "capture_DEVICE_A.log": "748d103ae8228668d36e33a2b40f0fe15e04ecff5adcd7a9ad1c1b5a4f74c341",
     "capture_DEVICE_A.pcap": "1f3e13e31b37a1eeceb9714789c45c560e74d6f84a8417a377b30eb65d572329",
-    "capture_DEVICE_B.log": "462587d4881c8ff5bb394a5bb7daa9335e670af301a6d3eeecd25b2c13f88285",
+    "capture_DEVICE_B.log": "28f2e849ed1c868363a30e9fba7fc58a97b2d20b9b24dac70ef7581b3d3b5f3e",
     "capture_DEVICE_B.pcap": "4edfd16859b580579f2ce8eeea0c0d35f5a92126f471fe4c151be8b990f28948",
     "capture_dual.log": "b2d1d720716f6f412b09ab8a572cf6eda95934fcc8c71a618a5f4c40d7e6b9a4",
-    "flash_COM3.log": "bdcd0dd97c209fa1ade8411da74826e904e76611c5e2d9185afdd7a70204e35e"
+    "flash_COM3.log": "ec88117f112aec3735270a3fa5571ec4dde127b99295b6a7be347bd94b6d8648"
   },
   "expected_raw_files": [
     "capture_dual.log",
@@ -156,7 +156,7 @@
       "step": "monitor",
       "cmd": [
         "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "tools\\ceepew_monitor.py",
         "--port",
         "COM3",
         "--port",
@@ -176,8 +176,8 @@
       "step": "split_dual_log",
       "cmd": [
         "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E1_A_plain_20261019\\capture_dual.log",
+        "tools\\capture\\split_dual_log.py",
+        "data\\raw\\E1_A_plain_20261019\\capture_dual.log",
         "--outdir",
         "data\\raw\\E1_A_plain_20261019",
         "--prefix",

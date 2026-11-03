@@ -70,13 +70,13 @@
   "n_completed": null,
   "n_excluded": null,
   "exclusion_rule": "DECLARED BEFORE ANALYSIS: none. No injected frame, no rejection record, and no session is excluded for any reason. If the apparatus fails to inject (no BENCH58_REPLAY armed/replayed markers), that is reported as an apparatus failure, NOT silently dropped, and no rejection count is claimed. err=17 (transport_replay_commit, CEEPEW_ERR_REPLAY) and err=3 (ESL header/MAC/replay check, CEEPEW_ERR_PARAM) are counted and reported separately: err=17 is the crypto replay-window defence, err=3 is caught by an earlier ESL-layer check and is reported as such, not merged into a single rejected total.",
-  "operator": "R. Misra",
+  "operator": "bench-operator",
   "notes": "E3 stale-frame replay rejection. Firmware hook: session_send.c stage_tx_esl_wrap emits the previously saved ESL-wrapped blob verbatim when armed (task_session.c arming at s_bench_sent%10==4), so the injected frame carries a stale ESL header at least 5s old while a fresh ARQ seq is applied downstream, which prevents link-layer duplicate suppression from confounding the crypto replay defence (the E2b confound). Expect about 8 injections and 8 forges per 80-frame campaign. DISCLOSED CAVEATS: (1) Toolchain is ESP-IDF v6.0.2 (C:\\esp\\v6.0.2\\esp-idf, tag v6.0.2), the same version that built E1/E2a/E2b/E5. An earlier draft of this manifest claimed v6.0.3 and asserted that v6.0.2 had been deleted from the machine and could not be restored; that assertion was wrong and is corrected in PREREGISTRATION.md section 8. A build of this exact configuration on v6.0.3 was attempted and failed at link with 'region dram0_0_seg overflowed by 16 bytes', which is why it was abandoned. Compiler identical (xtensa-esp-elf 15.2.0_20251204). This run's generated sdkconfig.h is byte-identical to build_cap_ceepew's, the Mode C capture configuration used for E1-C/E2a/E2b. (2) CONFIG_CEEPEW_BENCH_TIMING is OFF (DRAM pressure at link time), so no BENCH_TIME records exist for this run and no latency claim may be derived from it. (3) Hopping off, channel 1, as pre-registered.",
   "raw_files": {
-    "PREREGISTRATION.md": "a48575912a1b57ded66a3523d629bb5b9e5e6febcb9be9b2083dbe0ce2f75762",
-    "RUN_NOTES.md": "7afb8bc2a9d4280bdc38012ecdaaeca388528af29e900caef44cbf25f701405a",
-    "capture_DEVICE_A.log": "973856de95f10fdbff4fec90d80f704a1a6d13ed0b6c9cdd746a4fb18fd8639b",
-    "capture_DEVICE_B.log": "143a3b91c2f2cc49d63e4aebff2f1e708204ec7fbd5f96bfc76a99200d79ceea",
+    "PREREGISTRATION.md": "7666fdb503f784e973a4ca50615c18cabaf1ea6f2abaaa856d40ef16851bc01a",
+    "RUN_NOTES.md": "55f78a25a8f696efbc5373f2bbc507f6935a7ab8402d8558a69763a9fd3d2ce5",
+    "capture_DEVICE_A.log": "998b6f4073c315a65e19799a1a81d9ab47435becb4497c890f4c00003366db9d",
+    "capture_DEVICE_B.log": "ff94016386a47b7a83f1025ce26cf207d359b176cd80441a013df005102ad01d",
     "capture_dual.log": "6cb14f2859b55f533de78c47c0d4550da8e5b50fa075584e5c6f5fafa1df234c",
     "flash_COM3.log": "d7b158379b5b92dfa3d031e8fc2ee3f0a0ba784c566bdfdcc0dafd156e289e06",
     "flash_COM4.log": "43b7ae7fd3d8af3bee6bbc8cfe452dd5204b229309dda0de854a40ef6907dee3"
@@ -87,7 +87,7 @@
       "step": "monitor",
       "cmd": [
         "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\ceepew_monitor.py",
+        "tools\\ceepew_monitor.py",
         "--port",
         "COM3",
         "--port",
@@ -107,8 +107,8 @@
       "step": "split_dual_log",
       "cmd": [
         "C:\\Espressif\\tools\\python\\v6.0.2\\venv\\Scripts\\python.exe",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\tools\\capture\\split_dual_log.py",
-        "C:\\Users\\Rishi Misra\\Desktop\\Code\\Projects\\CEEPEW\\data\\raw\\E3_replay_20261019\\capture_dual.log",
+        "tools\\capture\\split_dual_log.py",
+        "data\\raw\\E3_replay_20261019\\capture_dual.log",
         "--outdir",
         "data\\raw\\E3_replay_20261019",
         "--prefix",
