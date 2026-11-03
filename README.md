@@ -42,7 +42,7 @@ By eliminating dynamic heap allocation (`malloc`/`free`) in favor of a static re
 | **0 Bytes** | **Cleartext Air Leakage** | 100% payload encrypted with Ascon-128a (Shannon entropy: 7.99 bits/B) | `M-HW` |
 | **100 / 100** | **Replay Vectors Rejected** | 64-bit sliding window with commit-after-authentication rule | `M-HOST` |
 | **22 / 22** | **Host Test Suites Passing** | ASan/UBSan unit suites (Curve25519, Ascon, Ed25519, Salsa20, HMAC, FEC, ARQ) | `M-HOST` |
-| **14 / 14** | **Hardware Diagnostics Passing** | On-chip diagnostic report verifying crypto, timers, memory, and FSM | `M-HW` |
+| **18 / 18** | **Hardware Diagnostics Passing** | On-chip diagnostic report verifying crypto, timers, memory, and FSM | `M-HW` |
 
 *Evidence classes follow IEEE reproducibility guidelines: `M-HW` (hardware-measured), `M-HOST` (host harness), `C` (exact equation).*
 
@@ -134,7 +134,7 @@ python tools/ceepew_pipeline.py --mode pairing --port1 COM5 --port2 COM6
 ```
 
 ### 5. On-Device Boot Diagnostics (Single Device)
-Run the automated 14-subsystem on-device boot self-test:
+Run the automated 18-subsystem on-device boot self-test:
 ```bash
 python tools/ceepew_pipeline.py --mode diag
 ```
