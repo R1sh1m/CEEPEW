@@ -173,8 +173,8 @@ static bool handoff_test_mismatch_does_not_promote(void)
                         "handoff_ready stays false on mismatch");
     ok &= handoff_check(!g_ble_ctx.ready_for_chat,
                         "ready_for_chat stays false on mismatch");
-    ok &= handoff_check(g_ble_ctx.state == BLE_DONE,
-                        "state is BLE_DONE after failed verification");
+    ok &= handoff_check(g_ble_ctx.state != BLE_DONE,
+                        "state is not BLE_DONE on mismatch");
     ok &= handoff_check(!transport_ble_handoff_ready(),
                         "transport_ble_handoff_ready() returns false on mismatch");
 

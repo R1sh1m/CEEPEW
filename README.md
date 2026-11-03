@@ -34,8 +34,8 @@ ESP32-based secure messaging with a 7-layer cryptographic stack, pairing via BLE
 | **Display** | I2C (SDA=GPIO26, SCL=GPIO27) | SSD1306 128×64 Monochrome OLED (400 kHz Fast-Mode I2C) |
 | **Navigation Input** | ADC1_CH5 (GPIO33) | 10 kΩ rotary potentiometer with moving-average filtering |
 | **Action Button** | GPIO19 (Active LOW) | Momentary click switch with 20 ms software debouncing |
-| **Diagnostic Switch**| GPIO5 (Active LOW) | Hardware push-lock switch enabling on-boot diagnostic test suite |
-| **Status Indicator** | GPIO15 (R), GPIO18 (G), GPIO23 (B) | Common-cathode RGB LED (220 Ω current-limiting resistors to 3.3 V) |
+| **Diagnostic Switch**| GPIO5 (Active LOW) | Hardware push-lock switch enabling on-boot diagnostic test suite *(GPIO5 is an ESP32 strapping pin; ensure it is not pulled high at boot to avoid selecting an unintended boot mode)* |
+| **Status Indicator** | GPIO15 (R), GPIO18 (G), GPIO23 (B) | Common-cathode RGB LED (220 Ω current-limiting resistors to 3.3 V) *(GPIO15 is an ESP32 strapping pin; configuration affects boot timing — verify wiring does not conflict with required boot state)* |
 
 ### Circuit Schematic
 
@@ -54,7 +54,7 @@ Run the native host test suite with GCC/Clang AddressSanitizer and UndefinedBeha
 ```powershell
 python tools/ceepew_pipeline.py --mode host
 ```
-*Verifies: 15/15 test suites (Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC single-bit correction and double-bit non-crashing bounds, 64-bit replay sliding window, replay vectors, PFS auth, UI navigator, and side-channel timing uniformity).*
+*Verifies: 18/18 test suites (Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC single-bit correction and double-bit non-crashing bounds, 64-bit replay sliding window, replay vectors, PFS auth, UI navigator, ARQ state sync/fault injection, side-channel timing uniformity, fail-closed pairing policy, and lightweight PAKE exchange).*
 
 ### 2. Protocol Arithmetic & Metric Verification
 Recompute all 45 formulas, wire budgets, airtimes, cycle-to-time conversions, and bounds:
@@ -64,11 +64,11 @@ python tools/recompute_paper_numbers.py
 *Directly validates: Wire budgets (249 B Full, 138 B Lite), efficiencies (23.3%, 42.0%, 55.2%), 802.11 airtimes (2.528 ms MPDU, 0.304 ms ACK), and entropy bounds.*
 
 ### 3. On-Device Boot Diagnostics (Single ESP32)
-Enable diagnostic mode to run the 14-subsystem boot self-test on physical hardware:
+Enable diagnostic mode to run the 18-subsystem boot self-test on physical hardware:
 ```powershell
 python tools/ceepew_pipeline.py --mode diag
 ```
-*Verifies: 14/14 subsystems print `PASS` in the `=== DIAGNOSTIC REPORT ===` (FSM transitions, 2^56 nonce hard-limit enforcement, memory pool ownership, PRG channel hopping synchronization, OLED facade, and internal temp sensor).*
+*Verifies: 18/18 subsystems print `PASS` in the `=== DIAGNOSTIC REPORT ===` (Session FSM, Nonce Enforcement, Replay Window, Pipeline/Memory, HKDF/Key Derive, Transport Hop, Power/Wakeup, Pairing UI, Curve25519 RFC, UI Manager, UI Cryptogram, Pairing Handoff, Pairing Converge, Temp Sensor, RNG Health, ARQ Negative, Low Order Reject, Task Arch).*
 
 ### 4. Two-Device Pairing & Protocol Integration Test
 Flash both target boards and monitor end-to-end BLE discovery, PIN verification, and ESP-NOW session transport:
@@ -325,6 +325,9 @@ CEEPEW/
 │   ├── ceepew_log_pipeline.py      Post-test log ingestion and signature detector
 │   ├── ceepew_diagnose.ps1 Unified PowerShell test driver
 │   ├── bench_manifest.py   Evidence manifest generator and SHA-256 sealer
+│   ├── paper_lint.py       Prose & typography linter (0 banned tokens, <= 2 em dashes/page)
+│   ├── originality_audit.py Local deterministic originality & overlap analyzer
+│   ├── publication_gate.py Pre-publication verification gate (IR-1 through IR-6)
 │   └── capture/            OTA promiscuous capture scripts, PCAP analyzers
 └── fuzz/                    libFuzzer and AFL off-host fuzzing harnesses
 ```
@@ -350,7 +353,7 @@ CEEPEW/
 The three-phase pairing protocol establishes trust without persistent infrastructure:
 
 1. **Discovery (BLE)** — Both devices advertise and scan. Beacon commitment exchange (truncated SHA-256 over session_code + device IDs). Lower-MAC peer becomes initiator.
-2. **Pairing (BLE GATT)** — Each device encrypts its public keys and Wi-Fi MAC with Ascon-128 AEAD keyed from the session code. Both displays present a 4-digit verification PIN (~13.3 bits of entropy against active MITM during the 45 s window).
+2. **Pairing (BLE GATT)** — Each device encrypts its public keys and Wi-Fi MAC with Ascon-128 AEAD keyed from the session code. Both displays present a 4-character verification code from a 36-symbol alphabet ($36^4 = 1{,}679{,}616$ possibilities, ~20.7 bits of brute-force resistance against active MITM during the 45 s window).
 3. **Handoff (ESP-NOW)** — The BLE stack is completely torn down to release radio hardware, ESP-NOW initializes on channel 1, clock offsets synchronize via rendezvous frames, and active encrypted hopping begins.
 
 ---

@@ -1,6 +1,14 @@
 /* main/ceepew_config.h */
 #ifndef CEEPEW_CONFIG_H
 #define CEEPEW_CONFIG_H
+/* Pull in sdkconfig.h when available (firmware builds expose it on the
+ * include path; host unit tests do not, and skip this safely). */
+#if defined(__has_include)
+#  if __has_include("sdkconfig.h")
+#    include "sdkconfig.h"  // IWYU pragma: keep
+#  endif
+#endif
+
 
 
 /* -------------------------------------------------------------------------- */
@@ -49,8 +57,8 @@
  * Fits in 31-byte SCAN_RSP alongside the 8-byte complete name and the
  * 4-byte manufacturer-data AD header (company 0xCEEE + subtype 0x50):
  *   8 (name) + 1+1+2+1+2+16 (mfr data) = 31 bytes (after Phase 7).
- * 128 bits of SHA-256 is sufficient because the 4-digit session code
- * itself only has 10,000 possible values (~13 bits of entropy). */
+ * 128 bits of SHA-256 is sufficient because the 4-character session code
+ * over a 36-symbol alphabet has 1,679,616 possible values (~20.7 bits of entropy). */
 #define CEEPEW_COMMITMENT_ADV_BYTES      16U
 
 /* Beacon replay defense. Each commitment beacon carries a
@@ -393,13 +401,7 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 /* unset booleans entirely (verified: unset CONFIG_CEEPEW_CAPTURE produces no  */
 /* define), so #ifdef/#if defined() is the correct compile-out idiom here.     */
 /* -------------------------------------------------------------------------- */
-/* Pull in sdkconfig.h when available (firmware builds expose it on the
- * include path; host unit tests do not, and skip this safely). */
-#if defined(__has_include)
-#  if __has_include("sdkconfig.h")
-#    include "sdkconfig.h"
-#  endif
-#endif
+
 
 /* Modes A (PLAIN) and C (CEEPEW): peer registered WITHOUT an LMK so
  * hal_radio leaves peer.encrypt=false (no hardware CCMP on air). */

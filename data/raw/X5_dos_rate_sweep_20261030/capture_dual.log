@@ -1,0 +1,2 @@
+[DEVICE_A] Error opening port: could not open port 'COM3': PermissionError(13, 'Access is denied.', None, 5)
+[DEVICE_B] Error opening port: could not open port 'COM4': PermissionError(13, 'Access is denied.', None, 5)

@@ -17,7 +17,7 @@ CEE-PEW is NOT designed to resist:
 - **Denial of service** — Radio jamming, BLE/ESP-NOW flooding not mitigated
 
 ## Known Limitations
-1. **4-character PIN confirmation** (4-digit numeric: 10^4 = 10,000 combinations, ~13.3 bits) provides brute-force resistance against an active MITM during the pairing window. An attacker with radio access during the ~45 second pairing window could attempt at most ~10K guesses. (Prior drafts quoted ~20 bits / ~1M guesses, which assumed a larger alphabet.)
+1. **4-character code confirmation** — The user selects 4 characters from a 36-symbol alphabet (`0-9, A-Z`, $36^4 = 1{,}679{,}616$ combinations, ~20.7 bits of brute-force resistance), bounded by an online attempt limit per boot. A man-in-the-middle that forwards the code untouched during the 45-second pairing window is not detected by code comparison alone, which is disclosed and addressed via planned SPAKE2+ and Tamarin verification.
 2. **No forward secrecy for pairing phase** — The session code is the sole entropy source for Phase 2 key derivation. If the session code is compromised, past pairings can be decrypted.
 3. **ESP-NOW LMK derived from session key** — If the session key is extracted from one device, all past/future ESP-NOW traffic with that peer is decryptable.
 4. **No secure boot / flash encryption** — Production deployments should enable both in `sdkconfig.production`.

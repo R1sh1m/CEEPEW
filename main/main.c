@@ -1,5 +1,6 @@
 /* main/main.c — CEE-PEW entry point with dual task launch */
 
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -30,6 +31,10 @@
 #include "transport_ble.h"
 #include "hal_temp.h"
 #include "bench_timing.h"
+#if CONFIG_CEEPEW_BENCH_AEAD
+#include "crypto_bench.h"
+#include "ceepew_region.h"
+#endif
 
 static const char *TAG = "CEE-PEW-MAIN";
 
@@ -211,25 +216,7 @@ void app_main(void){
     task_arch_set_ui_handle(ui_handle);
     ESP_LOGI(TAG, "UI task launched on Core 0");
 
-    TaskHandle_t session_handle = NULL;
-    BaseType_t session_result = xTaskCreatePinnedToCore(&task_session_run, "Session",
-                                             CEEPEW_CORE1_STACK_BYTES, NULL,
-                                             CEEPEW_TASK_SESSION_PRIORITY, &session_handle, 1);
-    if (session_result != pdPASS || session_handle == NULL) {
-        ESP_LOGE(TAG, "Failed to create session task (result=%d, handle=%p)", (int)session_result, session_handle);
-        return;
-    }
-    task_arch_set_session_handle(session_handle);
-    ESP_LOGI(TAG, "Session task launched on Core 1");
-
 #if CONFIG_CEEPEW_DEVELOPMENT_MODE
-    /* Suspend session task to prevent race conditions with tests
-     * that directly manipulate session FSM state (phase, keys, etc.). */
-    ESP_LOGI(TAG, "DEV-SELFTEST: SKIPPING on-board tests (AUTO_DIAG_TEST_OFF)");
-#if 0
-    TaskHandle_t session_h = task_arch_get_session_handle();
-    if (session_h != NULL) { vTaskSuspend(session_h); }
-
     ESP_LOGI(TAG, "DEV-SELFTEST: entering handoff test");
     extern void test_pairing_handoff_run(void);
     test_pairing_handoff_run();
@@ -244,7 +231,6 @@ void app_main(void){
     extern void integration_tests_run_all(void);
     integration_tests_run_all();
     ESP_LOGI(TAG, "DEV-SELFTEST: integration tests done");
-#endif
 
     extern void ui_manager_reset_to_discovery(void);
     ui_manager_reset_to_discovery();
@@ -258,15 +244,33 @@ void app_main(void){
 
     err = transport_ble_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err); esp_restart(); }
+#endif
 
-    /* Resume session task after tests complete and production state is set. */
-    if (session_handle != NULL) { vTaskResume(session_handle); }
+    TaskHandle_t session_handle = NULL;
+    BaseType_t session_result = xTaskCreatePinnedToCore(&task_session_run, "Session",
+                                             CEEPEW_CORE1_STACK_BYTES, NULL,
+                                             CEEPEW_TASK_SESSION_PRIORITY, &session_handle, 1);
+    if (session_result != pdPASS || session_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create session task (result=%d, handle=%p)", (int)session_result, session_handle);
+        return;
+    }
+    task_arch_set_session_handle(session_handle);
+    ESP_LOGI(TAG, "Session task launched on Core 1");
 
-    /* integration_test_pairing_e2e_run() is only linked when tests are enabled */
+#if CONFIG_CEEPEW_BENCH_AEAD
+    /* Campaign X2: same-board AEAD baseline. The result struct is held in the
+     * region pool (zero-heap rule: it is 592 B and would otherwise sit in
+     * .bss, which is what pushed the development-mode image past dram0_0_seg). */
+    crypto_bench_result_t *s_bench_res = (crypto_bench_result_t *)region_alloc(&g_region,
+                                                                                sizeof(crypto_bench_result_t));
+    if (s_bench_res != NULL) {
+        (void)crypto_bench_run(30U, s_bench_res);
+    }
+#endif
+
 #if 0
     extern void integration_test_pairing_e2e_run(void);
     integration_test_pairing_e2e_run();
-#endif
 #endif
 
     ESP_LOGI(TAG, "=== CEE-PEW Ready ===");

@@ -39,12 +39,8 @@
 #include "hal_rgb.h"
 #include "bench_timing.h"
 
-/* ARQ — declared in components/ecc/ecc_arq.c, no header file. */
-extern CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6],
-                                const uint8_t *payload, uint16_t payload_len);
-extern CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len,
-                                  uint8_t *out, uint16_t *out_len,
-                                  uint16_t max_out_len, bool *corrected);
+/* ARQ — declared in components/ecc/ecc_arq.h */
+#include "ecc_arq.h"
 #include "session_fsm.h"
 #include "session_memory.h"
 #include "session_msgstore.h"
@@ -2308,6 +2304,8 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
                                                                 frame->src_mac, pfs_auth_key,
                                                                 peer_pfs_pubkey);
       if (pfs_err == CEEPEW_OK) {
+        err = CEEPEW_OK;
+        ecc_arq_commit();
         CeePewErr_t derive_err = session_pfs_process_peer_key(peer_pfs_pubkey);
         if (derive_err == CEEPEW_OK) {
           if (msg_type == CEEPEW_ESL_MSG_TYPE_PFS_INIT) {
@@ -2327,6 +2325,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
           }
         }
       } else {
+        err = pfs_err;
         ESP_LOGW("SESSION", "[PFS_RX] PFS handshake rejected (err=%d)", (int)pfs_err);
       }
       ceepew_secure_zero(peer_pfs_pubkey, sizeof(peer_pfs_pubkey));
@@ -2493,8 +2492,9 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
      * source MAC matches the GATT-verified peer WiFi MAC — this closes
      * the window where an attacker could relay encrypted sync frames
      * from a spoofed MAC address. */
-    if (decoded_len == 1U && (decoded_out[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
-                              decoded_out[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
+    if ((decoded_len == 1U || decoded_len == 2U) &&
+        (decoded_out[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ||
+         decoded_out[0] == CEEPEW_KEY_SYNC_ACK_BYTE)) {
       /* HARDWARE-GATED IDENTITY CHECK: verify frame src_mac matches the
        * WiFi MAC that was authenticated over the secure GATT channel. */
       CeePewErr_t mac_check = session_verify_wifi_mac_matches_frame(frame->src_mac);
@@ -2503,17 +2503,29 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
         goto rx_cleanup;
       }
 
+      /* Phase 1.3 Authenticated Profile Negotiation */
+      if (decoded_len == 2U) {
+        uint8_t peer_prof = decoded_out[1];
+        uint8_t local_prof = session_get_local_profile_byte();
+        if ((peer_prof & CEEPEW_PROFILE_MASK_FEC) != (local_prof & CEEPEW_PROFILE_MASK_FEC)) {
+          ESP_LOGW("SESSION", "[POST_DERIVE_SYNC] Incompatible FEC profile rejected (peer=0x%02X local=0x%02X)",
+                   peer_prof, local_prof);
+          err = CEEPEW_ERR_CRYPTO;
+          goto rx_cleanup;
+        }
+      }
+
       ESP_LOGI("SESSION", "[POST_DERIVE_SYNC] Received sync byte 0x%02X (%s)",
                decoded_out[0], decoded_out[0] == CEEPEW_KEY_SYNC_HELLO_BYTE ? "HELLO" : "ACK");
 
       CeePewErr_t sync_err = session_handle_key_sync_byte(decoded_out[0]);
       if (sync_err == CEEPEW_ERR_NEED_TX) {
-        uint8_t ack_plain[1] = { CEEPEW_KEY_SYNC_ACK_BYTE };
+        uint8_t ack_plain[2] = { CEEPEW_KEY_SYNC_ACK_BYTE, session_get_local_profile_byte() };
         uint8_t peer_mac[6] = {0U};
         uint8_t peer_pk[32] = {0U};
         if (session_get_peer_wifi_mac(peer_mac) == CEEPEW_OK &&
             session_get_peer_public_key(peer_pk) == CEEPEW_OK) {
-          CeePewErr_t send_ack_err = session_send_message(ack_plain, 1U, peer_mac, peer_pk);
+          CeePewErr_t send_ack_err = session_send_message(ack_plain, 2U, peer_mac, peer_pk);
           if (send_ack_err == CEEPEW_OK) {
             (void)session_confirm_ack_sent();
             ESP_LOGI("SESSION", "[POST_DERIVE_SYNC] Sent ACK to initiator %02X:%02X:%02X:%02X:%02X:%02X",
@@ -2591,8 +2603,12 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
   }
 
   err = CEEPEW_OK;
+  ecc_arq_commit();
 
 rx_cleanup:
+  if (err != CEEPEW_OK) {
+    ecc_arq_rollback();
+  }
   /* Secure zero the remaining stack buffer (local_work_frame).
    * All intermediate crypto buffers from the pipeline stages are
    * stack-local within those stages and are zeroed before each

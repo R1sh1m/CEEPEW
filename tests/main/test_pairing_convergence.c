@@ -105,6 +105,7 @@ static void test_keys_converge_without_fresh_salt(void)
     check(err == CEEPEW_OK, "A: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "A: set_peer_wifi_mac");
+    session_test_set_commitment_verified(true);
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "A: derive_key");
     snapshot_derived(a_ascon, a_box, a_sid);
@@ -133,6 +134,7 @@ static void test_keys_converge_without_fresh_salt(void)
     check(err == CEEPEW_OK, "B: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_A);
     check(err == CEEPEW_OK, "B: set_peer_wifi_mac");
+    session_test_set_commitment_verified(true);
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "B: derive_key");
     snapshot_derived(b_ascon, b_box, b_sid);
@@ -193,6 +195,7 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(err == CEEPEW_OK, "A2: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "A2: set_peer_wifi_mac");
+    session_test_set_commitment_verified(true);
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "A2: derive_key");
 
@@ -241,6 +244,7 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(err == CEEPEW_OK, "B2: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_A);
     check(err == CEEPEW_OK, "B2: set_peer_wifi_mac");
+    session_test_set_commitment_verified(true);
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "B2: derive_key");
     check(session_sync_barrier_cleared() == false,
@@ -302,6 +306,7 @@ static void test_different_session_code_different_keys(void)
     check(err == CEEPEW_OK, "diffA: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "diffA: set_peer_wifi_mac");
+    session_test_set_commitment_verified(true);
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "diffA: derive_key");
     snapshot_derived(a_ascon, a_box, a_sid);
@@ -323,6 +328,7 @@ static void test_different_session_code_different_keys(void)
     check(err == CEEPEW_OK, "diffB: set_self_wifi_mac");
     err = session_set_peer_wifi_mac(MAC_B);
     check(err == CEEPEW_OK, "diffB: set_peer_wifi_mac");
+    session_test_set_commitment_verified(true);
     err = session_phase2_derive_key();
     check(err == CEEPEW_OK, "diffB: derive_key");
     snapshot_derived(b_ascon, b_box, b_sid);
@@ -558,6 +564,7 @@ static void test_identity_degraded_blocks_derivation(void)
               "degB: peer_sign_pk_valid still false "
               "(sign_pk was never exchanged)");
 
+#if CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED
         err = session_phase2_derive_key();
         check(err == CEEPEW_OK,
               "degB: derive_key WITH degraded confirmation MUST succeed");
@@ -572,6 +579,15 @@ static void test_identity_degraded_blocks_derivation(void)
               "degB: peer_sign_pk_valid still false after degraded derivation");
         check(session_get_nonce_counter() == 0ULL,
               "degB: nonce starts at 0 (even parity for degraded initiator)");
+#else
+        err = session_phase2_derive_key();
+        check(err != CEEPEW_OK,
+              "degB: derive_key WITH degraded confirmation MUST fail when unauth is disabled");
+        check(session_is_active() == false,
+              "degB: session NOT active after degraded derivation refused");
+        check(session_get_phase() == 2U,
+              "degB: phase still 2 after degraded derivation refused");
+#endif
     }
 
     ESP_LOGI(TAG, "--- test_identity_degraded_blocks_derivation PASS ---");
@@ -579,6 +595,7 @@ static void test_identity_degraded_blocks_derivation(void)
 
 uint32_t test_pairing_convergence_run(void)
 {
+    session_test_reset_attempts();
     ESP_LOGI(TAG, "=== Pairing convergence + sync barrier test ===");
     s_pass_count = 0U;
     s_fail_count = 0U;

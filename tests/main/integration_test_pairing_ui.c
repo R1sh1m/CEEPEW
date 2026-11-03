@@ -76,6 +76,7 @@ static bool pairing_ui_run_session(const uint8_t self_mac[6],
     if (!pairing_ui_check(session_set_peer_wifi_mac(peer_mac) == CEEPEW_OK, "session_set_peer_wifi_mac")) {
         return false;
     }
+    session_test_set_commitment_verified(true);
     if (!pairing_ui_check(session_phase2_derive_key() == CEEPEW_OK, "session_phase2_derive_key")) {
         return false;
     }

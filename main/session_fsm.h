@@ -49,6 +49,26 @@ extern "C" {
 #define CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED 0
 #endif
 
+/* Phase 1.3: Authenticated Profile Negotiation bitmask */
+#define CEEPEW_PROFILE_MASK_LITE        (1U << 0)
+#define CEEPEW_PROFILE_MASK_FEC         (1U << 1)
+#define CEEPEW_PROFILE_MASK_ASYM_SIG    (1U << 2)
+
+static inline uint8_t session_get_local_profile_byte(void) {
+    uint8_t prof = 0U;
+#if CEEPEW_PROFILE_LITE_ENABLED
+    prof |= CEEPEW_PROFILE_MASK_LITE;
+#else
+    prof |= CEEPEW_PROFILE_MASK_ASYM_SIG;
+#endif
+#if defined(CONFIG_CEEPEW_FEC_DISABLE) && CONFIG_CEEPEW_FEC_DISABLE
+    /* FEC disabled */
+#else
+    prof |= CEEPEW_PROFILE_MASK_FEC;
+#endif
+    return prof;
+}
+
 /* ────────────────────────────────────────────────────────────────────── */
 /* Pairing code space and attempt bound (ISS-S02)                         */
 /* ────────────────────────────────────────────────────────────────────── */
@@ -827,6 +847,8 @@ void session_test_set_id(uint64_t id);
 void session_test_set_nonce_counter(uint64_t nc);
 void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]);
 void session_test_unset_commitment(void);
+void session_test_set_commitment_verified(bool verified);
+void session_test_reset_attempts(void);
 
 #ifdef __cplusplus
 }

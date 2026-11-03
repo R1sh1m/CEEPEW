@@ -84,7 +84,9 @@ CeePewErr_t crypto_ascon_aead_encrypt(const uint8_t key[16], const uint8_t nonce
     CEEPEW_ASSERT(key != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(nonce != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(ct != NULL && ct_len != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(*ct_len >= (uint16_t)(pt_len + CEEPEW_ASCON_TAG_BYTES), CEEPEW_ERR_BOUNDS);
+    if (*ct_len < (uint16_t)(pt_len + CEEPEW_ASCON_TAG_BYTES)) {
+        return CEEPEW_ERR_BOUNDS;
+    }
     uint64_t k0 = load64_be(&key[0]);
     uint64_t k1 = load64_be(&key[8]);
     uint64_t n0 = load64_be(&nonce[0]);
@@ -145,9 +147,13 @@ CeePewErr_t crypto_ascon_aead_decrypt(const uint8_t key[16], const uint8_t nonce
     CEEPEW_ASSERT(nonce != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(pt != NULL && pt_len != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(ct != NULL, CEEPEW_ERR_NULL_PTR);
-    CEEPEW_ASSERT(ct_len >= CEEPEW_ASCON_TAG_BYTES, CEEPEW_ERR_PARAM);
+    if (ct_len < CEEPEW_ASCON_TAG_BYTES) {
+        return CEEPEW_ERR_PARAM;
+    }
     uint16_t msg_len = (uint16_t)(ct_len - CEEPEW_ASCON_TAG_BYTES);
-    CEEPEW_ASSERT(*pt_len >= msg_len, CEEPEW_ERR_BOUNDS);
+    if (*pt_len < msg_len) {
+        return CEEPEW_ERR_BOUNDS;
+    }
     uint64_t k0 = load64_be(&key[0]);
     uint64_t k1 = load64_be(&key[8]);
     uint64_t n0 = load64_be(&nonce[0]);

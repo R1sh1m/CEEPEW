@@ -252,6 +252,169 @@ static void test_duplicate_commit_rejected(void)
     check(err == CEEPEW_ERR_REPLAY, "seq=42 duplicate rejected by commit re-check");
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * Test 5: Randomized Differential Fuzzing vs Reference Sliding-Window Model
+ * 10,000 randomized operations (forward jumps, in-window out-of-order,
+ * replays, ancient packets, and uncommitted forgery drops) compared
+ * step-by-step against an independent reference bitmap implementation.
+ * ─────────────────────────────────────────────────────────────────────────── */
+typedef struct {
+    uint64_t last_seq;
+    uint64_t bitmap;
+    bool initialized;
+} RefReplayWindow_t;
+
+static void ref_reset(RefReplayWindow_t *ref) {
+    ref->last_seq = 0ULL;
+    ref->bitmap = 0ULL;
+    ref->initialized = false;
+}
+
+static CeePewErr_t ref_check(const RefReplayWindow_t *ref, uint64_t seq, bool *is_replay) {
+    if (seq == 0ULL) return CEEPEW_ERR_PARAM;
+    if (!ref->initialized) {
+        *is_replay = false;
+        return CEEPEW_OK;
+    }
+    if (seq > ref->last_seq) {
+        *is_replay = false;
+        return CEEPEW_OK;
+    }
+    uint64_t diff = ref->last_seq - seq;
+    if (diff >= 64ULL) {
+        *is_replay = true;
+        return CEEPEW_OK;
+    }
+    *is_replay = ((ref->bitmap & (1ULL << diff)) != 0ULL);
+    return CEEPEW_OK;
+}
+
+static CeePewErr_t ref_commit(RefReplayWindow_t *ref, uint64_t seq) {
+    if (seq == 0ULL) return CEEPEW_ERR_PARAM;
+    if (!ref->initialized) {
+        ref->last_seq = seq;
+        ref->bitmap = 1ULL;
+        ref->initialized = true;
+        return CEEPEW_OK;
+    }
+    if (seq > ref->last_seq) {
+        uint64_t diff = seq - ref->last_seq;
+        if (diff < 64ULL) {
+            ref->bitmap = (ref->bitmap << diff) | 1ULL;
+        } else {
+            ref->bitmap = 1ULL;
+        }
+        ref->last_seq = seq;
+        return CEEPEW_OK;
+    }
+    uint64_t diff = ref->last_seq - seq;
+    if (diff >= 64ULL) {
+        return CEEPEW_ERR_REPLAY;
+    }
+    if ((ref->bitmap & (1ULL << diff)) != 0ULL) {
+        return CEEPEW_ERR_REPLAY;
+    }
+    ref->bitmap |= (1ULL << diff);
+    return CEEPEW_OK;
+}
+
+/* Xorshift32 PRNG for deterministic, reproducible host fuzzing */
+static uint32_t s_fuzz_state = 0x12345678U;
+static uint32_t fuzz_rand32(void) {
+    uint32_t x = s_fuzz_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    s_fuzz_state = x;
+    return x;
+}
+
+static void test_differential_randomized_fuzzing(void) {
+    printf("\n--- Test 5: Differential Randomized Fuzzing (10,000 iterations) ---\n");
+    transport_replay_reset();
+    RefReplayWindow_t ref;
+    ref_reset(&ref);
+
+    bool mismatch = false;
+    uint32_t checks_passed = 0;
+    uint32_t commits_passed = 0;
+    uint32_t uncommitted_forgeries = 0;
+
+    uint64_t cur_seq = 100ULL;
+
+    for (int iter = 0; iter < 10000; iter++) {
+        uint32_t action = fuzz_rand32() % 5;
+        uint64_t candidate_seq = cur_seq;
+
+        if (action == 0) {
+            candidate_seq = (ref.initialized ? ref.last_seq : 100ULL) + 1ULL;
+        } else if (action == 1) {
+            uint64_t jump = (uint64_t)(1 + (fuzz_rand32() % 10));
+            candidate_seq = (ref.initialized ? ref.last_seq : 100ULL) + jump;
+        } else if (action == 2) {
+            if (ref.initialized && ref.last_seq > 1ULL) {
+                uint64_t offset = (uint64_t)(fuzz_rand32() % 64);
+                if (offset < ref.last_seq) {
+                    candidate_seq = ref.last_seq - offset;
+                } else {
+                    candidate_seq = 1ULL;
+                }
+            } else {
+                candidate_seq = 1ULL;
+            }
+        } else if (action == 3) {
+            if (ref.initialized && ref.last_seq > 70ULL) {
+                uint64_t offset = (uint64_t)(64 + (fuzz_rand32() % 400));
+                if (offset < ref.last_seq) {
+                    candidate_seq = ref.last_seq - offset;
+                } else {
+                    candidate_seq = 1ULL;
+                }
+            } else {
+                candidate_seq = 1ULL;
+            }
+        } else {
+            uint64_t jump = (uint64_t)(100 + (fuzz_rand32() % 1900));
+            candidate_seq = (ref.initialized ? ref.last_seq : 100ULL) + jump;
+        }
+
+        bool impl_replay = false;
+        CeePewErr_t impl_err = transport_replay_check(candidate_seq, 0U, &impl_replay);
+
+        bool ref_replay = false;
+        CeePewErr_t ref_err = ref_check(&ref, candidate_seq, &ref_replay);
+
+        if (impl_err != ref_err || impl_replay != ref_replay) {
+            printf("  [FAIL] Check mismatch at iter %d! seq=%llu (impl: err=%d rep=%d; ref: err=%d rep=%d)\n",
+                   iter, (unsigned long long)candidate_seq, (int)impl_err, (int)impl_replay, (int)ref_err, (int)ref_replay);
+            mismatch = true;
+            break;
+        }
+        checks_passed++;
+
+        if (!impl_replay && impl_err == CEEPEW_OK) {
+            bool auth_ok = ((fuzz_rand32() % 100) < 85);
+            if (auth_ok) {
+                CeePewErr_t impl_c_err = transport_replay_commit(candidate_seq);
+                CeePewErr_t ref_c_err = ref_commit(&ref, candidate_seq);
+                if (impl_c_err != ref_c_err) {
+                    printf("  [FAIL] Commit mismatch at iter %d! seq=%llu (impl=%d, ref=%d)\n",
+                           iter, (unsigned long long)candidate_seq, (int)impl_c_err, (int)ref_c_err);
+                    mismatch = true;
+                    break;
+                }
+                commits_passed++;
+            } else {
+                uncommitted_forgeries++;
+            }
+        }
+    }
+
+    check(!mismatch, "10,000 differential fuzzing steps perfectly matched reference model");
+    printf("    (Checks: %u, Commits: %u, Uncommitted Forgeries Dropped: %u)\n",
+           checks_passed, commits_passed, uncommitted_forgeries);
+}
+
 int main(void)
 {
     printf("============================================\n");
@@ -259,10 +422,13 @@ int main(void)
     printf(" (check/commit split, forged s_max+1000)\n");
     printf("============================================\n");
 
+
+
     test_baseline_advance();
     test_forged_far_forward_no_window_shift();
     test_commit_after_aead_verify();
     test_duplicate_commit_rejected();
+    test_differential_randomized_fuzzing();
 
     printf("\n============================================\n");
     printf(" Host Replay Window Summary: %d Passed, %d Failed\n", s_passed, s_failed);

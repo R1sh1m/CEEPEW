@@ -123,7 +123,14 @@ function Step-IdfBuild {
 function Step-Flash {
     param([string]$TargetPort)
     Write-Banner "Flashing $TargetPort"
-    idf.py flash -p $TargetPort 2>&1 | ForEach-Object { Write-Host $_ }
+    $origEA = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        idf.py flash -p $TargetPort 2>&1 | ForEach-Object { Write-Host $_ }
+        $LASTEXITCODE = $global:LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $origEA
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Flash failed on $TargetPort"
         exit 1

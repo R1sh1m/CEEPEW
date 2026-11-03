@@ -61,6 +61,15 @@ BENCH_FLAGS = (
     "CONFIG_CEEPEW_BENCH_58B=y",
     "CONFIG_CEEPEW_BENCH_TIMING=y",
     "CONFIG_CEEPEW_BENCH_AEAD=y",
+    # Development mode compiles in the test component and the benchmark
+    # module. The .bss shortfall is fixed in crypto_bench.h, where the result
+    # structure carried sixteen case slots for a module that records at most
+    # eleven. This stack line is not that fix: the main task stack is taken
+    # from the heap, so it never appears in .bss and changing it moved the
+    # linker not at all. It is retained only because every bench-enabled arm
+    # carries it and every manifest binds the resulting sdkconfig hash; main
+    # returns its stack after initialisation, before any timed region runs.
+    "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192",
 )
 
 CONFIGS: Dict[str, Dict[str, Any]] = {
@@ -212,10 +221,16 @@ def build_one(name: str, cfg: Dict[str, Any], build_dir: Optional[str], dry_run:
     # generator, which is how a five-way matrix becomes five copies of one
     # image.
     overlay = write_overlay(name, cfg["flags"])
-    if name != "default" or cfg["flags"]:
+    if name != "default":
         abs_overlay = os.path.abspath(overlay)
         base_defaults = os.path.abspath(os.path.join(PROJECT_ROOT, "sdkconfig.defaults"))
         private_sdkconfig = os.path.abspath(os.path.join(PROJECT_ROOT, target_dir, "sdkconfig"))
+        # A defaults file only seeds a sdkconfig that does not yet exist. If the
+        # build directory already carries one, its values win and the overlay is
+        # silently ignored, which is the same failure mode as "-D CONFIG_*".
+        # Deleting it makes the overlay authoritative on every run.
+        if os.path.isfile(private_sdkconfig):
+            os.remove(private_sdkconfig)
         idf_args += ["-D", "SDKCONFIG=%s" % private_sdkconfig]
         idf_args += ["-D", "SDKCONFIG_DEFAULTS=%s;%s" % (base_defaults, abs_overlay)]
     idf_args += ["build"]

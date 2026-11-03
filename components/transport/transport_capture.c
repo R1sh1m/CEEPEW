@@ -36,6 +36,8 @@
 #include "transport_capture.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
+
+#if defined(CONFIG_CEEPEW_CAPTURE) && CONFIG_CEEPEW_CAPTURE
 #include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -214,3 +216,11 @@ bool transport_capture_is_running(void)
 {
     return s_running;
 }
+
+#else /* !CONFIG_CEEPEW_CAPTURE */
+
+CeePewErr_t transport_capture_start(void) { return CEEPEW_OK; }
+void transport_capture_stop(void) {}
+bool transport_capture_is_running(void) { return false; }
+
+#endif /* CONFIG_CEEPEW_CAPTURE */

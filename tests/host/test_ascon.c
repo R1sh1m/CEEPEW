@@ -235,22 +235,25 @@ static int test_ascon_header_ad_binding(void)
         return 1;
     }
 
-    /* Tamper: flip a bit in every header byte, one at a time. Each mutated
-     * associated-data vector MUST be rejected (tag mismatch). */
+    /* Exhaustive tamper: flip every bit in every header byte (192/192 single-bit flips).
+     * Each mutated associated-data vector MUST be rejected (tag mismatch). */
     int rejected = 0;
-    for (unsigned i = 0; i < ESL_HDR_BYTES; i++) {
-        uint8_t bad[ESL_HDR_BYTES];
-        memcpy(bad, hdr, ESL_HDR_BYTES);
-        bad[i] ^= 0x01U;
-        uint8_t out[128];
-        uint16_t out_len = sizeof(out);
-        CeePewErr_t e = crypto_ascon_aead_decrypt(key, nonce, bad, ESL_HDR_BYTES,
-                                                  ct, ct_len, out, &out_len);
-        if (e != CEEPEW_OK) { rejected++; }
+    const unsigned total_bits = ESL_HDR_BYTES * 8U;
+    for (unsigned byte_idx = 0; byte_idx < ESL_HDR_BYTES; byte_idx++) {
+        for (unsigned bit_idx = 0; bit_idx < 8U; bit_idx++) {
+            uint8_t bad[ESL_HDR_BYTES];
+            memcpy(bad, hdr, ESL_HDR_BYTES);
+            bad[byte_idx] ^= (uint8_t)(1U << bit_idx);
+            uint8_t out[128];
+            uint16_t out_len = sizeof(out);
+            CeePewErr_t e = crypto_ascon_aead_decrypt(key, nonce, bad, ESL_HDR_BYTES,
+                                                      ct, ct_len, out, &out_len);
+            if (e != CEEPEW_OK) { rejected++; }
+        }
     }
-    if (rejected != (int)ESL_HDR_BYTES) {
+    if (rejected != (int)total_bits) {
         printf("FAIL: header-AD tamper: %d/%u mutated headers rejected\n",
-               rejected, (unsigned)ESL_HDR_BYTES);
+               rejected, total_bits);
         return 1;
     }
 
@@ -267,8 +270,7 @@ static int test_ascon_header_ad_binding(void)
         printf("FAIL: refreshed-timestamp header accepted\n"); return 1;
     }
 
-    printf("PASS: Ascon-128 binds 24-byte ESL header as AD (%u/24 header-byte tampers + seq/ts variants rejected)\n",
-           (unsigned)ESL_HDR_BYTES);
+    printf("PASS: Ascon-128 binds 24-byte ESL header as AD (192/192 exhaustive single-bit tampers + seq/ts variants rejected)\n");
     return 0;
 }
 

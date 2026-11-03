@@ -245,8 +245,11 @@ static void ble_init_unlock(void) {
   xSemaphoreGive(s_ble_init_mutex);
 }
 
-/* Deadlock diagnostics: track which task holds the lock and for how long. */
+/* Deadlock diagnostics: track which task holds the lock and for how long.
+ * Phase 1.2 BLE Mutex Try-Lock: Use recursive mutex to prevent self-deadlocks
+ * on nested calls from callbacks or supervisor task. */
 static TaskHandle_t s_ble_ctx_lock_owner = NULL;
+static uint32_t s_ble_ctx_lock_depth = 0U;
 static uint32_t s_ble_ctx_lock_held_since_ms = 0U;
 #define BLE_CTX_LOCK_TIMEOUT_MS 2000U
 
@@ -255,18 +258,20 @@ static inline bool ble_ctx_lock(void) {
     return true;
   }
   TickType_t timeout_ticks = pdMS_TO_TICKS(BLE_CTX_LOCK_TIMEOUT_MS);
-  if (xSemaphoreTake(s_ble_ctx_mutex, timeout_ticks) != pdTRUE) {
-    /* Log the deadlock but do not crash — return false so callers can
-     * abort their operation gracefully instead of proceeding with
-     * potentially stale g_ble_ctx state. */
+  if (xSemaphoreTakeRecursive(s_ble_ctx_mutex, timeout_ticks) != pdTRUE) {
     TaskHandle_t holder = s_ble_ctx_lock_owner;
     const char *holder_name = (holder != NULL) ? pcTaskGetName(holder) : "???";
-    ESP_LOGE(TAG, "ble_ctx_lock DEADLOCK: held by %s for >%u ms — aborting",
-             holder_name, (unsigned)BLE_CTX_LOCK_TIMEOUT_MS);
+    ESP_LOGE(TAG, "ble_ctx_lock TIMEOUT: held by %s (depth=%u) for >%u ms — aborting",
+             holder_name, (unsigned)s_ble_ctx_lock_depth, (unsigned)BLE_CTX_LOCK_TIMEOUT_MS);
     return false;
   }
-  s_ble_ctx_lock_owner = xTaskGetCurrentTaskHandle();
-  s_ble_ctx_lock_held_since_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+  if (s_ble_ctx_lock_owner != xTaskGetCurrentTaskHandle()) {
+    s_ble_ctx_lock_owner = xTaskGetCurrentTaskHandle();
+    s_ble_ctx_lock_depth = 1U;
+    s_ble_ctx_lock_held_since_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+  } else {
+    s_ble_ctx_lock_depth++;
+  }
   return true;
 }
 
@@ -274,25 +279,17 @@ static inline void ble_ctx_unlock(void) {
   if (s_ble_ctx_mutex == NULL) {
     return;
   }
-  /* CRITICAL: never release a mutex this task does not hold.
-   *
-   * ble_ctx_lock() returns false when its 2 s take times out, and most call
-   * sites ignore that return value and still call ble_ctx_unlock(). An
-   * unconditional xSemaphoreGive on a mutex the current task never acquired
-   * asks FreeRTOS to priority-disinherit a mutex it did not inherit, which
-   * trips xTaskPriorityDisinherit (tasks.c:5156) and reboots the board.
-   *
-   * Observed on real hardware: ble_ctx_lock DEADLOCK (held by pair_supp
-   * >2000 ms) -> enter_phase(IDLE) lock timeout -> assert failed ->
-   * rst:0xc (SW_CPU_RESET). It destroyed a pairing cycle and presents in the
-   * field as an inexplicable ~45 s pairing delay. Release only as the recorded
-   * owner; a timing-out caller correctly becomes a no-op here. */
   if (s_ble_ctx_lock_owner != xTaskGetCurrentTaskHandle()) {
     return;
   }
-  s_ble_ctx_lock_owner = NULL;
-  s_ble_ctx_lock_held_since_ms = 0U;
-  xSemaphoreGive(s_ble_ctx_mutex);
+  if (s_ble_ctx_lock_depth > 1U) {
+    s_ble_ctx_lock_depth--;
+  } else {
+    s_ble_ctx_lock_depth = 0U;
+    s_ble_ctx_lock_owner = NULL;
+    s_ble_ctx_lock_held_since_ms = 0U;
+  }
+  xSemaphoreGiveRecursive(s_ble_ctx_mutex);
 }
 
 /* Public wrappers for external callers (e.g., task_session.c) */
@@ -1221,7 +1218,7 @@ CeePewErr_t transport_ble_init(void) {
            g_ble_ctx.is_advertising ? 1U : 0U, g_ble_ctx.is_scanning ? 1U : 0U);
 
   if (s_ble_ctx_mutex == NULL) {
-    s_ble_ctx_mutex = xSemaphoreCreateMutex();
+    s_ble_ctx_mutex = xSemaphoreCreateRecursiveMutex();
     if (s_ble_ctx_mutex == NULL) {
       ESP_LOGW(TAG, "transport_ble_init: failed to create ble_ctx mutex");
     }

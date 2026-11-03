@@ -1,0 +1,66 @@
+<USER_REQUEST>
+CEE-PEW — Second technical review
+Scope: cryptographic construction, protocol mathematics, nonce management, replay protection, framing, reliability, and implementation consistency.
+Having examined the more detailed protocol descriptions, I want to take this review a step further than the previous one.
+There is an important distinction I want to maintain throughout: a cryptographic design can be mathematically sound in principle while its particular implementation or protocol integration remains insecure.
+I am therefore evaluating three separate things:
+What the manuscript claims the protocol does.
+Whether the described construction supports those claims.
+Whether the experimental evidence demonstrates that the implementation actually behaves that way.
+I have already identified one particularly important documentation inconsistency: the manuscript describes the GATT identity exchange as being encrypted using a key derived from the four-character code, but its subsequent key-schedule description derives the Ascon key from X25519 through HKDF. Those are materially different constructions. We need to establish which one the firmware actually implements before making a definitive security assessment.
+1. Pairing protocol: the most serious security weakness
+Critical
+Let's examine the construction mathematically.
+Your manuscript defines:
+\[ C=SHA256( D\parallel id_A\parallel id_B\parallel code_{32} \parallel t_{round} ) \]
+where:
+\(D\) is the domain-separation string.
+\(id_A,id_B\) are the peer identifiers.
+\(code_{32}\) is the four-character code repeated eight times.
+\(t_{round}=0\).
+The code has:
+\[ 36^4=1,679,616 \]
+possible combinations.
+What an attacker can do
+An attacker captures the BLE discovery commitment and knows the other inputs.
+They can calculate:
+\[ C_i=SHA256(D\parallel id_A\parallel id_B \parallel code_{i,32}\parallel 0) \]
+for every possible code.
+Then they compare each result with the captured commitment.
+This is an entirely offline attack. It does not require communicating with eithe
+<truncated 26754 bytes>
+aphically secure as a complete system yet. The pairing weakness is too significant, and several details of the custom outer construction remain insufficiently specified.
+But I also don't think you need to discard the architecture and start again.
+Most of the underlying engineering decisions are defensible. The work now is to strengthen the trust establishment, formalize the protocol, and validate the implementation.
+16. One thing I would like to do next: inspect the actual firmware
+There is a limit to what I can establish from a PDF.
+I can check equations, identify contradictory descriptions, evaluate the protocol design, and assess whether the experiments support the claims.
+But I cannot conclusively verify that your implementation follows the described construction without examining the source.
+Your manuscript references the repository:
+[CEE-PEW — GitHub repository](https://github.com/R1sh1m/CEEPEW?utm_source=chatgpt.com).
+I would particularly like to inspect these implementation areas:
+Source-code area
+What I want to verify
+Pairing and GATT
+Actual PIN-to-key derivation and commitment handling
+HKDF
+Exact salt, IKM and info strings
+Ascon
+Nonce, AD and tag handling
+XSalsa20-HMAC
+Key separation and authenticated message format
+Ed25519
+Exact signed bytes and verification order
+Replay protection
+Counter updates and bitmap concurrency
+PFS re-key
+Key replacement, erasure and failure handling
+RX pipeline
+Buffer ownership, queue exhaustion and duplicate handling
+Could you upload a ZIP of the exact firmware source corresponding to commit b263dde-dirty?
+That is the version identified in your paper as the evaluated build. I would rather audit the actual evaluated implementation than accidentally review a newer version and attribute its behaviour to your experimental results.
+With that source, we can move from a manuscript-level technical review to a genuine implementation-level security audit. look into this
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-11-01T00:26:44+05:30.
+</ADDITIONAL_METADATA>

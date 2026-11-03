@@ -28,8 +28,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define CRYPTO_BENCH_MAX_CASES   16U
-#define CRYPTO_BENCH_MAX_ITERS   256U
+/* Eleven cases is the most any one build records: three Ascon directions,
+ * two Ed25519 directions, and two directions each for AES-256-GCM,
+ * ChaCha20-Poly1305 and AES-128-CCM. The table carries one spare slot. It is
+ * not larger because the whole result set is file-scope static in the boot
+ * diagnostic, and sixteen slots cost 656 bytes of a DRAM segment that
+ * development-mode builds fill to within 48 bytes. */
+#define CRYPTO_BENCH_MAX_CASES   12U
+/* Each measurement function keeps its own static sample array, and there are
+ * five of them, so this bound is multiplied by twenty bytes across the object.
+ * The only caller measures 30 iterations. A 256-entry bound therefore reserved
+ * five kilobytes of .bss for samples that are never taken, which is what pushed
+ * the development-mode image over the DRAM limit. */
+#define CRYPTO_BENCH_MAX_ITERS   64U
 
 typedef struct {
     const char *name;        /* stable case identifier                      */

@@ -24,7 +24,9 @@ None are referenced by the firmware build.
 | `recompute_paper_numbers.py` | **Claim & Arithmetic Verifier** — Recomputes 45 paper claims against formulas and `results/registry.json` |
 | `bench_manifest.py` | **Dataset Provenance Sealer** — Generates and verifies cryptographic SHA-256 manifests for raw test runs |
 | `verify_citations.py` | **Citation Auditor** — Queries Crossref to validate DOIs, author lists, and publication years |
-| `paper_lint.py` | Lints paper text for canonical terminology, banned claims, and IEEE formatting |
+| `paper_lint.py` | **Prose & Typography Linter** — Enforces 0 banned AI tokens and $\le$ 2 rendered em dashes per page |
+| `originality_audit.py` | **Local Originality Engine** — Computes clause loads, n-gram burstiness, and cross-paper n-gram overlap |
+| `publication_gate.py` | **Master Pre-Publication Gate** — Subsumes arithmetic, citation, lint, and external OpenAlex probing |
 
 ### 3. Empirical Experiment Drivers & Analysis
 | File | Purpose |
@@ -287,3 +289,50 @@ Adversarial citation verification tool querying Crossref API to confirm publicat
 python tools/verify_citations.py --bib docs/paper/references.bib
 ```
 
+
+---
+
+## `paper_lint.py`
+
+Enforces stylistic rigor, IEEE formatting, and token hygiene on manuscript drafts.
+Fails with non-zero exit code if banned AI tokens (*delve*, *crucial*, *pivotal*, *seamless*, *state-of-the-art*, *game-changing*, etc.) or more than 2 rendered em dashes per page are found.
+
+```pwsh
+python tools/paper_lint.py "docs/paper/The Paper/main.tex"
+```
+
+---
+
+## `originality_audit.py`
+
+Local, deterministic originality analyzer. Evaluates clause loads, sentence length distribution, burstiness, repeated 5-grams, type-token ratio, and cross-manuscript n-gram overlap across all papers registered under `docs/paper/`.
+
+```pwsh
+python tools/originality_audit.py "docs/paper/The Paper/main.tex"
+```
+
+---
+
+## `publication_gate.py`
+
+The mandatory pre-publication gate required by `.agents/AGENTS.md` §7G. Subsumes arithmetic checks (`recompute_paper_numbers.py`), citation audits (`verify_citations.py`), prose hygiene (`paper_lint.py`), and external literature probing (OpenAlex). Generates an immutable timestamped artifact under `docs/paper/publication_gates/`.
+
+```pwsh
+python tools/publication_gate.py --paper the_paper --external
+```
+
+---
+
+## Tooling, MCP & Skill Integration Architecture
+
+The following matrix connects repository tools directly to installed MCP servers and skills:
+
+| Pipeline Stage | Python / Shell Driver | Connected MCP Servers | Associated Skills | Primary Output / Artifact |
+| :--- | :--- | :--- | :--- | :--- |
+| **Firmware Testing & Diagnostics** | `ceepew_pipeline.py --mode host/diag` | `esp-idf-local`, `espressif-docs` | `zero-heap-memory-safety`, `embedded-c-security-hardening`, `esp-idf-compilation-and-flashing` | Pass/Fail report, boot diagnostics, sanitizers |
+| **Serial Monitoring & Bug Hunting** | `ceepew_log_pipeline.py`, `ceepew_monitor.py` | `espressif-docs` | `ceepew-audit` | Ingested signatures into `DEVICE_LOG_FINDINGS.md` |
+| **Literature Search & Prior Art** | `verify_citations.py`, `publication_gate.py` | `arxiv`, `semantic-scholar` | `academic-pipeline`, `academic-paper` | Citation graph, snippet matches, Crossref validations |
+| **Mathematical & Ledger Checks** | `recompute_paper_numbers.py` | — | `ceepew-paper-review`, `academic-paper` | 45-claim verification against `results/registry.json` |
+| **Manuscript Authoring & Balancing** | `pdflatex`, `paper_lint.py` | `latex-server`, `overleaf` | `latex-paper-skills`, `overleaf`, `academic-paper` | Validated LaTeX AST, balanced tables, clean PDF |
+| **Scientific Diagrams & Visuals** | `academic-visualizer` (DOT/TikZ) | `design-guidance` | `academic-visualization`, `design-guidance` | Formal Mealy/Moore FSMs, 300+ DPI vector plots |
+| **Supplementary Deliverables** | `mcp-docgen`, slide runners | `docgen` | `kami`, `nextslide`, `marpit-slides` | Multi-format DOCX reports, PPTX decks, merged PDFs |

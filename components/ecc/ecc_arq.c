@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "../ceepew_hal/hal_radio.h"
 
+#include "ecc_arq.h"
+
 #define CEEPEW_ARQ_SEQ_BYTES 1U
 
 /* Exponential backoff base timing (in milliseconds) for ARQ retries:
@@ -91,6 +93,11 @@ static uint16_t s_tx_seq = 0U;
 static uint16_t s_expected_rx_seq = 0U;  /* full 16-bit counter tracking accepted frames */
 static bool s_rx_init = false;
 
+/* State variables to support rollback on unauthenticated frames (Review Issue 7) */
+static uint16_t s_prev_expected_rx_seq = 0U;
+static bool s_prev_rx_init = false;
+static bool s_can_rollback = false;
+
 /* Reset ARQ engine state — securely zeroes sequence counters for clean
  * slate chat. Called from session_clear_sync_barrier_internal() at the
  * instant the post-derive sync barrier is verified. This ensures no stale
@@ -115,7 +122,26 @@ CeePewErr_t ecc_arq_reset(void)
 {
     ceepew_secure_zero(&s_tx_seq, sizeof(s_tx_seq));
     ceepew_secure_zero(&s_expected_rx_seq, sizeof(s_expected_rx_seq));
+    ceepew_secure_zero(&s_prev_expected_rx_seq, sizeof(s_prev_expected_rx_seq));
     s_rx_init = false;
+    s_prev_rx_init = false;
+    s_can_rollback = false;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t ecc_arq_commit(void)
+{
+    s_can_rollback = false;
+    return CEEPEW_OK;
+}
+
+CeePewErr_t ecc_arq_rollback(void)
+{
+    if (s_can_rollback) {
+        s_expected_rx_seq = s_prev_expected_rx_seq;
+        s_rx_init = s_prev_rx_init;
+        s_can_rollback = false;
+    }
     return CEEPEW_OK;
 }
 
@@ -142,6 +168,11 @@ CeePewErr_t ecc_arq_decode(const uint8_t *in, uint16_t in_len, uint8_t *out, uin
     CEEPEW_ASSERT(in_len >= CEEPEW_ARQ_SEQ_BYTES, CEEPEW_ERR_PARAM);
     CEEPEW_ASSERT((uint32_t)(in_len - CEEPEW_ARQ_SEQ_BYTES) <= max_out_len, CEEPEW_ERR_BOUNDS);
     uint8_t seq = in[0];
+
+    /* Save previous state before tentative advance to allow rollback on auth failure */
+    s_prev_expected_rx_seq = s_expected_rx_seq;
+    s_prev_rx_init = s_rx_init;
+    s_can_rollback = true;
 
     if (!s_rx_init) {
         /* First frame since reset: accept unconditionally. */

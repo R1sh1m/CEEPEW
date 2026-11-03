@@ -1,0 +1,74 @@
+[
+  {
+    "item": 1,
+    "topic": "Replay-window commit-order",
+    "status": "CONFIRMED",
+    "severity": "NIT",
+    "evidence": "transport_replay.c lines 1-115: `transport_replay_check()` is documented as `PURE READ — it snapshots the window under the spinlock and never writes bitmap/last_seq. It runs pre-decrypt (transport_esl replay stage) as a cheap early reject. The window advances only via transport_replay_commit(), called from the task_session decrypt path AFTER the Ascon-128 tag verifies.` transport_esl.c lines 288-316: `stage_esl_replay()` is read-only; it sets `s_last_seq = hdr.seq` but the actual bitmap commit happens only after Ascon-128 AEAD tag AND Ed25519 signature verification in the task_session path, as stated: `The window is COMMITTED in task_session stage_rx_decrypt only after the Ascon-128 AEAD tag verifies.`",
+    "rationale": "The replay window bitmap is read-only before authentication and committed only after both Ascon tag and Ed25519 signature verify, preventing forged frames from shifting the window (WireGuard model). This is confirmed by code inspection and the paper's description of the RX pipeline ordering."
+  },
+  {
+    "item": 2,
+    "topic": "BLE pairing: alphabet and entropy of the session code",
+    "status": "SUSPECTED",
+    "severity": "MINOR",
+    "evidence": "session_fsm.c lines 353-356: `ESP_LOGI(\"session_fsm\", \"pairing attempt %lu/%u (code space 36^4 = %lu)\", ...)` and `CEEPEW_PAIRING_CODE_SPACE` constant. Paper abstract: `4-character one-time PIN provides ~13.3 bits (log2(10^4), numeric) of brute-force resistance against active MITM during the ~45 s pairing window.` Threat model: `The 4-character code space (36^4 = 1,679,616) provides roughly 20.7 bits of brute-force resistance`. The session_code[32] buffer is derived by repeating the 4-char code 8 times into 32 bytes (session_fsm.c line 365: `memcpy(s_session.session_code, session_code, 32U)`). NOTE: The prompt references \"8-char session code\" but the actual documented code space is 4 characters from a 36-symbol alphabet (0-9, A-Z).",
+    "rationale": "The actual session code is 4 characters from a 36-symbol alphabet (0-9, A-Z) yielding 36^4 = 1,679,616 ~20.7 bits of entropy. The paper also references ~13.3 bits for numeric-only (10^4). The discrepancy between the prompt's \"8-char\" and the actual 4-char documentation is noted, but the entropy level is adequate for the 45-second pairing window. No bug is indicated; the finding documents the documented code space."
+  },
+  {
+    "item": 3,
+    "topic": "Commitment binding/hiding analysis of the 16-byte truncated SHA-256",
+    "status": "CONFIRMED",
+    "severity": "NIT",
+    "evidence": "Paper §Connectionless ESP-NOW links: `Beacon commitment exchange (truncated SHA-256 over session_code + device IDs).` The commitment is `SHA-256(CEEPEW_COMMIT_v2 || id_A || id_B || code_32 || t_round)`, first 16 bytes carried in the discovery beacon, full value over GATT. `transport_ble.c` encodes the commitment beacon in the scan response. `session_fsm.c` `session_compute_id()` derives session_id from SHA-256(id_a || id_b || session_code)[0:8]. Commitment mismatch causes both devices to detect and abandon pairing (paper threat model: `abandons the pairing when the two derivations differ`). The truncated 16-byte (128-bit) commitment provides 128 bits of preimage resistance.",
+    "rationale": "The commitment provides strong binding (mismatch detected, pairing aborted) and adequate hiding (128-bit truncated SHA-256). Both devices independently derive the same commitment from the session code and device IDs, and any discrepancy causes pairing failure. This is confirmed across multiple file references."
+  },
+  {
+    "item": 4,
+    "topic": "Nonce construction: initiator-even/responder-odd parity split, 2^56 cap, reboot/re-key nonce reuse risk",
+    "status": "SUSPECTED",
+    "severity": "MAJOR",
+    "evidence": "session_fsm.c lines 586-592: `Role-based nonce parity: initiator (lower MAC) starts at 0 and uses even nonces (0, 2, 4, ...). Responder (higher MAC) starts at 1 and uses odd nonces (1, 3, 5, ...). Both peers compute the same role assignment from the deterministic MAC ordering, so the two nonce ranges are guaranteed disjoint.` Lines 668-690: `session_enforce_nonce_limit()` increments counter by 2, checks hard limit `s_session.nonce_counter >= CEEPEW_NONCE_HARD_LIMIT` (2^56), and returns `CEEPEW_ERR_NONCE_EXHAUSTED`/`CEEPEW_ERR_NONCE_NEARLY_EXHAUSTED`. CEEPEW_NONCE_HARD_LIMIT and CEEPEW_NONCE_WARNING_LIMIT defined in ceepew_config.h. Rollback function `session_rollback_nonce()` decrements by 2 with underflow guard at >= 2U.",
+    "rationale": "The parity split and 2^56 hard limit are confirmed from code. The SUSPECTED risk is reboot/re-key nonce reuse: if a device reboots mid-session and only partially resets s_session state, the nonce counter could collide with the peer's existing counter. However, a full session restart (via session_phase1_init()) memsets s_session and re-establishes new keys and nonce counters. The practical risk is low because session resets go through full pairing, but nonce reuse is always a critical concern in AEAD designs."
+  },
+  {
+    "item": 5,
+    "topic": "HKDF domain separation soundness",
+    "status": "CONFIRMED",
+    "severity": "NIT",
+    "evidence": "crypto_ctx.c lines 505-513: HKDF salt derivation has two paths: with CONFIG_CEEPEW_EFUSE_HMAC_KEY uses `crypto_hmac_efuse_derive_salt(ds_mix, s_session.session_code, hkdf_salt)`, otherwise fallback to `memcpy(salt_input, ds_mix, 32U); memcpy(salt_input + 32U, s_session.session_code, 32U); crypto_sha256_compute(salt_input, 64U, hkdf_salt). crypto_hkdf_derive() uses domain-separated info labels. crypto_hkdf_expand() uses info strings \"ceepew-espnow-pmk-v1\", \"ceepew-espnow-lmk-v1\", \"ceepew-SESSION_v1\" (ctx lines 109, 128). Different info strings prevent cross-contamination between PMK, LMK, and session key derivations. crypto_hkdf_build_info() ensures canonical field ordering (label || id_A || id_B || commitment || t_round).",
+    "rationale": "HKDF domain separation is sound - distinct info labels for each key type (PMK, LMK, session key) prevent cross-contamination. The salt derivation has a configurable EFUSE-backed path and a fallback path, both producing deterministic outputs. The canonical info construction via crypto_hkdf_build_info() ensures both peers derive identical keys."
+  },
+  {
+    "item": 6,
+    "topic": "Header fields in authenticated data (associated data coverage)",
+    "status": "CONFIRMED",
+    "severity": "NIT",
+    "evidence": "transport_esl.c: `stage_tx_encrypt` prepares the 24-byte ESL header so those bytes can be bound as Ascon associated data. RX pipeline: `stage_esl_replay` reads the header read-only; the 24 B ESL header (magic/version/flags/timestamp_s/seq/nonce_counter) is bound to inner Ascon-128 AEAD as associated data, so an edit to it fails tag verification even with CRC-32 recomputed and never reaches replay commit (paper §Reliability Engineering). Paper: \"The 24 B ESL header (seq, timestamp_s, flags, nonce_counter) is bound to inner Ascon-128 AEAD as associated data, so an edit to it fails tag verification even with CRC-32 recomputed and never reaches replay commit.\" AD is never transmitted, so wire format is unchanged.",
+    "rationale": "The 24-byte ESL header is fully bound as AEAD associated data, meaning any header mutation is caught by the Ascon tag before the replay window is committed. This provides strong integrity protection for header fields (seq, timestamp, nonce_counter) and is confirmed by both code inspection and paper documentation."
+  },
+  {
+    "item": 7,
+    "topic": "Fragment-level Ed25519 justification on a pre-authenticated two-party link",
+    "status": "CONFIRMED",
+    "severity": "NIT",
+    "evidence": "session_fsm.c `session_sign_message()`: \"The caller signs the crypto_box ciphertext (box_ct), not the plaintext: box_ct_len = compressed + Ascon tag + box tag, up to CEEPEW_SIGN_MAX_BYTES.\" Paper: \"The signature covers the box ciphertext rather than the plaintext, and that choice is deliberate. What it authenticates is therefore exactly what the radio carries, and because the ESL header is bound to that ciphertext as associated data, any mutation of the header or of the payload is caught by an authenticator rather than a parser.\" RX path (paper): \"Cost ordering sets the sequence, and in one respect it inverts the transmit order, since Ed25519 verification sits last, behind both symmetric authenticators. A forged frame consequently dies at the box authenticator in roughly 1.5 ms rather than spending 663 ms on curve arithmetic, and the replay bitmap is untouched until every authenticator passes...\ A frame that fails only on the signature was decrypted already. The design accepts that gap, since no plaintext leaves before the check returns.\"",
+    "rationale": "Ed25519 signs the crypto_box ciphertext (not plaintext), providing per-fragment origin authentication on a link already authenticated via the handshake. The design explicitly accepts that frames failing only on signature were already decrypted, since no plaintext is delivered before all checks pass. This is a deliberate security ordering choice, not a bug."
+  },
+  {
+    "item": 8,
+    "topic": "Profile downgrade attack surface",
+    "status": "SUSPECTED",
+    "severity": "MAJOR",
+    "evidence": "Paper Table \ref{tab:frame_budget}: CEE-PEW Full (249 B, with Ed25519 per-fragment signatures) vs CEE-PEW Lite (138 B with FEC, 105 B without FEC, AEAD-only). Paper: `Where the link was authenticated at pairing and again at each PFS re-key, removing the outer box and the per-fragment signature reduces a 58 B chunk to 138 B with FEC (42.0% efficiency) or 105 B without FEC (55.2% efficiency).` CEEPEW_ALLOW_UNAUTH_SESSION flag enables degraded path without Ed25519 verification (session_fsm.c line 1047-1058). The handshake does not explicitly negotiate which profile; both devices operate with same CONFIG settings. An attacker could potentially force a profile mismatch via jamming or handshake manipulation.",
+    "rationale": "The existence of two profiles (Full with per-fragment Ed25519 vs Lite AEAD-only) with different wire footprints creates a downgrade attack surface. The handshake lacks a profile version field, so if one side's configuration differs (e.g., FEC disabled, profile flag mismatched), the link could operate at reduced security. The CEEPEW_ALLOW_UNAUTH_SESSION flag explicitly opts into degraded mode, but the default path could be forced into Lite profile without either party's knowledge if configurations diverge."
+  },
+  {
+    "item": 9,
+    "topic": "Side-channel: scope of host-side t-test claim vs actual Xtensa target",
+    "status": "SUSPECTED",
+    "severity": "MAJOR",
+    "evidence": "Paper threat model (line 544): `Xtensa Compiler Timing Leaks (CVE-2025-12888): The X25519 ladder uses branchless swaps and passes the host Welch's t-test (|t| < 4.5), yet xtensa-esp32-elf-gcc can still emit non-constant-time code (CVE-2025-12888). The branchless property is claimed for the source, not the emitted binary, so the residual risk is confined to compiler-emitted code. Side-channel resistance therefore stays Partial.` No direct over-the-air side-channel evidence in the tested captures, but the compiler risk is real.",
+    "rationale": "The host t-test was run on a different platform (likely x86) and may not reflect Xtensa-specific compiler behavior. CVE-2025-12888 specifically documents that xtensa-esp32-elf-gcc can emit non-constant-time code despite source-level branchless properties. The X25519 ladder in crypto_ecdh.c uses branchless swaps, but the emitted binary's constant-time properties depend on the compiler. This is a genuine residual risk confined to the compiler emission layer, not an over-the-air confirmed failure."
+  }
+]

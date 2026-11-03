@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Pre-publication gate. Implementation: the global ``paperqa`` package.
 
 Compatibility shim. All checks, thresholds and report wording live in the
@@ -37,7 +37,7 @@ PAPERQA_HOME = Path(
 def _bootstrap() -> None:
     """Make the shared package importable from any interpreter."""
     try:
-        import paperqa  # noqa: F401
+        import paperqa  # noqa: F401 # type: ignore
         return
     except ImportError:
         pass
@@ -51,8 +51,8 @@ def _bootstrap() -> None:
 _bootstrap()
 
 try:
-    from paperqa import config as _config
-    from paperqa import gate as _gate
+    from paperqa import config as _config  # type: ignore
+    from paperqa import gate as _gate  # type: ignore
 except ImportError:
     sys.stderr.write(INSTALL_HINT)
     raise SystemExit(2)

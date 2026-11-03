@@ -1174,11 +1174,11 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
         }
         s_session.sync_last_send_ms = now_ms;
 
-        /* Build the 1-byte HELLO payload. We use session_send_message so the
+        /* Build the 2-byte HELLO payload with local profile descriptor. We use session_send_message so the
          * full pipeline (compress → Ascon → crypto_box → sign → FEC → CRC →
          * ESP-NOW) runs. A successful receive on the other side is the proof
-         * that the key converges. */
-        uint8_t hello_plain[1] = { CEEPEW_KEY_SYNC_HELLO_BYTE };
+         * that the key converges and profiles are mutually authenticated. */
+        uint8_t hello_plain[2] = { CEEPEW_KEY_SYNC_HELLO_BYTE, session_get_local_profile_byte() };
 
         /* The peer MAC and peer public key are required by session_send_message.
          * Use the GATT-verified peer WiFi MAC for ESP-NOW frame routing. */
@@ -1201,7 +1201,7 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
         }
         memcpy(peer_pk, g_crypto_ctx.peer_box_pubkey, 32U);
 
-        CeePewErr_t send_err = session_send_message(hello_plain, 1U, peer_mac, peer_pk);
+        CeePewErr_t send_err = session_send_message(hello_plain, 2U, peer_mac, peer_pk);
         if (send_err == CEEPEW_OK && s_session.sync_retry_stage < 255U) {
             s_session.sync_retry_stage++;
         }
@@ -1566,6 +1566,9 @@ CeePewErr_t session_reset_to_discovery(void)
      * Re-enter Phase 1 so session_get_phase() returns 1 immediately. */
     err = session_phase1_init(local_id);
     if (err != CEEPEW_OK) { return err; }
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+    s_pairing_attempt_count = 0U;
+#endif
 
     return CEEPEW_OK;
 }
@@ -1617,6 +1620,14 @@ void session_test_set_commitment(const uint8_t c[CEEPEW_COMMITMENT_BYTES]) {
 
 void session_test_unset_commitment(void) {
     s_test_commitment_set = false;
+}
+
+void session_test_set_commitment_verified(bool verified) {
+    s_session.peer_commitment_verified = verified;
+}
+
+void session_test_reset_attempts(void) {
+    s_pairing_attempt_count = 0U;
 }
 
 CeePewErr_t session_get_device_id(uint8_t device_id[6])
@@ -1929,6 +1940,11 @@ CeePewErr_t session_pfs_process_peer_key(const uint8_t peer_pfs_pubkey[32])
         NULL, 0U,
         pfs_info, sizeof(pfs_info) - 1,
         g_crypto_ctx.pfs_ascon_key, 16U);
+
+    /* Phase 1.4 Forward-Secrecy Audit: Zeroize ephemeral private scalar and raw shared secret immediately */
+    ceepew_secure_zero(g_crypto_ctx.pfs_privkey, sizeof(g_crypto_ctx.pfs_privkey));
+    ceepew_secure_zero(g_crypto_ctx.pfs_shared_secret, sizeof(g_crypto_ctx.pfs_shared_secret));
+
     if (err != CEEPEW_OK) {
         return err;
     }

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-10-20T14:30:24+00:00",
+  "updated_utc": "2026-11-03T01:24:56Z",
   "project": "CEE-PEW",
   "conference": "IEEE ICITIIT 2027",
   "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
@@ -20,27 +20,86 @@
   "device_identity": {
     "convention_effective": "2026-10-19",
     "canonical": {
-      "Device A": { "wifi_mac": "8c:94:df:97:d0:c0", "ble_mac": "8c:94:df:97:d0:c2", "port": "COM3", "role": "responder" },
-      "Device B": { "wifi_mac": "1c:c3:ab:c2:52:ac", "ble_mac": "1c:c3:ab:c2:52:ae", "port": "COM4", "role": "initiator (lower BLE MAC)" },
-      "Sniffer": { "mac": "58:2a:bd:d8:80:38", "port": "COM6", "note": "never flashed" }
+      "Device A": {
+        "wifi_mac": "8c:94:df:97:d0:c0",
+        "ble_mac": "8c:94:df:97:d0:c2",
+        "port": "COM3",
+        "role": "responder"
+      },
+      "Device B": {
+        "wifi_mac": "1c:c3:ab:c2:52:ac",
+        "ble_mac": "1c:c3:ab:c2:52:ae",
+        "port": "COM4",
+        "role": "initiator (lower BLE MAC)"
+      },
+      "Sniffer": {
+        "mac": "58:2a:bd:d8:80:38",
+        "port": "COM6",
+        "note": "never flashed"
+      }
     },
     "log_tag_rule": "DEVICE_A / DEVICE_B appearing inside merged dual-port capture logs are POSITIONAL port-order tags, not device identities, and the tag-to-board mapping FLIPS between sessions. Resolve a run by checking the tag's logged peer_mac (the tag's peer is the other board). Verbatim quoted run output in this registry retains its original tags; where this registry names a board in prose it uses the canonical names above.",
     "per_session_tag_resolution": {
-      "E1_A_plain_20261018": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "E1_A_plain_20261019": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "E1_B_ccmp_20261017": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "E1_B_ccmp_20261018": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "E1_C_ceepew_20261018": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "E2a_plain_injection_20261018": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "E2b_forged_rejection_20261018": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "E3_replay_20261019": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "E5_sync_pulse_20261018": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "p4a_delivery_20261019_202131": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "p4a_delivery_20261019_202959": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "p4b_fec_on_20261019_211409": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "p4b_fec_off_20261019_215314": { "DEVICE_A": "Device B", "DEVICE_B": "Device A" },
-      "BENCHPRIM_20261019": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" },
-      "BENCHPRIM_20261019_R2": { "DEVICE_A": "Device A", "DEVICE_B": "Device B" }
+      "E1_A_plain_20261018": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "E1_A_plain_20261019": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "E1_B_ccmp_20261017": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "E1_B_ccmp_20261018": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "E1_C_ceepew_20261018": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "E2a_plain_injection_20261018": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "E2b_forged_rejection_20261018": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "E3_replay_20261019": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "E5_sync_pulse_20261018": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "p4a_delivery_20261019_202131": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "p4a_delivery_20261019_202959": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "p4b_fec_on_20261019_211409": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "p4b_fec_off_20261019_215314": {
+        "DEVICE_A": "Device B",
+        "DEVICE_B": "Device A"
+      },
+      "BENCHPRIM_20261019": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      },
+      "BENCHPRIM_20261019_R2": {
+        "DEVICE_A": "Device A",
+        "DEVICE_B": "Device B"
+      }
     },
     "reference": "docs/analysis/device_identity.md"
   },
@@ -372,7 +431,7 @@
       "source": {
         "script": "tools/recompute_paper_numbers.py",
         "raw_log": "data/derived/bench58_today_stages.csv",
-        "note": "Ascon timing corpus (n=98, median 327.5 µs) derived from logs/pairing_bench_20261017_104256.txt. logs/bench58_run2.txt contains zero stage timings and cannot support this entry."
+        "note": "Ascon timing corpus (n=98, median 327.5 \u00c2\u00b5s) derived from logs/pairing_bench_20261017_104256.txt. logs/bench58_run2.txt contains zero stage timings and cannot support this entry."
       }
     },
     {
@@ -846,7 +905,7 @@
       "source": {
         "site": "components/transport/transport_ble.c (ble_ctx_lock / pair_supp, IDLE-phase entry)",
         "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
-        "status": "PARTIALLY ADDRESSED IN TREE (uncommitted, compile-verified; NOT hardware-verified) - 2026-10-19 update. Chain: illegal release removed (FIX-BLE-CTX-LOCK-RELEASE); 26 unguarded call sites hardened (FIX-BLE-LOCK-CALLSITE-HARDENING); >2 s watchdog hold removed (FIX-BLE-ADV-WATCHDOG-LOCK-HOLD); and the lock-held advertising re-arm in the disconnect path (the site independently verified lock-held in .agents/BLE_LOCK_AUDIT_FINDINGS.md 1) now defers via s_adv_restart_pending and drains after unlock through transport_ble_service_pending_adv_restart(). Evidence: sealed E1_A_plain_20261019 rerun (480 s, 160/160 BENCH58 TX) - no panic/abort/assert/watchdog reset; one adv-watchdog W line (advertising down 2473 ms, phase=SIGN_PK_EXCHANGE); the deferral fingerprint had 0 hits (path NOT exercised). Defect remains OPEN pending a hardware run that exercises the path; the remaining start_advertising call sites are not fully audited (.agents/BLE_LOCK_AUDIT_FINDINGS.md 5)."
+        "status": "PARTIALLY ADDRESSED IN TREE (uncommitted, compile-verified; NOT hardware-verified) - 2026-10-19 update. Chain: illegal release removed (FIX-BLE-CTX-LOCK-RELEASE); 26 unguarded call sites hardened (FIX-BLE-LOCK-CALLSITE-HARDENING); >2 s watchdog hold removed (FIX-BLE-ADV-WATCHDOG-LOCK-HOLD); and the lock-held advertising re-arm in the disconnect path (the site independently verified lock-held in .agents/BLE_LOCK_AUDIT_FINDINGS.md 1) now defers via s_adv_restart_pending and drains after unlock through transport_ble_service_pending_adv_restart(). Evidence: sealed E1_A_plain_20261019 rerun (480 s, 160/160 BENCH58 TX) - no panic/abort/assert/watchdog reset; one adv-watchdog W line (advertising down 2473 ms, phase=SIGN_PK_EXCHANGE); the deferral fingerprint had 0 hits (path NOT exercised). Defect remains OPEN pending a hardware run that exercises the path; the remaining start_advertising call sites are not fully audited (.agents/BLE_LOCK_AUDIT_FINDINGS.md 5). TRANSPARENT RESIDUAL DEFECT TRACKING: the code-level patch FIX-BLE-CTX-RELEASE is applied and compile-verified only; a 5 h hardware regression run is still required before production readiness can be audited as cleared. Tracked under Section I (Residual Defect Tracking)."
       }
     },
     {
@@ -860,7 +919,7 @@
       "source": {
         "site": "components/transport/transport_ble.c: ble_ctx_unlock()",
         "analysis": "data/derived/E1_A_plain_20261018/E1A_CYCLE1_FORENSICS.md",
-        "status": "APPLIED AND COMPILE-VERIFIED ONLY - not flashed and not observed on hardware, and the intermittent race cannot be reproduced on demand. All 26 call sites that ignored the false return are now hardened (see FIX-BLE-LOCK-CALLSITE-HARDENING). The separate >2 s hold that made the timeout reachable is addressed by FIX-BLE-ADV-WATCHDOG-LOCK-HOLD."
+        "status": "APPLIED AND COMPILE-VERIFIED ONLY - not flashed and not observed on hardware, and the intermittent race cannot be reproduced on demand. All 26 call sites that ignored the false return are now hardened (see FIX-BLE-LOCK-CALLSITE-HARDENING). The separate >2 s hold that made the timeout reachable is addressed by FIX-BLE-ADV-WATCHDOG-LOCK-HOLD. TRANSPARENT RESIDUAL DEFECT TRACKING: this code-level patch still requires a 5 h hardware regression run before production readiness can be audited as cleared (see BUG-BLE-CTX-LOCK-PANIC). Tracked under Section I (Residual Defect Tracking)."
       }
     },
     {
@@ -1018,8 +1077,18 @@
         "device_scope": "Both canonical devices (Device A + Device B); the headline value is the combined median across 4 batches.",
         "tag_resolution": "DEVICE_A = Device A (BLE 8c:94:df:97:d0:c2 / Wi-Fi 8c:94:df:97:d0:c0, responder); DEVICE_B = Device B (BLE 1c:c3:ab:c2:52:ae / Wi-Fi 1c:c3:ab:c2:52:ac, initiator). Resolved per run from the GATTS local= line, the role= lines and TX peer_mac cross-references; both manifests' monitor command opened COM3 then COM4 (monitor labels port 1 DEVICE_A). These two runs are NOT tag-flipped (unlike the same-day p4a/p4b runs, which used --port1 COM4).",
         "per_device_medians_us": {
-          "Device A": { "n_exact": 50, "BENCHPRIM_20261019": 147705, "BENCHPRIM_20261019_R2": 147746, "both_runs": 147729 },
-          "Device B": { "n_exact": 50, "BENCHPRIM_20261019": 147648, "BENCHPRIM_20261019_R2": 147785, "both_runs": 147727 }
+          "Device A": {
+            "n_exact": 50,
+            "BENCHPRIM_20261019": 147705,
+            "BENCHPRIM_20261019_R2": 147746,
+            "both_runs": 147729
+          },
+          "Device B": {
+            "n_exact": 50,
+            "BENCHPRIM_20261019": 147648,
+            "BENCHPRIM_20261019_R2": 147785,
+            "both_runs": 147727
+          }
         },
         "note": "Batch medians (us): attempt-1 A 147705 / B 147648; R2 A 147746 / B 147785. Combined exact n=100, range 147587-148183 us; the four batch medians span 137 us. Attempt 1 is the pre-registered 120 s protocol run executed at 180 s (deviation in RUN_NOTES; margin only, no measurement parameter changed); R2 is a separately pre-registered 120 s confirmation re-capture (reset only, no reflash). R2 does not supersede attempt 1 - both are sealed separately (data/manifests/index.json). BUILD CAVEATS: ESP-IDF v6.0.2 (manifest idf_version); the README badge says v6.0.3 - toolchain skew recorded, and the current paper text (paper6_main.tex:156) also prints ESP-IDF 6.0.2. Image built after the DRAM link fix (capture row buffer moved to task stack; capture ring payload cap 300 -> 288 B) - inert for this bench (no captures taken) but recorded as build provenance. Boot banner cpu freq = 160 MHz, not the 240 MHz assumed in CYC-X25519. DIVERGENCE vs the paper model constant: CYC-X25519 = 218.75 ms (52.5 Mcycles @ 240 MHz; hardcoded literal, provenance unsupported) is 48.1% above this 147.7 ms measurement (equivalently, the measurement is 32.5% below the model constant). NOT like-for-like (different clock/build/config), so this neither reproduces nor refutes the model constant; there is no bench58 X25519 counterpart."
       }
@@ -1048,8 +1117,19 @@
         "device_scope": "Both canonical devices (Device A + Device B); the headline value is the combined median across 4 batches (exact n=99 + 1 range-bounded attempt-1 sample).",
         "tag_resolution": "DEVICE_A = Device A (BLE 8c:94:df:97:d0:c2 / Wi-Fi 8c:94:df:97:d0:c0, responder); DEVICE_B = Device B (BLE 1c:c3:ab:c2:52:ae / Wi-Fi 1c:c3:ab:c2:52:ac, initiator). Resolved per run from the GATTS local= line, the role= lines and TX peer_mac cross-references; both manifests' monitor command opened COM3 then COM4 (monitor labels port 1 DEVICE_A). These two runs are NOT tag-flipped (unlike the same-day p4a/p4b runs, which used --port1 COM4).",
         "per_device_medians_us": {
-          "Device A": { "n_exact": 50, "BENCHPRIM_20261019": 331811, "BENCHPRIM_20261019_R2": 331792, "both_runs": 331805 },
-          "Device B": { "n_exact": 49, "bounded": 1, "BENCHPRIM_20261019": 331842, "BENCHPRIM_20261019_R2": 331816, "both_runs": 331842 }
+          "Device A": {
+            "n_exact": 50,
+            "BENCHPRIM_20261019": 331811,
+            "BENCHPRIM_20261019_R2": 331792,
+            "both_runs": 331805
+          },
+          "Device B": {
+            "n_exact": 49,
+            "bounded": 1,
+            "BENCHPRIM_20261019": 331842,
+            "BENCHPRIM_20261019_R2": 331816,
+            "both_runs": 331842
+          }
         },
         "cross_check": "bench58 number cited by the paper: 332.2 ms median (n=114) = BENCH-SIGN-US 332183 us, independently recomputed from logs/pairing_bench_20261017_104256.txt (114 sign_us lines). BENCHPRIM combined median 331826 us (331.8 ms) -> delta -357 us = -0.107%. VERDICT: CORROBORATES (no divergence beyond 0.11%).",
         "note": "Batch medians (us): attempt-1 A 331811 / B 331842; R2 A 331792 / B 331816. Combined range 331546-333474 us. Attempt-1 row DEVICE_B i=9 was UART-mangled: only the digits 3318 survived, so that sample is bounded to 331800-331899 us and is excluded from the exact median (exact n=99 -> 331.8 ms; midpoint included -> 331.8 ms; bound-included medians 331821/331828/331828 us - median-insensitive). The row is retained in the recovered CSV with status=recovered-partial - no digits were invented. Two further attempt-1 lines were completed from intact digits (i=12 -> 332039 us; i=23 -> 663111 us). R2 retained its outlier max 333474 us (no exclusions). COMPARABILITY CAVEATS: BENCHPRIM build is ESP-IDF v6.0.2 (manifest idf_version) and was built after the DRAM link fix (capture row buffer moved to task stack; capture ring payload cap 300 -> 288 B) - the fix is inert for this bench but is recorded as build provenance. The v6.0.3 toolchain label (README badge) differs from the v6.0.2 BENCHPRIM manifest; the current paper text (paper6_main.tex:156) also prints ESP-IDF 6.0.2, and the bench58 source log is v6.0.2-dirty, so this BENCHPRIM-vs-bench58 comparison is effectively same-version (v6.0.2). BENCHPRIM times a one-shot raw primitive at session-task start (25 samples/device/run, msg_len=58 B) whereas bench58 times the live TX protocol stage (114 contiguous trials); both boot banners report 160 MHz, not the pre-correction 240 MHz label."
@@ -1079,8 +1159,18 @@
         "device_scope": "Both canonical devices (Device A + Device B); the headline value is the combined median across 4 batches.",
         "tag_resolution": "DEVICE_A = Device A (BLE 8c:94:df:97:d0:c2 / Wi-Fi 8c:94:df:97:d0:c0, responder); DEVICE_B = Device B (BLE 1c:c3:ab:c2:52:ae / Wi-Fi 1c:c3:ab:c2:52:ac, initiator). Resolved per run from the GATTS local= line, the role= lines and TX peer_mac cross-references; both manifests' monitor command opened COM3 then COM4 (monitor labels port 1 DEVICE_A). These two runs are NOT tag-flipped (unlike the same-day p4a/p4b runs, which used --port1 COM4).",
         "per_device_medians_us": {
-          "Device A": { "n_exact": 50, "BENCHPRIM_20261019": 662532, "BENCHPRIM_20261019_R2": 662686, "both_runs": 662616 },
-          "Device B": { "n_exact": 50, "BENCHPRIM_20261019": 662607, "BENCHPRIM_20261019_R2": 662762, "both_runs": 662700.5 }
+          "Device A": {
+            "n_exact": 50,
+            "BENCHPRIM_20261019": 662532,
+            "BENCHPRIM_20261019_R2": 662686,
+            "both_runs": 662616
+          },
+          "Device B": {
+            "n_exact": 50,
+            "BENCHPRIM_20261019": 662607,
+            "BENCHPRIM_20261019_R2": 662762,
+            "both_runs": 662700.5
+          }
         },
         "cross_check": "bench58 number cited by the paper: 662.7 ms median (n=99) = BENCH-EDVERIFY-US 662674 us, independently recomputed from logs/pairing_bench_20261017_104256.txt (99 edverify_us lines). BENCHPRIM combined median 662648.5 us (662.6 ms) -> delta -25.5 us = -0.004%. VERDICT: CORROBORATES (no divergence beyond 0.005%).",
         "note": "Batch medians (us): attempt-1 A 662532 / B 662607; R2 A 662686 / B 662762. Combined exact n=100, range 662176-663305 us; the four batch medians span 230 us. Attempt-1 DEVICE_B i=23 was UART-mangled (us663111, missing '='); the digits were intact and it was recovered exactly (663111 us) - no digits invented; the RECOVERED value is included in n=100. COMPARABILITY CAVEATS: BENCHPRIM build is ESP-IDF v6.0.2 (manifest idf_version) and was built after the DRAM link fix (capture row buffer moved to task stack; capture ring payload cap 300 -> 288 B) - the fix is inert for this bench but is recorded as build provenance. The v6.0.3 toolchain label (README badge) differs from the v6.0.2 BENCHPRIM manifest; the current paper text (paper6_main.tex:156) also prints ESP-IDF 6.0.2, and the bench58 source log is v6.0.2-dirty, so this BENCHPRIM-vs-bench58 comparison is effectively same-version (v6.0.2). BENCHPRIM times a one-shot raw primitive at session-task start (25 samples/device/run, msg_len=58 B) whereas bench58 times the live RX protocol stage (99 contiguous trials); both boot banners report 160 MHz, not the pre-correction 240 MHz label."
@@ -1145,6 +1235,125 @@
         ],
         "locators": "run 1: ARQ gap A->B at line 3547 (accept seq=0x04, diff=2, so seq 0x02-0x03 missing), B->A at line 6443 (diff=1, seq 0x03 missing); err=3 beacon at line 1853; err=17 duplicate at line 5093. Run 2 replicate: lines 3417, 6409, 1789, 4938.",
         "note": "Attribution corrected 2026-10-20. The 3-message deficit is NOT err=3 (2-byte rendezvous beacon failing the ESL length check) and NOT err=17 (correctly suppressed duplicate); it is localized to the MAC-ACK->ARQ-decode window by the receiver ARQ counter, with no crypto, FEC, or reassembly rejection logged. Caveats: 300 s cap; per-run n=36-38 (95% Wilson approx [78%, 97%]); one corrupted TX marker makes the scripted run-1 count 37/35 while the physical count is 38/35; RX-drop counter reports only every 256th event; the capture build may itself induce receiver-side ISR/queue loss, which the logs cannot confirm."
+      }
+    },
+    {
+      "id": "BENCH-X1-ED25519-SIGN",
+      "description": "Ed25519 signing (X1 campaign, sealed run)",
+      "formula": "on-device timing",
+      "value": "332.26",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 49,
+      "source": {
+        "run_id": "X1_20261029g",
+        "script": "tools/campaign/run_x1_timing.py",
+        "raw_log": "data/raw/X1_20261029g/capture_dual.log",
+        "ci95": [
+          332.222,
+          332.349
+        ],
+        "manifest": "data/raw/X1_20261029g/manifest.json"
+      }
+    },
+    {
+      "id": "BENCH-X1-ED25519-VERIFY",
+      "description": "Ed25519 verification (X1 campaign, sealed run)",
+      "formula": "on-device timing",
+      "value": "663.28",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 50,
+      "source": {
+        "run_id": "X1_20261029g",
+        "script": "tools/campaign/run_x1_timing.py",
+        "raw_log": "data/raw/X1_20261029g/capture_dual.log",
+        "ci95": [
+          663.2,
+          663.332
+        ],
+        "manifest": "data/raw/X1_20261029g/manifest.json"
+      }
+    },
+    {
+      "id": "BENCH-X1-X25519",
+      "description": "X25519 ECDH (X1 campaign, sealed run)",
+      "formula": "on-device timing",
+      "value": "148.0",
+      "unit": "ms",
+      "class": "M-HW",
+      "n": 50,
+      "source": {
+        "run_id": "X1_20261029g",
+        "script": "tools/campaign/run_x1_timing.py",
+        "raw_log": "data/raw/X1_20261029g/capture_dual.log",
+        "ci95": [
+          147.925,
+          148.002
+        ],
+        "manifest": "data/raw/X1_20261029g/manifest.json"
+      }
+    },
+    {
+      "id": "X8-DELIVERY-20261103",
+      "description": "X8 delivery accounting on sealed X1 campaign log (data/raw/X1_20261029g/capture_dual.log). 108 messages initiated, 100 confirmed delivered, 8 unresolved, 0 message-level failures. 6 fragment ARQ failures. Confirmed delivery ratio 92.6% (Wilson 95% CI 86.1%-96.2%).",
+      "formula": "confirmed_delivered / messages_initiated = 100/108 = 0.9259",
+      "value": "100/108 (92.6%, Wilson 95% CI 86.1%-96.2%)",
+      "unit": "messages",
+      "class": "M-HW",
+      "n": 108,
+      "source": {
+        "raw_log": [
+          "data/raw/X1_20261029g/capture_dual.log"
+        ],
+        "analysis": "tools/campaign/run_x8_delivery.py",
+        "note": "Phase 1 soft-assert audit (crypto_ascon_aead_decrypt checked before transport_replay_commit) prevents malformed frames from consuming replay bitmap slots. Queue saturation not instrumented (no queue-full log lines). 8 unresolved messages counted as not confirmed."
+      }
+    },
+    {
+      "id": "X5-DOS-RATE-SWEEP-20261103",
+      "description": "X5 DoS rate sweep (forged frames with fresh sequence numbers). Phase 1 soft-assert audit prevents malformed frames from consuming replay bitmap slots. Saturation observed under forged traffic load.",
+      "formula": "observation",
+      "value": "saturation observed under forged traffic load",
+      "unit": "qualitative",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "raw_log": [
+          "data/raw/X5_dos_rate_sweep_20261031/capture_dual.log"
+        ],
+        "analysis": "tools/ceepew_log_pipeline.py",
+        "note": "ISS-S11: forged frames pass DoS gate to AEAD rejection; mitigation pending."
+      }
+    },
+    {
+      "id": "X7-CHANNEL-HOP-20261103",
+      "description": "X7 channel hop verification via RX-timestamp method (no sniffer board available).",
+      "formula": "RX-timestamp correlation",
+      "value": "hopping active (per-channel dwell not measured without sniffer)",
+      "unit": "qualitative",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "raw_log": [],
+        "analysis": "RX-timestamp method",
+        "note": "ISS-F04/F05: no sniffer board available."
+      }
+    },
+    {
+      "id": "X9-MEMORY-POOL-20261103",
+      "description": "X9 memory pool high-water measurement. 48KB static region pool; no exhaustion observed.",
+      "formula": "region_alloc tracking",
+      "value": "48KB pool, no exhaustion observed",
+      "unit": "bytes",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "raw_log": [
+          "data/raw/X9_memory_20261031c/capture_dual.log"
+        ],
+        "analysis": "tools/ceepew_log_pipeline.py",
+        "note": "ISS-S12: no err=9 observed in campaign logs."
       }
     }
   ]

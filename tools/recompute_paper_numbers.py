@@ -208,7 +208,10 @@ def run_recomputations() -> list[RecomputeItem]:
 
     # 11. PIN Entropy
     pin_entropy = math.log2(10**4)
-    record("ENTROPY-PIN", "4-digit verification code entropy", "log2(10^4)", "13.3 bits", f"{pin_entropy:.1f} bits",
+    code_entropy = math.log2(36**4)
+    record("ENTROPY-CODE-36", "4-char (36-symbol) code brute-force resistance", "log2(36^4)", "20.7 bits", f"{code_entropy:.1f} bits",
+           match_override=True, note="36^4 = 1,679,616 values yields 20.68 bits (rounds to 20.7 bits in monograph)")
+    record("ENTROPY-PIN", "Legacy 4-digit numeric PIN entropy model", "log2(10^4)", "13.3 bits", f"{pin_entropy:.1f} bits",
            match_override=True, note="13.2877 bits rounds to 13.3 bits")
 
     # 12. ASCII printable fraction

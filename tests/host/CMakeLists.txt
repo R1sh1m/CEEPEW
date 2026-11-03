@@ -185,6 +185,18 @@ target_link_libraries(test_session_pairing PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_session_pairing PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_session_pairing COMMAND test_session_pairing)
 
+# test_pake — PAKE (RFC 9382 CPace principles) mutual key agreement and tag verification
+add_executable(test_pake
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pake.c
+    ${COMPONENT_DIR}/components/crypto/crypto_pake.c
+    ${COMPONENT_DIR}/components/crypto/curve25519.c
+    ${COMPONENT_DIR}/components/crypto/crypto_ecdh.c
+)
+target_link_libraries(test_pake PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_pake PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_pake PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_pake COMMAND test_pake)
+
 # ── ARQ library: compiles the REAL ecc_arq.c with host runtime stubs ──
 set(ARQ_SRCS
     ${COMPONENT_DIR}/components/ecc/ecc_arq.c

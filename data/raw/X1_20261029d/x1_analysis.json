@@ -1,0 +1,34 @@
+{
+  "runs": [
+    {
+      "cpu_hz": 160000000,
+      "declared_n": 25,
+      "msg_len": 58,
+      "source": "data/raw/X1_20261029d/capture_dual.log"
+    }
+  ],
+  "stages": [
+    {
+      "bootstrap": {
+        "B": 10000,
+        "level": 0.95,
+        "seed": 20261021
+      },
+      "errors": [
+        0
+      ],
+      "max_us": 148377.0,
+      "mean_us": 147944.67272727273,
+      "median_ci95": [
+        147884.0,
+        147966.5
+      ],
+      "median_us": 147924.0,
+      "min_us": 147746.0,
+      "n": 385,
+      "stage": "x25519",
+      "stdev_us": null
+    }
+  ],
+  "total_samples": 385
+}

@@ -1,0 +1,620 @@
+<USER_REQUEST>
+CEE-PEW — Second technical review
+Scope: cryptographic construction, protocol mathematics, nonce management, replay protection, framing, reliability, and implementation consistency.
+Having examined the more detailed protocol descriptions, I want to take this review a step further than the previous one.
+There is an important distinction I want to maintain throughout: a cryptographic design can be mathematically sound in principle while its particular implementation or protocol integration remains insecure.
+I am therefore evaluating three separate things:
+What the manuscript claims the protocol does.
+Whether the described construction supports those claims.
+Whether the experimental evidence demonstrates that the implementation actually behaves that way.
+I have already identified one particularly important documentation inconsistency: the manuscript describes the GATT identity exchange as being encrypted using a key derived from the four-character code, but its subsequent key-schedule description derives the Ascon key from X25519 through HKDF. Those are materially different constructions. We need to establish which one the firmware actually implements before making a definitive security assessment.
+1. Pairing protocol: the most serious security weakness
+Critical
+Let's examine the construction mathematically.
+Your manuscript defines:
+\[ C=SHA256( D\parallel id_A\parallel id_B\parallel code_{32} \parallel t_{round} ) \]
+where:
+\(D\) is the domain-separation string.
+\(id_A,id_B\) are the peer identifiers.
+\(code_{32}\) is the four-character code repeated eight times.
+\(t_{round}=0\).
+The code has:
+\[ 36^4=1,679,616 \]
+possible combinations.
+What an attacker can do
+An attacker captures the BLE discovery commitment and knows the other inputs.
+They can calculate:
+\[ C_i=SHA256(D\parallel id_A\parallel id_B \parallel code_{i,32}\parallel 0) \]
+for every possible code.
+Then they compare each result with the captured commitment.
+This is an entirely offline attack. It does not require communicating with either ESP32.
+The attacker can enumerate approximately 1.68 million possibilities, which is a very small search space for modern hardware.
+My assessment
+Your manuscript correctly identifies this weakness.
+However, I would make one additional distinction.
+There are actually two different cryptographic operations during pairing:
+Operation
+Purpose
+SHA-256 commitment
+Establishes code/transcript consistency
+Ascon-protected GATT identity exchange
+Protects the exchanged identity material
+The manuscript says the GATT exchange is protected using the four-character code, while the subsequent session key schedule uses X25519 and HKDF.
+These should be described as separate keys and separate protocol stages.
+If the GATT encryption key is directly recoverable from the four-character code, recovering the code through the commitment also compromises that exchange.
+Recommended correction
+Replace the current commitment-based authentication design with a properly specified PAKE.
+Your proposed SPAKE2+ migration is reasonable. RFC 9383 specifies a protocol for establishing shared keys using a password without disclosing the password itself.
+RFC Editor+1
+One caveat: SPAKE2+ is not simply a drop-in replacement for your hash commitment. Its registration, key derivation, transcript binding, identity handling, and key-confirmation procedures all need to be implemented correctly.
+2. HKDF and the key schedule
+Major — cryptographic specification
+Your manuscript defines:
+\[ m=Mix(c) \]
+\[ s=SHA256(m\parallel c) \]
+\[ PRK=HMAC\text{-}SHA256(s,K) \]
+where \(K\) is the X25519 shared secret.
+Then:
+\[ K_{ascon}=HKDF\text{-}Expand(PRK,info_{ascon},16) \]
+\[ K_{box}=HKDF\text{-}Expand(PRK,info_{box},32) \]
+\[ K_{hop}=HKDF\text{-}Expand(PRK,info_{hop},L) \]
+What is correct?
+The overall construction is sensible.
+X25519 supplies the shared secret.
+HKDF extracts and expands keying material.
+Distinct information labels separate the derived keys.
+The resulting key lengths are appropriate for the stated algorithms.
+The use of domain-separated HKDF labels is a good design decision.
+What concerns me?
+A. The deterministic mixer does not create entropy.
+Your Mix(c) preprocessor may produce a different representation of the pairing code, but it does not increase its entropy.
+A deterministic transformation cannot turn a four-character password into a genuinely stronger secret.
+I would therefore stop presenting this as an independent security layer.
+Describe it as a deterministic salt preprocessor.
+B. Your key schedule needs complete transcript binding.
+I would like to see the exact information strings and whether they incorporate:
+Protocol identifier and version.
+Initiator and responder identities.
+Both ephemeral public keys.
+Session identifier.
+Negotiated configuration/profile.
+Direction or sender role.
+Separate labels are good, but they do not automatically prevent unknown-key-share, cross-session, or role-confusion problems.
+C. Explain key erasure.
+You claim forward secrecy through ephemeral X25519.
+That claim depends on more than generating ephemeral key pairs.
+The manuscript should specify when the following are erased:
+Ephemeral private X25519 keys.
+Raw X25519 shared secret.
+HKDF PRK.
+Previous session keys.
+Temporary GATT bootstrap material.
+I would particularly like to see whether the raw shared secret remains in a stack buffer after HKDF expansion.
+My verdict
+Construction broadly sound
+I do not see a fundamental mathematical problem with the described HKDF extract-and-expand structure.
+However, the preprocessor should not be credited with additional entropy, and the transcript binding and secret-erasure procedures need more explicit documentation.
+3. Nonce construction and uniqueness
+Major — requires implementation verification
+This is an area where your paper is surprisingly detailed.
+You describe a 24-byte nonce:
+\[ N=session\_id_8\parallel counter_{8,LE}\parallel 0^8 \]
+The two encryption algorithms consume it differently:
+Algorithm
+Nonce consumed
+Ascon-128 v1.2
+First 16 bytes
+XSalsa20
+All 24 bytes
+Your counters are partitioned:
+Initiator: even values.
+Responder: odd values.
+Each counter advances by two.
+Mathematical assessment
+The construction has a reasonable uniqueness strategy.
+The two directions cannot accidentally allocate the same counter within the same session, assuming the parity assignment is fixed and enforced.
+Furthermore, your independent HKDF-derived keys mean the two encryption algorithms do not share the same key.
+There is no immediate mathematical reason that their different nonce lengths create a cross-primitive nonce-reuse problem.
+However, there are four things I would require before approving this construction.
+1. Session identifier generation
+How exactly is session_id8 generated?
+I want to know:
+Whether it comes from a cryptographically secure random source.
+Whether it is regenerated for every new key schedule.
+Whether it can survive a device reboot.
+Whether two sessions can reuse the same identifier and traffic key.
+2. Counter reset behaviour
+What happens when:
+The sender reboots.
+A session is re-established.
+The receiver reconnects.
+A re-key fails halfway through.
+The device receives an old frame from a previous session?
+The critical rule is that a nonce must never be reused with the same encryption key.
+3. Counter overflow
+Your counter limit needs to be explicitly stated.
+You should define what happens at the limit: reject further encryption and establish a fresh session rather than allowing wraparound.
+4. Directional key separation
+I would prefer independent directional encryption keys:
+\[ K_{A\rightarrow B}\neq K_{B\rightarrow A} \]
+Even with parity-separated counters, directional keys provide a cleaner security boundary.
+They also simplify future protocol extensions.
+An important distinction
+Your parity mechanism is useful, but it is not a replacement for proper session-key lifecycle management.
+I would retain it while considering directional key derivation in the next revision.
+The Ascon specification also makes nonce uniqueness a fundamental requirement for its security guarantees.
+ascon.isec.tugraz.at+1
+4. Ascon-128 v1.2 implementation
+Strong technical choice
+Your manuscript correctly distinguishes two versions that are frequently confused:
+Parameter
+Ascon-128 v1.2
+NIST Ascon-AEAD128
+Key
+128 bits
+128 bits
+Nonce
+128 bits
+128 bits
+Tag
+128 bits
+128 bits
+Rate
+64 bits
+128 bits
+Initialization/finalization
+12 rounds
+12 rounds
+Intermediate permutation
+6 rounds
+8 rounds
+Your stated implementation uses the original CAESAR/J. Cryptology Ascon-128 v1.2 construction, not the newer NIST-standardized parameterization.
+That distinction is important, and I appreciate that you explicitly disclaim SP 800-232 interoperability.
+NIST Computer Security Resource Center+2
+The important implementation question
+You say that the 24-byte ESL header is authenticated as associated data.
+That is good.
+It means an attacker should not be able to modify authenticated header fields without causing tag verification to fail.
+However, I want the paper to document the exact associated-data serialization.
+For example:
+\[ AD=ESL_{header}\parallel protocol\_context \]
+Is that the actual construction, or is the header the entirety of the AD?
+I would also document:
+Exact byte order.
+Padding rules.
+Tag comparison implementation.
+Whether decrypted plaintext is released only after successful verification.
+Behaviour after authentication failure.
+The last point is particularly important. An AEAD implementation must not expose unauthenticated plaintext to the application.
+My verdict: The algorithm selection and stated parameterization are sound. The paper needs a more complete description of the actual invocation and validation procedure.
+5. Outer XSalsa20-HMAC construction
+Major — needs a formal construction definition
+This is where I would be particularly demanding as a reviewer.
+You have designed a custom outer encryption layer rather than using standard NaCl crypto_box.
+Your stated construction is:
+Encrypt the inner Ascon ciphertext using XSalsa20.
+Authenticate the resulting ciphertext using truncated HMAC-SHA256.
+Verify the HMAC before decryption.
+Verify the inner Ascon authentication tag.
+Verify the Ed25519 signature.
+The general Encrypt-then-MAC approach is appropriate.
+However, I would like to see the exact equations.
+For example, something resembling:
+\[ C_{outer}=XSalsa20(K_{box},N_{box},C_{inner}) \]
+\[ T_{outer}=Trunc_{128} \left(HMAC_{K_{mac}}(M_{authenticated})\right) \]
+Notice that I have deliberately used a separate \(K_{mac}\) here.
+Your manuscript describes a 32-byte outer-box key but does not sufficiently establish whether the encryption and MAC keys are independently derived.
+Four questions need answers
+A. Is the HMAC key independent?
+If the same 32-byte key is used directly for XSalsa20 and HMAC-SHA256, I would recommend changing that.
+Derive separate keys:
+\[ K_{enc}=HKDF(PRK,\text{"outer-enc"}) \]
+\[ K_{mac}=HKDF(PRK,\text{"outer-mac"}) \]
+This makes the construction easier to analyse and avoids unnecessary cross-protocol key reuse.
+B. What exactly does HMAC authenticate?
+I would expect the authenticated input to cover at least:
+The outer nonce.
+The ciphertext.
+Any relevant protocol context.
+If the nonce is not authenticated, its manipulation should be explicitly analysed.
+Your inner Ascon authentication may ultimately reject the resulting corrupted plaintext, but that is not a reason to leave the outer construction underspecified.
+C. What does Ed25519 actually sign?
+The manuscript says the signature covers the outer ciphertext.
+Does it also cover:
+The ESL header?
+The outer nonce?
+The HMAC tag?
+The frame length?
+You state that the Ascon associated data binds the ESL header, which helps, but I want the precise signed transcript defined.
+For example:
+\[ S=Ed25519.Sign(sk_{sender},H(context\parallel frame)) \]
+This is illustrative, not a claim about your current implementation.
+D. What happens if verification fails?
+I would like to see whether all failures produce the same externally observable behaviour, including timing and feedback.
+You already describe silent discard, which is sensible.
+However, identical error responses alone do not establish the absence of timing or side-channel oracles.
+My recommendation
+Do not market the outer layer primarily as an additional 128-bit security guarantee.
+Instead, explain its two intended roles:
+An independently keyed cryptographic hedge.
+An inexpensive authentication filter before expensive public-key verification.
+The second is a much stronger engineering justification because you actually measure its performance.
+6. Ed25519 signatures and identity authentication
+Major — security architecture
+Your use of per-fragment Ed25519 signatures is interesting.
+The receiver can authenticate the sender independently of the shared symmetric session keys.
+This is valuable in a multi-node environment, particularly where multiple participants share session material.
+However, there is a subtle distinction:
+A valid Ed25519 signature proves possession of the corresponding private key. It does not independently prove that the key belongs to the intended device.
+That association must be established during pairing.
+Your current four-character pairing protocol has weaknesses in precisely this area.
+Consequently, the identity guarantee of your per-fragment signatures inherits the limitations of your pairing procedure.
+I would therefore avoid describing the Full profile as providing robust authenticated peer identity until the pairing mechanism is strengthened.
+Performance implications
+Your measured results are:
+Ed25519 on ESP32
+Signing median
+332.257
+milliseconds
+Verification median
+663.281
+milliseconds
+Reported implementation: TweetNaCl port, ESP32 at 160 MHz, -O2.
+These are substantial costs for a communication protocol.
+Your explanation involving the 64-bit limb representation on a 32-bit Xtensa processor is plausible.
+However, I would make one correction to the way you present the comparison.
+Your reference implementation comparison is useful evidence that the TweetNaCl implementation is inefficient. It does not, by itself, constitute a controlled same-build benchmark.
+I would describe the result as:
+The measured bottleneck is strongly associated with the selected TweetNaCl implementation and its arithmetic representation, rather than demonstrating an inherent limitation of Ed25519 on ESP32 hardware.
+That is more defensible.
+One additional recommendation
+I would investigate whether the Full profile actually needs a signature on every fragment.
+There are alternatives worth evaluating:
+A signed message manifest.
+A session-authenticated sender identity.
+A message-level signature covering the complete reassembled message.
+A hybrid scheme with signed control messages and symmetric authentication for data fragments.
+Each has different security properties.
+I would not simply remove per-fragment signatures, though. Your proposed alternatives must preserve the sender-authentication guarantee that motivated them.
+7. Replay protection and the sliding bitmap
+Good design, with an important performance weakness
+Your replay-window condition is:
+\[ s>s_{max}\quad \lor \]
+\[ (s_{max}-s<64)\land W[s_{max}-s]=0 \]
+This is a conventional sliding-window approach.
+The important design decision is that the bitmap is committed only after both the Ascon tag and Ed25519 signature have passed verification.
+I agree with this.
+Otherwise, an attacker could potentially send unauthenticated frames with artificially high sequence numbers and advance the replay window, excluding legitimate packets.
+Your retransmission problem
+Your paper identifies an interesting timing interaction:
+ARQ timeout: 600 ms.
+Ed25519 verification: approximately 663 ms.
+Replay-window commit: after verification.
+Consider the following:
+Retransmission race
+0 ms — Original frame arrives
+Replay check passes because its sequence number is new.
+600 ms — Retransmission arrives
+The original verification has not completed. The replay bitmap has not yet committed the sequence number.
+600–1,263 ms — Duplicate verification
+Both frames can consume expensive Ed25519 verification work.
+After verification
+Duplicate suppression eventually prevents the duplicate from being accepted as a new message.
+This is a genuine architectural problem.
+Your proposed four-slot verification cache is a good idea, but I would not implement it without a few safeguards.
+The cache should:
+Be associated with the current session.
+Include the complete frame digest.
+Never accept a different payload merely because its sequence number matches.
+Be invalidated after re-keying.
+Be integrated with the replay-window state.
+Have a clearly defined concurrency and cache-eviction policy.
+Your suggested 16-byte digest is reasonable as an engineering compromise, but it is not mathematically collision-free. The full cryptographic analysis should account for that residual collision probability.
+My verdict: Keep the replay-window architecture. The major improvement should be the handling of in-flight verification, not changing the basic sliding-window principle.
+8. Frame-budget mathematics
+Mathematically consistent, with one clarification
+I recalculated your principal frame-budget equations.
+For a 58-byte compressed chunk:
+\[ F_{in}=58+2=60\text{ B} \]
+\[ C_{ascon}=60+16=76\text{ B} \]
+\[ C_{box}=76+16=92\text{ B} \]
+\[ C_{sig}=92+2+64=158\text{ B} \]
+The shipping configuration then becomes:
+\[ F_{ship}=158+24+4+1 \]
+\[ \boxed{F_{ship}=187\text{ B}} \]
+This is correct.
+FEC-enabled Full configuration
+The Hamming encoder processes 11-bit blocks and generates 15-bit codewords.
+\[ N_{blocks}=\left\lceil\frac{8(158)}{11}\right\rceil \]
+\[ N_{blocks}=115 \]
+The encoded output is:
+\[ F_{encoded}= \left\lceil\frac{115(15)}{8}\right\rceil =216\text{ B} \]
+Adding the inner CRC:
+\[ F_{FEC}=216+4=220\text{ B} \]
+Adding the remaining framing:
+\[ F_{wire}=220+24+4+1 \]
+\[ \boxed{F_{wire}=249\text{ B}} \]
+Again, correct.
+Lite configuration
+Without the outer box and Ed25519 signature:
+\[ F_{Lite}=76+24+4+1 \]
+\[ \boxed{F_{Lite}=105\text{ B}} \]
+This is also correct.
+Verified frame sizes
+Full — shipping
+187 B
+74.8% of the 250 B ceiling
+Full — experimental FEC
+249 B
+99.6% of the 250 B ceiling
+Lite — shipping
+105 B
+42.0% of the 250 B ceiling
+Lite — with FEC
+138 B
+55.2% of the 250 B ceiling
+My one concern
+The 249-byte experimental frame leaves only one byte of headroom.
+That is mathematically valid under the stated limit, but operationally fragile.
+Any additional field, protocol-version extension, or framing change would exceed the limit.
+I would recommend designing the experimental profile with a small configurable margin rather than treating 249 bytes as a comfortable production target.
+Also, keep the 1,470-byte ESP-NOW v2.0 calculations explicitly labelled as estimates, as you currently do.
+9. Reliability and error-control mathematics
+Your Hamming(15,11) implementation is a reasonable choice for a compact single-error-correcting code.
+The nominal code rate is:
+\[ R=\frac{11}{15}=0.7333 \]
+The parity overhead relative to the original data is:
+\[ \frac{4}{11}\times100=36.36\% \]
+Your stated value of approximately 36.4% is correct.
+The important caveat
+Hamming(15,11) is a single-error-correcting code, not a double-error-correcting code.
+A double-bit error may be miscorrected.
+Your downstream CRC-32 and Ascon authentication provide additional detection mechanisms, which is sensible.
+However, the CRC should be treated as an error-detection mechanism, not a cryptographic authenticator.
+The actual cryptographic integrity guarantee comes from Ascon.
+Your experiment
+Metric
+FEC ON
+FEC OFF
+Messages delivered
+50/53
+45/48
+Delivery rate
+94.3%
+93.8%
+Single-bit errors corrected
+0
+0
+Wire size
+249 B
+187 B
+I agree with your conclusion that FEC did not demonstrate a measurable benefit under the tested conditions.
+I would not, however, use these results to make a universal statement about FEC on ESP-NOW.
+Your current explanation involving standard 802.11 FCS filtering is reasonable for the tested receive path.
+The correct conclusion is that your application-level FEC provided no demonstrated benefit under the evaluated clean-link conditions.
+10. Channel hopping: mathematical and implementation discrepancy
+Major — implementation not validated
+Your intended channel-hopping algorithm uses a nine-channel permutation:
+\[ p\in\{1,6,11,3,8,2,7,9,4\} \]
+with a nominal five-second update interval.
+However, you disclose the following implementation:
+\[ n=e\land\neg1 \]
+\[ k=(n\gg6)\bmod256 \]
+\[ index=(n\gg14)\bmod9 \]
+You report that this produces a 320-second dwell time instead of five seconds.
+This is an important finding.
+The implementation has a mismatch between the intended epoch calculation and the actual bit shifts.
+I would recommend replacing this with a much simpler explicit epoch calculation:
+\[ epoch=\left\lfloor\frac{t}{5000}\right\rfloor \]
+Then derive the permutation and channel index from that epoch.
+More importantly, I would not use the current hopping algorithm in any security claim.
+Your paper correctly says that hopping was disabled during all evaluated campaigns.
+One additional point: channel hopping is not inherently a cryptographic security mechanism. It can improve interference avoidance and complicate passive observation, but it should not be presented as a substitute for encryption, authentication, or replay protection.
+11. Concurrency, memory management, and denial of service
+This is an area where I think your paper has a particularly interesting engineering contribution.
+You use:
+A 48 KB static bump allocator.
+A 32-entry session RX queue.
+Separate FreeRTOS tasks across both cores.
+A cost-ordered receive pipeline.
+No application-level heap allocation in the session/crypto path.
+These are sensible design choices.
+However, your own measurements expose a potential denial-of-service vulnerability.
+The receive queue problem
+You report:
+Approximately 663 ms Ed25519 verification.
+A 32-entry RX queue.
+Sustained incoming traffic.
+Queue overflow after approximately 71 fragments in the described back-to-back scenario.
+This creates an asymmetric workload problem.
+An attacker does not necessarily need to break the cryptography.
+They may simply exploit the fact that legitimate traffic arrives faster than your receiver can authenticate it.
+Your outer HMAC filter helps, but it does not eliminate the problem.
+The manuscript estimates that approximately 100 forged frames per second can saturate Core 1.
+I would consider this one of the most important reliability/security limitations in the current Full profile.
+What I would implement
+I would investigate:
+A bounded per-peer verification queue.
+Duplicate-frame suppression before public-key verification.
+Rate limiting for unauthenticated traffic.
+A maximum verification-work budget per time interval.
+Prioritization of authenticated control traffic.
+A mechanism to prevent one peer from monopolizing the verification pipeline.
+Be careful with rate limiting, though: an unauthenticated attacker must not be able to permanently block legitimate traffic simply by occupying the queue.
+Static memory claims
+Your claim of zero application-level heap allocation is appropriately qualified.
+You explicitly exclude allocations performed internally by BLE, Wi-Fi, and mbedTLS.
+Keep that qualification.
+I would also include a memory breakdown:
+Memory category
+Suggested reporting
+Static session pool
+48 KB reserved
+Peak session-pool usage
+1,376–5,152 B reported
+Task stacks
+10,240 B + 16,384 B
+RX queue
+32 entries
+Temporary cryptographic buffers
+Maximum simultaneous allocation
+Internal SDK allocations
+Excluded from application-level heap claim
+This would make the memory argument considerably stronger.
+12. Three additional issues I would investigate
+These are not necessarily confirmed vulnerabilities. They are questions that cannot be settled from the manuscript alone.
+A. Signature and header binding
+Your receive pipeline authenticates the ESL header through Ascon associated data and verifies the Ed25519 signature over the outer ciphertext.
+I would like to establish exactly how the following are connected:
+\[ Header\rightarrow AD\rightarrow Ascon\ Tag \]
+\[ Ciphertext\rightarrow Ed25519\ Signature \]
+The construction can be valid, but the specification should explain why the signed ciphertext and authenticated header together bind the complete logical frame.
+In particular, document the treatment of the length prefix, nonce, HMAC tag, and protocol context.
+B. Sequence-number and nonce-counter consistency
+Your manuscript uses both the terms esl_seq and nonce_counter.
+I would like to know whether these are:
+The same 64-bit counter.
+Separate counters with synchronized advancement.
+A sequence number and an independently generated nonce counter.
+This matters because the replay window, nonce uniqueness, duplicate cache, and retransmission logic all depend on their exact relationship.
+I recommend defining a single canonical sequence of events for every transmitted fragment.
+C. The MAC acknowledgement interpretation
+Your paper describes a 14-byte 802.11 MAC ACK and gives an associated frame-control value of 0x1D.
+I would verify that value against your actual PCAP captures and the IEEE 802.11 frame format before publication.
+A standard ACK control frame is normally identified by frame-control value 0x00D4 (in little-endian byte order, D4 00).
+If 0x1D refers to a different field or a custom driver event, it should not be labelled as the standard ACK frame-control value.
+This is a small detail, but it is exactly the sort of thing a networking reviewer might catch.
+13. My consolidated technical findings
+Here is how I would classify the issues after this deeper examination.
+Component
+Finding
+Priority
+Four-character commitment
+Offline dictionary vulnerability
+Critical
+GATT bootstrap encryption
+Depends on recoverable low-entropy code
+Critical
+X25519 + HKDF
+Sound overall structure; specification incomplete
+Medium
+Deterministic salt mixer
+Does not add entropy
+Medium
+Ascon-128 v1.2
+Correct stated parameterization
+Low
+XSalsa20-HMAC
+Custom construction needs exact definition
+High
+Ed25519 authentication
+Inherits peer-identity limitations from pairing
+High
+Nonce construction
+Plausible; reset and lifecycle need verification
+High
+Sliding replay window
+Sound principle; in-flight duplicate weakness
+Medium
+Frame-budget equations
+Correct
+Low
+Hamming(15,11)
+Correct stated coding mathematics
+Low
+Channel hopping
+Known implementation defect
+High
+RX queue and CPU exhaustion
+Significant denial-of-service concern
+High
+Application delivery
+Correctly distinguished from MAC delivery
+Low
+Side-channel resistance
+Not established on Xtensa hardware
+High
+These classifications concern the manuscript's described design. They are not a substitute for a source-code security audit.
+14. What I would change before publication
+If I were responsible for the next revision, I would make these changes in this order.
+Recommended technical revision roadmap
+Phase 1 — Security corrections
+Replace commitment-based pairing with a properly authenticated PAKE.
+Define separate GATT bootstrap and session traffic keys.
+Specify the exact XSalsa20-HMAC construction and all authenticated inputs.
+Establish nonce uniqueness across reboots, sessions and re-keying.
+Define the complete signature and header-binding construction.
+Phase 2 — Implementation improvements
+6. Implement and benchmark optimized Ed25519.
+7. Implement the verification cache.
+8. Improve RX queue protection against CPU exhaustion.
+9. Add directional key separation.
+10. Fix and physically validate the BLE mutex defect.
+Phase 3 — Experimental validation
+11. Perform OTA replay-injection testing.
+12. Test nonce uniqueness across repeated sessions and device resets.
+13. Run controlled RF interference experiments.
+14. Test multiple physical board pairs.
+15. Audit Xtensa assembly for timing leakage.
+15. My final technical verdict
+I want to distinguish my assessment of the individual components from my assessment of the complete system.
+Area
+Verdict
+X25519
+Appropriate
+HKDF-SHA256
+Appropriate
+Ascon-128 v1.2
+Appropriate
+Ed25519
+Appropriate, implementation inefficient
+XSalsa20-HMAC
+Potentially sound, requires complete specification
+Nonce construction
+Plausible, needs lifecycle audit
+Replay protection
+Good foundation
+Hamming FEC
+Correct implementation concept
+Pairing protocol
+Not suitable for strong authentication claims
+Memory architecture
+Strong engineering decision
+Reliability
+Significant remaining limitations
+My overall opinion is that CEE-PEW has a legitimate applied-cryptography and embedded-systems research contribution.
+I would not call the architecture cryptographically secure as a complete system yet. The pairing weakness is too significant, and several details of the custom outer construction remain insufficiently specified.
+But I also don't think you need to discard the architecture and start again.
+Most of the underlying engineering decisions are defensible. The work now is to strengthen the trust establishment, formalize the protocol, and validate the implementation.
+16. One thing I would like to do next: inspect the actual firmware
+There is a limit to what I can establish from a PDF.
+I can check equations, identify contradictory descriptions, evaluate the protocol design, and assess whether the experiments support the claims.
+But I cannot conclusively verify that your implementation follows the described construction without examining the source.
+Your manuscript references the repository:
+[CEE-PEW — GitHub repository](https://github.com/R1sh1m/CEEPEW?utm_source=chatgpt.com).
+I would particularly like to inspect these implementation areas:
+Source-code area
+What I want to verify
+Pairing and GATT
+Actual PIN-to-key derivation and commitment handling
+HKDF
+Exact salt, IKM and info strings
+Ascon
+Nonce, AD and tag handling
+XSalsa20-HMAC
+Key separation and authenticated message format
+Ed25519
+Exact signed bytes and verification order
+Replay protection
+Counter updates and bitmap concurrency
+PFS re-key
+Key replacement, erasure and failure handling
+RX pipeline
+Buffer ownership, queue exhaustion and duplicate handling
+Could you upload a ZIP of the exact firmware source corresponding to commit b263dde-dirty?
+That is the version identified in your paper as the evaluated build. I would rather audit the actual evaluated implementation than accidentally review a newer version and attribute its behaviour to your experimental results.
+With that source, we can move from a manuscript-level technical review to a genuine implementation-level security audit. look into this
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-11-01T00:26:44+05:30.
+</ADDITIONAL_METADATA>

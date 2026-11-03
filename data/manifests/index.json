@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-10-19T19:20:11+00:00",
+  "updated_utc": "2026-10-29T06:12:52+00:00",
   "runs": [
     {
       "run_id": "BENCHPRIM_20261019",
@@ -171,6 +171,32 @@
       "missing_required_fields": [],
       "notes": "E5 sync-pulse latency. Both boards pulse AND sense on shared GPIO14 (D14-D14 open-drain jumper). All intervals are SAME-CLOCK only; no cross-board subtraction is performed anywhere. BENCH58: 80 frames/board at 5s spacing. 300 BENCH_TIME records recovered (160 tx, 140 rx).",
       "port_map": null
+    },
+    {
+      "run_id": "X1_20261029g",
+      "state": "sealed",
+      "experiment": "X1",
+      "date_utc": "2026-10-29T06:12:42+00:00",
+      "capture_mode": "n/a",
+      "n_planned": "?",
+      "n_completed": null,
+      "raw_file_count": 5,
+      "missing_required_fields": [],
+      "notes": "X1 timing campaign: x25519, ed25519 sign/verify at 160MHz. Triple capture with sniffer on COM6.",
+      "port_map": {
+        "DEVICE_A": {
+          "mac": "8c:94:df:97:d0:c0",
+          "canonical": "Device A",
+          "role": "responder",
+          "source": "GATTS identity"
+        },
+        "DEVICE_B": {
+          "mac": "1c:c3:ab:c2:52:ac",
+          "canonical": "Device B",
+          "role": "initiator",
+          "source": "GATTS identity"
+        }
+      }
     }
   ]
 }

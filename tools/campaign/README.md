@@ -7,9 +7,9 @@ library, no network access, no third-party dependencies.
 ```
 manifest.py         emit and verify a sealed campaign manifest
 registry_append.py  append registry entries that are bound to a manifest
-run_x1_timing.py    per-stage timing analysis (cluster-bootstrap intervals)
-run_x2_aead.py      same-board AEAD and signature baseline (campaign X2)
-run_x8_delivery.py  delivery accounting with an explicit drop breakdown
+run_x1_timing.py    per-stage timing analysis, cluster-bootstrap intervals (campaign X1)
+run_x12_aead.py     same-board AEAD and signature baseline (campaign X12)
+run_x8_delivery.py  delivery accounting with an explicit drop breakdown (campaign X8)
 ```
 
 ## The rule
@@ -23,14 +23,23 @@ entry whose cited artifact is not listed in the manifest.
 
 1. **Build** the firmware for the campaign configuration and note the build
    directory. Every campaign pins the configuration through `sdkconfig`,
-   whose SHA-256 goes into the manifest.
+   whose SHA-256 goes into the manifest. Use the matrix driver rather than
+   `-D CONFIG_*` on the command line: `idf.py` regenerates `sdkconfig` from
+   the defaults files and silently ignores configuration passed through the
+   CMake cache, so `-D CONFIG_CEEPEW_BENCH_AEAD=y` produces a shipping image
+   and a campaign that measures the wrong binary (ISS-T07).
 
    ```powershell
    $env:IDF_PATH='C:\esp\v6.0.3\esp-idf'; $env:IDF_TOOLS_PATH='C:\Espressif\tools'
    $env:IDF_PYTHON_ENV_PATH='C:\Espressif\tools\python_env\idf6.0_py3.13_env'
    & 'C:\esp\v6.0.3\esp-idf\export.ps1' | Out-Null
-   idf.py -B build_bench -D CONFIG_CEEPEW_BENCH_AEAD=y build
+   python tools/campaign/build_matrix.py --configs bench
    ```
+
+   The driver deletes any stale private `sdkconfig` first, so the overlay is
+   authoritative, then verifies the ELF symbols and `sdkconfig.h` against the
+   configuration before it records the build as OK. A build that compiles but
+   carries the wrong symbols is recorded FAILED.
 
 2. **Flash** both boards and capture the serial logs into
    `data/raw/<campaign_id>/`.
@@ -40,33 +49,33 @@ entry whose cited artifact is not listed in the manifest.
    captured artifact.
 
    ```powershell
-   python tools/campaign/manifest.py --campaign X2_aead_20261022 `
+   python tools/campaign/manifest.py --campaign X12_aead_20261022 `
      --board "Device A:COM3:8c:94:df:97:d0:c0" `
      --board "Device B:COM4:1c:c3:ab:c2:52:ac" `
-     --runner tools/campaign/run_x2_aead.py `
+     --runner tools/campaign/run_x12_aead.py `
      --firmware build_bench/ceepew.bin --build-dir build_bench `
-     --artifact data/raw/X2_aead_20261022/capture_DEVICE_A.log `
-     --artifact data/raw/X2_aead_20261022/capture_DEVICE_B.log
+     --artifact data/raw/X12_aead_20261022/capture_DEVICE_A.log `
+     --artifact data/raw/X12_aead_20261022/capture_DEVICE_B.log
    ```
 
 4. **Analyse** with the campaign runner. The runner reads the sealed logs
    and prints the table; it never writes into the registry.
 
    ```powershell
-   python tools/campaign/run_x2_aead.py `
-     --log data/raw/X2_aead_20261022/capture_DEVICE_A.log `
-     --log data/raw/X2_aead_20261022/capture_DEVICE_B.log `
-     --out-json data/derived/X2_aead_20261022.json
+   python tools/campaign/run_x12_aead.py `
+     --log data/raw/X12_aead_20261022/capture_DEVICE_A.log `
+     --log data/raw/X12_aead_20261022/capture_DEVICE_B.log `
+     --out-json data/derived/X12_aead_20261022.json
    ```
 
 5. **Record** each number in the registry, bound to the manifest.
 
    ```powershell
-   python tools/campaign/registry_append.py --manifest data/manifests/X2_aead_20261022.json `
-     --id X2-ASCON128-ENC-MEDIAN --description "Ascon-128 encrypt median, 60 B" `
+   python tools/campaign/registry_append.py --manifest data/manifests/X12_aead_20261022.json `
+     --id X12-ASCON128-ENC-MEDIAN --description "Ascon-128 encrypt median, 60 B" `
      --value 41 --unit us --class M-HW --n 30 `
-     --artifact data/raw/X2_aead_20261022/capture_DEVICE_A.log `
-     --script tools/campaign/run_x2_aead.py --reference "Section VI.B"
+     --artifact data/raw/X12_aead_20261022/capture_DEVICE_A.log `
+     --script tools/campaign/run_x12_aead.py --reference "Section VI.B"
    ```
 
 6. **Verify** the whole chain at any time:

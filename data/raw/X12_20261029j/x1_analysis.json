@@ -1,0 +1,76 @@
+{
+  "runs": [
+    {
+      "cpu_hz": 160000000,
+      "declared_n": 25,
+      "msg_len": 58,
+      "source": "data/raw/X12_20261029j/capture_dual.log"
+    }
+  ],
+  "stages": [
+    {
+      "bootstrap": {
+        "B": 10000,
+        "level": 0.95,
+        "seed": 20261021
+      },
+      "errors": [
+        0
+      ],
+      "max_us": 332636.0,
+      "mean_us": 332157.66,
+      "median_ci95": [
+        332093.0,
+        332199.0
+      ],
+      "median_us": 332140.5,
+      "min_us": 331920.0,
+      "n": 50,
+      "stage": "ed25519_sign",
+      "stdev_us": null
+    },
+    {
+      "bootstrap": {
+        "B": 10000,
+        "level": 0.95,
+        "seed": 20261021
+      },
+      "errors": [
+        0
+      ],
+      "max_us": 663544.0,
+      "mean_us": 662987.62,
+      "median_ci95": [
+        662931.0,
+        663038.5
+      ],
+      "median_us": 662983.5,
+      "min_us": 662630.0,
+      "n": 50,
+      "stage": "ed25519_verify",
+      "stdev_us": null
+    },
+    {
+      "bootstrap": {
+        "B": 10000,
+        "level": 0.95,
+        "seed": 20261021
+      },
+      "errors": [
+        0
+      ],
+      "max_us": 148190.0,
+      "mean_us": 147945.92,
+      "median_ci95": [
+        147900.0,
+        147977.0
+      ],
+      "median_us": 147958.5,
+      "min_us": 147776.0,
+      "n": 50,
+      "stage": "x25519",
+      "stdev_us": null
+    }
+  ],
+  "total_samples": 150
+}

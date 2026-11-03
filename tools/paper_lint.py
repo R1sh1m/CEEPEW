@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Banned-token lint. Implementation: the global ``paperqa`` package.
 
 This file is a compatibility shim. The check itself lives in
@@ -32,7 +32,7 @@ PAPERQA_HOME = Path(
 def _bootstrap() -> None:
     """Make the shared package importable from any interpreter."""
     try:
-        import paperqa  # noqa: F401
+        import paperqa  # noqa: F401 # type: ignore
         return
     except ImportError:
         pass
@@ -46,8 +46,8 @@ def _bootstrap() -> None:
 _bootstrap()
 
 try:
-    from paperqa import lint as _lint
-    from paperqa import textstats as _stats
+    from paperqa import lint as _lint  # type: ignore
+    from paperqa import textstats as _stats  # type: ignore
 except ImportError:
     sys.stderr.write(INSTALL_HINT)
     raise SystemExit(2)
@@ -87,7 +87,7 @@ def main(path: str) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         print("Usage: python tools/paper_lint.py <latex_or_text_file>")
-        sys.exit(1)
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 1)
     sys.exit(main(sys.argv[1]))

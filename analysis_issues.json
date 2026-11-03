@@ -1,0 +1,51 @@
+[
+  {
+    "issue": "Sample independence and environmental variable reporting",
+    "evidence_quote": "N=76 TX, N=97-99 RX across 63 runs and 53 sessions. \"Two ESP32 DevKit v1 boards, 20 cm apart, for the test bed\" (line 423). \"channel hopping is disabled by configuration (fixed to channel 1)\" (line 427). \"One board pair on a bench at 20 cm produced single-run observations: these are hardware measurements, not estimates over a population of boards, rooms, or builds, so the IQRs characterize the run and not the world\" (line 471). Cluster bootstrap resamples \"whole boards rather than fragments, so the two devices sharing a radio channel never count as independent samples\" (line 506). Mean RSSI reported as -29.2 dBm (line 698). No explicit interference measurements reported.",
+    "location": "Sections II-V, VI; Table tab:hw_benchmarks; abstract mentions 63 runs, 53 sessions",
+    "severity": "high",
+    "minimal_fix": "Explicitly state that samples are not independent due to shared radio channel; report distance (20 cm), channel (fixed to 1), and RSSI (-29.2 dBm); note that interference was not measured; clarify that IQRs characterize single runs not population variation"
+  },
+  {
+    "issue": "Degenerate CIs [219,219] from ms-resolution timestamps",
+    "evidence_quote": "CYC-X25519: \"219.0 ms (IQR 1.0, CI [219,219])\" (Table tab:hw_benchmarks line 642). CYC-ED25519-SIGN: \"1075.0 ms (IQR 1.0, CI [1075,1075])\" (line 643). Registry note: \"the value is a hardcoded literal in tools/recompute_paper_numbers.py (line ~158), not a parsed measurement.\" Statistically, CI [219,219] means all N samples produced identical millisecond-rounded values, indicating either zero variance or resolution-coarse masking of variance. Bootstrap on discretized ms data yields similarly degenerate CIs; the empirical distribution is constrained to integer ms values, so bootstrap resampling cannot produce fractional-millisecond variance estimates.",
+    "location": "Table tab:hw_benchmarks rows CYC-X25519, CYC-ED25519-SIGN; Registry CYC-X25519 entry",
+    "severity": "medium",
+    "minimal_fix": "Report the degenerate CI as such with explicit note that ms-resolution may mask within-millisecond variance; if feasible, use cycle-count resolution or report the IQR alongside the CI; avoid bootstrapping discretized data without acknowledging the resolution constraint"
+  },
+  {
+    "issue": "Hardware vs host-fed evidence conflation",
+    "evidence_quote": "Paper §V explicitly: \"marks a result obtained on the host harness, never over the air; marks an on-device hardware measurement; these correspond to the results ledger's M-HOST and M-HW evidence classes.\" Registry provenance (line 614): \"board/host timings (N=76 -Og, RX -O2 Oct. 2026; 100-vector replay + 27 positive controls accepted, not OTA); airtimes computed; baselines per [nozomi2024]; medians non-additive; injection rejection by design + host fault-injection (not OTA-verified); duplicates observed only (counts in README).\" Multiple explicit statements: \"No over-the-air replay test was performed\" (line 388); \"100-vector replay suite injected on the host harness rather than over the air\" (line 536, line 614 provenance).",
+    "location": "Sections II-VI; Table tab:hw_benchmarks provenance row 614; evidence class definitions §V",
+    "severity": "high",
+    "minimal_fix": "Ensure all claims clearly separate M-HW (on-device hardware) from M-HOST (host harness/fault-injection); add evidence tags to any claim that might be ambiguously classified; do not cite host-injected replay rates as OTA-reverified results"
+  },
+  {
+    "issue": "Baseline columns: measured vs expected/per-source values",
+    "evidence_quote": "Table tab:related_work baselines: \"74 B ($+16$ B CCMP); $\le 250$ B v1.0 ($1{,}470$ B v2.0)\" are quoted ESP-IDF docs; \"$\approx 86$ B est.\ (App AES-128-CCM)\" is estimated; \"58 B ($0$ B crypto overhead)\" from ESP-NOW Swarm/Mesh literature; \"TCP/IP MTU ($+16\text{--}28$ B AES, $+20\text{--}30$ ms)\" expected values; \"138 B w/ FEC / 105 B no FEC\" computed from this paper's wire budget (C class); \"$\approx 2.1$ KB/s (unoptimised)\" computed; \"$\approx 88$ B/s (1× verify) / 44 B/s worst-case\" computed; \"2.528 ms MPDU\" computed from 802.11 equations; \"1.13 ms / 1.22 ms\" from [espressif_espnow] and [nozomi2024]. Paper §V evidence classes: C=computed, S=cited, M-HW=measured on hardware, M-HOST=host harness, E=estimate.",
+    "location": "Table tab:related_work (lines 131-143); §V evidence class definitions",
+    "severity": "medium",
+    "minimal_fix": "Annotate each baseline column with its evidence class (C, S, M-HW, M-HOST, or E); avoid citing external quoted figures as if measured in this work; add footnotes distinguishing computed vs quoted vs literature-baseline values"
+  },
+  {
+    "issue": "Selection effects: '5/5 sampled pairs' / 65 duplicates",
+    "evidence_quote": "The specific phrases '5/5 sampled pairs' and '65 duplicates' do not appear in the paper or results registry. However, selection effects are present: the paper states \"the corpus is also conditioned on survival: the 11 archived runs, 18 session pairs and 36 handoffs are the runs that completed, so a timing median is a median over sessions that reached the active state, not over attempts\" (line 732). Delivery analysis: \"Link-layer reporting overstates application-layer delivery by $\approx 8$ pp across two bidirectional ESP-NOW runs\" with n=36-38 (95% Wilson $\approx [78\%, 97\%]$) (lines 700-705). The abstract states '11 capture runs, 18 session pairs, 36 handoffs' and '63 runs, 53 sessions'.",
+    "location": "Lines 471, 532, 700-705, 732; abstract; delivery analysis §V.D",
+    "severity": "medium",
+    "minimal_fix": "Clarify that the 53-session/63-run counts represent completed sessions, not a random sample; note the survival bias in the archived capture set; if '5/5 sampled pairs' and '65 duplicates' reference an external analysis, cite the source and reconcile with paper findings"
+  },
+  {
+    "issue": "95% upper bound on 100/100 replay rejection failure rate",
+    "evidence_quote": "EXP-REPLAY-REJECT: \"100/100 rejected vectors\" with n=100 (Registry entry, Section V.A). Registry 'RULE-OF-THREE' entry: \"95% confidence upper bound on failure rate given 0 failures in 100 trials\" = 3.0% (formula: 3/100*100). In context: 0 acceptance failures in 100 host-injected replay vectors. The 95% upper bound on the true replay-acceptance (failure-to-reject) rate is 3.0% (i.e., we can be 95% confident the rate is ≤ 3.0%). This does NOT mean 97% rejection confidence; it bounds the complementary error rate.",
+    "location": "Registry EXP-REPLAY-REJECT entry; Registry RULE-OF-THREE entry; Section V.A",
+    "severity": "low",
+    "minimal_fix": "Report the 95% UB as 3.0% on the replay-acceptance rate with explicit statement that this is the complementary rate; do not cite as '97% rejection confidence'; add to the paper's threat model table with proper interpretation"
+  },
+  {
+    "issue": "Reproducibility: versions, build flags, seeds, scripts, hardware revisions",
+    "evidence_quote": "Sealed manifests: \"git commit (b263dde-dirty), the ESP-IDF version (v6.0.3), the configured and generated sdkconfig SHA-256 digests, the application binary SHA-256, and the compiled flags (CONFIG_CEEPEW_BENCH_58B, CONFIG_CEEPEW_FEC_DISABLE, CONFIG_CEEPEW_DEVELOPMENT_MODE plus the benchmark module)\" (line 504). \"The sealed run's per-stage medians are X25519 147,957 μs (95% CI [147,925, 148,002] μs, N=50)... device roles (COM3=Device A, COM4=Device B, COM6=sniffer), capture mode, channel, 20 cm separation, operator, and a pre-declared exclusion rule are also recorded\" (line 504). Cluster bootstrap uses \"fixed seed\" (line 506). Nine named experiments: X1-X12 (line 763). Hardware: ESP32-WROOM-32 DevKit v1, 160 MHz, 20 cm separation. Five first-gen timing defects documented (line 416).",
+    "location": "Lines 416, 504-506, 763; §IX Threats to Validity; registry entries with raw_log and build references",
+    "severity": "medium",
+    "minimal_fix": "Compile a reproducibility checklist in the paper's appendices: ESP-IDF v6.0.3, sdkconfig SHA-256, git commit hash, benchmark seed, channel configuration, 20 cm separation, operator-dependent logging caveats; ensure all sealed runs have accompanying SHA-256SUM.txt manifests; document the fixed seed used for bootstrap resampling"
+  }
+]

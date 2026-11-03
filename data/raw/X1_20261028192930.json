@@ -1,0 +1,34 @@
+{
+  "runs": [
+    {
+      "cpu_hz": 160000000,
+      "declared_n": 25,
+      "msg_len": 58,
+      "source": "data/raw/X1_20261028192930.log"
+    }
+  ],
+  "stages": [
+    {
+      "bootstrap": {
+        "B": 10000,
+        "level": 0.95,
+        "seed": 20261021
+      },
+      "errors": [
+        0
+      ],
+      "max_us": 148502.0,
+      "mean_us": 147940.03534031415,
+      "median_ci95": [
+        147883.5,
+        147969.0
+      ],
+      "median_us": 147926.0,
+      "min_us": 147733.0,
+      "n": 764,
+      "stage": "x25519",
+      "stdev_us": null
+    }
+  ],
+  "total_samples": 764
+}

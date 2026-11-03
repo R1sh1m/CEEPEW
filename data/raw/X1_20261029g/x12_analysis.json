@@ -1,0 +1,331 @@
+{
+  "cases": [
+    {
+      "ascon_ratio": null,
+      "available": true,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 30,
+          "max_us": 1361994,
+          "mean_us": 1363133,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 30,
+          "max_us": 1346931,
+          "mean_us": 1375276,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "ed25519_verify_tweetnacl",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "aes256gcm_encrypt",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "aes256gcm_decrypt",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "aes128ccm_encrypt",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "aes128ccm_decrypt",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "chacha20poly1305_encrypt",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "chacha20poly1305_decrypt",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "ed25519_sign_mbedtls",
+      "pooled_median_us": 0
+    },
+    {
+      "ascon_ratio": null,
+      "available": false,
+      "board_spread_us": 0,
+      "boards": [
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        },
+        {
+          "cpu_hz": 160000000,
+          "iters": 0,
+          "max_us": 0,
+          "mean_us": 0,
+          "median_cycles": 0,
+          "median_us": 0,
+          "min_us": 0,
+          "source": "data/raw/X1_20261029g/capture_dual.log"
+        }
+      ],
+      "hw_aes": false,
+      "median_us": [
+        0,
+        0
+      ],
+      "name": "ed25519_verify_mbedtls",
+      "pooled_median_us": 0
+    }
+  ],
+  "meta": [
+    {
+      "cpu_hz": 160000000,
+      "errors": 3,
+      "hw_aes": 0,
+      "iterations": 30,
+      "plaintext_len": 60,
+      "psa": 0
+    },
+    {
+      "cpu_hz": 160000000,
+      "errors": 2,
+      "hw_aes": 0,
+      "iterations": 30,
+      "plaintext_len": 60,
+      "psa": 0
+    }
+  ],
+  "sources": [
+    "data/raw/X1_20261029g/capture_dual.log"
+  ]
+}

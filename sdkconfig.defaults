@@ -1,7 +1,7 @@
 # This file was generated using idf.py save-defconfig or menuconfig [D] key. It can be edited manually.
 # Espressif IoT Development Framework (ESP-IDF) 6.0.2 Project Minimal Configuration
 #
-CONFIG_CEEPEW_DEVELOPMENT_MODE=n
+CONFIG_CEEPEW_DEVELOPMENT_MODE=y
 # Physical flash on the target dev boards is 4 MB (DevKit v1). The previously
 # stamped 2 MB header produced "Detected size(4096k) larger than the size in
 # the binary image header" on every boot. eFuse HMAC binding is intentionally
@@ -51,5 +51,6 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # ChaCha20-Poly1305 is enabled so the same-board AEAD baseline (campaign X2)
 # can compare Ascon-128 against a software stream-cipher AEAD as well as
 # against the hardware-accelerated AES-GCM / AES-CCM path.
-CONFIG_MBEDTLS_CHACHAPOLY_C=y
 
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

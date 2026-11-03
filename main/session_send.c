@@ -43,6 +43,12 @@ extern CeePewErr_t ecc_arq_send(const uint8_t peer_mac[6],
                                 const uint8_t *payload, uint16_t payload_len);
 
 #if CONFIG_CEEPEW_BENCH_58B
+/* The replay buffer is transient bench scratch, not session state: it is 192 B
+ * and the development-mode image has effectively no DRAM headroom, so it is
+ * held in the region pool (zero-heap rule) rather than in .bss. The pointer
+ * is static so the allocation is taken once and reused across frames; the
+ * region is a bump allocator that is not reset between frames. */
+#define BENCH_REPLAY_BUF_BYTES 192U
 /* Bench-only forged-frame arming (see session_fsm.h). Consumed once. */
 static bool s_bench_forge_armed = false;
 
@@ -58,7 +64,7 @@ void session_send_bench_forge_next(void)
  * rejects it as CEEPEW_ERR_REPLAY. */
 static bool     s_bench_replay_armed = false;
 static uint16_t s_bench_replay_len   = 0U;
-static uint8_t  s_bench_replay_buf[256];   /* static: zero-heap rule */
+static uint8_t *s_bench_replay_buf = NULL;
 
 void session_send_bench_replay_next(void)
 {
@@ -386,7 +392,14 @@ static CeePewErr_t stage_tx_esl_wrap(Region_t *region, const uint8_t *in,
      * ESL-wrapped blob verbatim (stale ESL header, fresh ARQ seq downstream)
      * so the peer's replay window rejects it as CEEPEW_ERR_REPLAY. Otherwise
      * save the freshly wrapped blob as the source for a later replay. */
-    if (s_bench_replay_armed && s_bench_replay_len > 0U) {
+    if (s_bench_replay_buf == NULL) {
+        s_bench_replay_buf = (uint8_t *)region_alloc(region, BENCH_REPLAY_BUF_BYTES);
+        if (s_bench_replay_buf == NULL) {
+            ESP_LOGE(TAG, "[BENCH58_REPLAY] region pool exhausted; replay arm disabled");
+            s_bench_replay_armed = false;
+        }
+    }
+    if (s_bench_replay_armed && s_bench_replay_len > 0U && s_bench_replay_buf != NULL) {
         memcpy(buf, s_bench_replay_buf, s_bench_replay_len);
         wrapped_len = s_bench_replay_len;
         s_bench_replay_armed = false;
@@ -394,12 +407,12 @@ static CeePewErr_t stage_tx_esl_wrap(Region_t *region, const uint8_t *in,
                  (unsigned)wrapped_len);
     } else {
         s_bench_replay_armed = false;
-        if (wrapped_len <= (uint16_t)sizeof(s_bench_replay_buf)) {
+        if (s_bench_replay_buf != NULL && wrapped_len <= (uint16_t)BENCH_REPLAY_BUF_BYTES) {
             memcpy(s_bench_replay_buf, buf, wrapped_len);
             s_bench_replay_len = wrapped_len;
         } else {
-            ESP_LOGE(TAG, "[BENCH58_REPLAY] wrapped frame %u B exceeds replay buffer %zu, not saved",
-                     (unsigned)wrapped_len, sizeof(s_bench_replay_buf));
+            ESP_LOGE(TAG, "[BENCH58_REPLAY] wrapped frame %u B exceeds replay buffer %u, not saved",
+                     (unsigned)wrapped_len, (unsigned)BENCH_REPLAY_BUF_BYTES);
         }
     }
 #endif

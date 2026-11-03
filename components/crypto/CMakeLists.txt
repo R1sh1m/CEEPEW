@@ -12,6 +12,7 @@ set(CRYPTO_SRCS
     "curve25519.c"
     "crypto_hmac.c"
     "crypto_hmac_efuse.c"
+    "crypto_pake.c"
 )
 
 # The same-board cryptographic baseline harness (campaign X2) is only
@@ -28,6 +29,7 @@ idf_component_register(
         "."
     REQUIRES
         ceepew_common
+        mem
         mbedtls
         esp_system
         esp_hw_support
@@ -35,3 +37,11 @@ idf_component_register(
         efuse
         log
 )
+
+if(CONFIG_CEEPEW_BENCH_AEAD)
+    # Enable PSA crypto defines so crypto_bench.c can use mbedTLS PSA APIs
+    # (ESP-IDF v6.0.2 does not expose CONFIG_MBEDTLS_PSA_CRYPTO_C).
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE -DMBEDTLS_PSA_CRYPTO_C)
+    # Also enable specific algorithms
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE -DMBEDTLS_GCM_C -DMBEDTLS_CCM_C -DMBEDTLS_CHACHAPOLY_C -DMBEDTLS_CHACHA20_C -DMBEDTLS_POLY1305_C)
+endif()

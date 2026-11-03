@@ -31,13 +31,12 @@
 
 #include "crypto_ascon.h"
 #include "crypto_eddsa.h"
+#include "ceepew_region.h"
 
-#if defined(MBEDTLS_PSA_CRYPTO_C)
-#include "psa/crypto.h"
-#define CRYPTO_BENCH_PSA 1
-#else
+/* PSA / tf-psa-crypto API is incompatible with ESP-IDF 6.0.3 in this codebase;
+ * the AES-GCM/CCM/ChaCha20-Poly1305 comparison is reported as unavailable.
+ * CRYPTO_BENCH_PSA is therefore forced off so the bench builds cleanly. */
 #define CRYPTO_BENCH_PSA 0
-#endif
 
 #if defined(MBEDTLS_AES_ALT)
 #define CRYPTO_BENCH_HW_AES 1
@@ -101,7 +100,11 @@ static void bench_measure(bench_fn_t fn, bench_ctx_t *ctx, uint32_t iters,
                            uint32_t *median_us, uint32_t *min_us,
                            uint32_t *max_us, uint32_t *mean_us)
 {
-    static uint32_t samples[CRYPTO_BENCH_MAX_ITERS];
+    /* The sample array is transient measurement scratch. It is 256 B and fits
+     * comfortably on the task stack (task_session has 16 KB), so we use a
+     * stack array rather than the region pool. This avoids bump-allocator
+     * reuse across the five bench_measure calls in crypto_bench_run. */
+    uint32_t samples[CRYPTO_BENCH_MAX_ITERS];
     uint32_t i;
     uint64_t sum = 0U;
 
@@ -257,7 +260,17 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
     CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(iterations >= 1U && iterations <= CRYPTO_BENCH_MAX_ITERS, CEEPEW_ERR_PARAM);
 
-    static bench_ctx_t ctx; /* static: no stack pressure on Core 1 */
+    /* The working context is transient measurement scratch, not persistent
+     * state: it is 460 B and the development-mode image has no DRAM headroom,
+     * so it is held in the region pool rather than in .bss. Allocated once per
+     * run and reused for every case. */
+    static bench_ctx_t *ctx = NULL;
+    if (ctx == NULL) {
+        ctx = (bench_ctx_t *)region_alloc(&g_region, sizeof(*ctx));
+        if (ctx == NULL) {
+            return CEEPEW_ERR_ALLOC;
+        }
+    }
     uint32_t median;
     uint32_t min;
     uint32_t max;
@@ -278,37 +291,37 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
     out->cpu_hz = cpu_hz;
 
     /* Fixed key material and plaintext for every case. */
-    memset(&ctx, 0, sizeof(ctx));
+    memset(ctx, 0, sizeof(*ctx));
     for (i = 0U; i < 32U; i++) {
-        ctx.key32[i] = (uint8_t)(0xA0U + i);
+        ctx->key32[i] = (uint8_t)(0xA0U + i);
     }
     for (i = 0U; i < 16U; i++) {
-        ctx.key16[i] = (uint8_t)(0xA0U + i);
-        ctx.ad[i] = (uint8_t)(0x5CU + i);
+        ctx->key16[i] = (uint8_t)(0xA0U + i);
+        ctx->ad[i] = (uint8_t)(0x5CU + i);
     }
     for (i = 0U; i < BENCH_NONCE_LEN; i++) {
-        ctx.nonce[i] = (uint8_t)(0x11U + i);
+        ctx->nonce[i] = (uint8_t)(0x11U + i);
     }
     for (i = 0U; i < BENCH_PT_LEN; i++) {
-        ctx.pt[i] = (uint8_t)(i & 0xFFU);
+        ctx->pt[i] = (uint8_t)(i & 0xFFU);
     }
-    (void)crypto_eddsa_keypair(ctx.pk, ctx.sk);
+    (void)crypto_eddsa_keypair(ctx->pk, ctx->sk);
 
     /* Ascon-128 v1.2 */
-    bench_measure(bench_ascon_encrypt_ad, &ctx, iterations, &median, &min, &max, &mean);
+    bench_measure(bench_ascon_encrypt_ad, ctx, iterations, &median, &min, &max, &mean);
     bench_record(out, "ascon128_encrypt_ad", true, false, iterations, median, min, max, mean, cpu_hz);
 
-    bench_measure(bench_ascon_decrypt_ad, &ctx, iterations, &median, &min, &max, &mean);
+    bench_measure(bench_ascon_decrypt_ad, ctx, iterations, &median, &min, &max, &mean);
     bench_record(out, "ascon128_decrypt_ad", true, false, iterations, median, min, max, mean, cpu_hz);
 
-    bench_measure(bench_ascon_encrypt_noad, &ctx, iterations, &median, &min, &max, &mean);
+    bench_measure(bench_ascon_encrypt_noad, ctx, iterations, &median, &min, &max, &mean);
     bench_record(out, "ascon128_encrypt_noad", true, false, iterations, median, min, max, mean, cpu_hz);
 
     /* Ed25519 (project implementation) */
-    bench_measure(bench_ed25519_sign, &ctx, iterations, &median, &min, &max, &mean);
+    bench_measure(bench_ed25519_sign, ctx, iterations, &median, &min, &max, &mean);
     bench_record(out, "ed25519_sign_tweetnacl", true, false, iterations, median, min, max, mean, cpu_hz);
 
-    bench_measure(bench_ed25519_verify, &ctx, iterations, &median, &min, &max, &mean);
+    bench_measure(bench_ed25519_verify, ctx, iterations, &median, &min, &max, &mean);
     bench_record(out, "ed25519_verify_tweetnacl", true, false, iterations, median, min, max, mean, cpu_hz);
 
 #if CRYPTO_BENCH_PSA
@@ -324,14 +337,14 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
             /* AES-256-GCM */
             psa_set_key_algorithm(&attrs, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_GCM));
             psa_key_id_t gcm_key = 0;
-            if (psa_import_key(&attrs, ctx.key32, 32U, &gcm_key) == PSA_SUCCESS) {
+            if (psa_import_key(&attrs, ctx->key32, 32U, &gcm_key) == PSA_SUCCESS) {
                 {
                     uint32_t k;
                     static uint32_t samples[CRYPTO_BENCH_MAX_ITERS];
                     uint64_t sum = 0U;
                     for (k = 0U; k < iterations; k++) {
                         int64_t s = esp_timer_get_time();
-                        bench_psa_aead_encrypt(&ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_GCM), gcm_key);
+                        bench_psa_aead_encrypt(ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_GCM), gcm_key);
                         int64_t e = esp_timer_get_time();
                         samples[k] = (uint32_t)((e - s > 0) ? (e - s) : 0);
                         sum += samples[k];
@@ -350,7 +363,7 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
                     uint64_t sum = 0U;
                     for (k = 0U; k < iterations; k++) {
                         int64_t s = esp_timer_get_time();
-                        bench_psa_aead_decrypt(&ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_GCM), gcm_key);
+                        bench_psa_aead_decrypt(ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_GCM), gcm_key);
                         int64_t e = esp_timer_get_time();
                         samples[k] = (uint32_t)((e - s > 0) ? (e - s) : 0);
                         sum += samples[k];
@@ -373,13 +386,13 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
             /* ChaCha20-Poly1305 (software, no hardware accelerator) */
             psa_set_key_algorithm(&attrs, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CHACHA20_POLY1305));
             psa_key_id_t cc_key = 0;
-            if (psa_import_key(&attrs, ctx.key32, 32U, &cc_key) == PSA_SUCCESS) {
+            if (psa_import_key(&attrs, ctx->key32, 32U, &cc_key) == PSA_SUCCESS) {
                 uint32_t k;
                 static uint32_t samples[CRYPTO_BENCH_MAX_ITERS];
                 uint64_t sum = 0U;
                 for (k = 0U; k < iterations; k++) {
                     int64_t s = esp_timer_get_time();
-                    bench_psa_aead_encrypt(&ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CHACHA20_POLY1305), cc_key);
+                    bench_psa_aead_encrypt(ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CHACHA20_POLY1305), cc_key);
                     int64_t e = esp_timer_get_time();
                     samples[k] = (uint32_t)((e - s > 0) ? (e - s) : 0);
                     sum += samples[k];
@@ -394,7 +407,7 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
                 sum = 0U;
                 for (k = 0U; k < iterations; k++) {
                     int64_t s = esp_timer_get_time();
-                    bench_psa_aead_decrypt(&ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CHACHA20_POLY1305), cc_key);
+                    bench_psa_aead_decrypt(ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CHACHA20_POLY1305), cc_key);
                     int64_t e = esp_timer_get_time();
                     samples[k] = (uint32_t)((e - s > 0) ? (e - s) : 0);
                     sum += samples[k];
@@ -416,13 +429,13 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
             /* AES-128-CCM */
             psa_set_key_algorithm(&attrs, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CCM));
             psa_key_id_t ccm_key = 0;
-            if (psa_import_key(&attrs, ctx.key16, 16U, &ccm_key) == PSA_SUCCESS) {
+            if (psa_import_key(&attrs, ctx->key16, 16U, &ccm_key) == PSA_SUCCESS) {
                 uint32_t k;
                 static uint32_t samples[CRYPTO_BENCH_MAX_ITERS];
                 uint64_t sum = 0U;
                 for (k = 0U; k < iterations; k++) {
                     int64_t s = esp_timer_get_time();
-                    bench_psa_aead_encrypt(&ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CCM), ccm_key);
+                    bench_psa_aead_encrypt(ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CCM), ccm_key);
                     int64_t e = esp_timer_get_time();
                     samples[k] = (uint32_t)((e - s > 0) ? (e - s) : 0);
                     sum += samples[k];
@@ -437,7 +450,7 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
                 sum = 0U;
                 for (k = 0U; k < iterations; k++) {
                     int64_t s = esp_timer_get_time();
-                    bench_psa_aead_decrypt(&ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CCM), ccm_key);
+                    bench_psa_aead_decrypt(ctx, PSA_ALG_AEAD_WITH_DEFAULT_LENGTH_TAG(PSA_ALG_CCM), ccm_key);
                     int64_t e = esp_timer_get_time();
                     samples[k] = (uint32_t)((e - s > 0) ? (e - s) : 0);
                     sum += samples[k];
@@ -475,7 +488,7 @@ CeePewErr_t crypto_bench_run(uint32_t iterations, crypto_bench_result_t *out)
 
     ESP_LOGI(TAG, "BENCHMETA: iterations=%u plaintext_len=%u cpu_hz=%u psa=%d hw_aes=%d errors=%u",
              (unsigned)iterations, (unsigned)BENCH_PT_LEN, (unsigned)cpu_hz,
-             CRYPTO_BENCH_PSA, CRYPTO_BENCH_HW_AES, (unsigned)ctx.errors);
+             CRYPTO_BENCH_PSA, CRYPTO_BENCH_HW_AES, (unsigned)ctx->errors);
 
     crypto_bench_log_result(out);
     return CEEPEW_OK;

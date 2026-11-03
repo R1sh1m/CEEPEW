@@ -48,7 +48,7 @@ def detect_ports():
     keywords = ["CP210", "CH340", "FTDI", "UART", "USB Serial", "ESP32"]
     for p in ports:
         desc = f"{p.device} - {p.description}"
-        if any(kw.lower() in p.description.lower() for kw in keywords) or "COM" in p.device:
+        if "bluetooth" not in p.description.lower() and (any(kw.lower() in p.description.lower() for kw in keywords) or "cp210" in p.description.lower() or "ch340" in p.description.lower()):
             detected.append((p.device, p.description))
     return detected
 
@@ -128,6 +128,7 @@ HOST_TEST_FALLBACK = [
     "test_eddsa",
     "test_huffman",
     "test_session_pairing",
+    "test_pake",
     "test_arq_sync",
     "test_arq_fault_injection",
     "test_replay_window",

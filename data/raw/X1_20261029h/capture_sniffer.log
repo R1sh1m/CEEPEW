@@ -1,0 +1,80 @@
+[COM6] Monitoring started.
+0.7 [COM6] ets Jul 29 2019 12:21:46
+0.7 [COM6] rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+0.7 [COM6] configsip: 0, SPIWP:0xee
+0.7 [COM6] clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+0.7 [COM6] mode:DIO, clock div:2
+0.7 [COM6] load:0x3fff0040,len:6340
+0.7 [COM6] load:0x40078000,len:15884
+0.7 [COM6] load:0x40080400,len:3920
+0.7 [COM6] entry 0x40080644
+0.7 [COM6] I (27) boot: ESP-IDF v6.0.3 2nd stage bootloader
+0.7 [COM6] I (27) boot: compile time Oct 29 2026 11:30:55
+0.7 [COM6] I (27) boot: Multicore bootloader
+0.7 [COM6] I (29) boot: chip revision: v3.1
+0.7 [COM6] I (32) boot.esp32: SPI Speed      : 40MHz
+0.7 [COM6] I (35) boot.esp32: SPI Mode       : DIO
+0.7 [COM6] I (39) boot.esp32: SPI Flash Size : 2MB
+0.7 [COM6] I (42) boot: Enabling RNG early entropy source...
+0.7 [COM6] I (47) boot: Partition Table:
+0.7 [COM6] I (49) boot: ## Label            Usage          Type ST Offset   Length
+0.7 [COM6] I (56) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+0.7 [COM6] I (62) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+0.7 [COM6] I (69) boot:  2 factory          factory app      00 00 00010000 00100000
+0.7 [COM6] I (75) boot: End of partition table
+0.7 [COM6] I (79) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=184a8h ( 99496) map
+0.7 [COM6] I (122) esp_image: segment 1: paddr=000284d0 vaddr=3ffb0000 size=04504h ( 17668) load
+0.7 [COM6] I (129) esp_image: segment 2: paddr=0002c9dc vaddr=40080000 size=0363ch ( 13884) load
+0.7 [COM6] I (135) esp_image: segment 3: paddr=00030020 vaddr=400d0020 size=7fafch (523004) map
+0.7 [COM6] I (323) esp_image: segment 4: paddr=000afb24 vaddr=4008363c size=11f04h ( 73476) load
+0.7 [COM6] I (354) esp_image: segment 5: paddr=000c1a30 vaddr=50000000 size=00028h (    40) load
+0.7 [COM6] I (365) boot: Loaded app from partition at offset 0x10000
+0.7 [COM6] I (365) boot: Disabling RNG early entropy source...
+0.7 [COM6] I (376) cpu_start: Multicore app
+0.7 [COM6] I (384) cpu_start: GPIO 3 and 1 are used as console UART I/O pins
+0.7 [COM6] I (384) cpu_start: Pro cpu start user code
+0.7 [COM6] I (384) cpu_start: cpu freq: 160000000 Hz
+0.7 [COM6] I (386) app_init: Application information:
+0.7 [COM6] I (390) app_init: Project name:     ceepew_sniffer
+0.7 [COM6] I (394) app_init: App version:      b263dde-dirty
+0.7 [COM6] I (399) app_init: Compile time:     Oct 29 2026 11:25:44
+0.7 [COM6] I (404) app_init: ELF file SHA256:  6cf126427...
+0.7 [COM6] I (408) app_init: ESP-IDF:          v6.0.3
+0.7 [COM6] I (412) efuse_init: Min chip rev:     v0.0
+0.7 [COM6] I (416) efuse_init: Max chip rev:     v3.99 
+0.7 [COM6] I (420) efuse_init: Chip rev:         v3.1
+0.7 [COM6] I (424) heap_init: Initializing. RAM available for dynamic allocation:
+0.7 [COM6] I (430) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM
+0.7 [COM6] I (435) heap_init: At 3FFB8A00 len 00027600 (157 KiB): DRAM
+0.7 [COM6] I (440) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM
+0.7 [COM6] I (446) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM
+0.7 [COM6] I (451) heap_init: At 40095540 len 0000AAC0 (42 KiB): IRAM
+0.7 [COM6] I (458) spi_flash: detected chip: generic
+0.7 [COM6] I (460) spi_flash: flash io: dio
+0.7 [COM6] W (463) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.
+0.7 [COM6] I (477) main_task: Started on CPU0
+0.7 [COM6] I (477) main_task: Calling app_main()
+0.7 [COM6] I (517) wifi:wifi driver task: 3ffbf22c, prio:23, stack:6656, core=0
+0.7 [COM6] I (527) wifi:wifi firmware version: da143fa
+0.7 [COM6] I (527) wifi:wifi certification version: v7.0
+0.7 [COM6] I (527) wifi:config NVS flash: enabled
+0.7 [COM6] I (527) wifi:config nano formatting: disabled
+0.7 [COM6] I (527) wifi:Init data frame dynamic rx buffer num: 32
+0.7 [COM6] I (537) wifi:Init static rx mgmt buffer num: 5
+0.7 [COM6] I (537) wifi:Init management short buffer num: 32
+0.7 [COM6] I (547) wifi:Init dynamic tx buffer num: 32
+0.7 [COM6] I (547) wifi:Init static rx buffer size: 1600
+0.7 [COM6] I (557) wifi:Init static rx buffer num: 10
+0.7 [COM6] I (557) wifi:Init dynamic rx buffer num: 32
+0.7 [COM6] I (557) wifi_init: rx ba win: 6
+0.8 [COM6] I (567) wifi_init: accept mbox: 6
+0.8 [COM6] I (567) wifi_init: tcpip mbox: 32
+0.8 [COM6] I (567) wifi_init: udp mbox: 6
+0.8 [COM6] I (577) wifi_init: tcp mbox: 6
+0.8 [COM6] I (577) wifi_init: tcp tx win: 5760
+0.8 [COM6] I (577) wifi_init: tcp rx win: 5760
+0.8 [COM6] I (577) wifi_init: tcp mss: 1440
+0.8 [COM6] I (587) wifi_init: WiFi IRAM OP enabled
+0.8 [COM6] I (587) wifi_init: WiFi RX IRAM OP enabled
+0.8 [COM6] I (597) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06
+[COM6] Port closed.

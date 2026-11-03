@@ -20,6 +20,9 @@ managed_components/
 dependencies.lock
 
 # Python, environment & cache
+.env
+.env.*
+*.env
 __pycache__/
 *.pyc
 venv/
