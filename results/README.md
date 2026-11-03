@@ -101,5 +101,5 @@ Summary: 53 items checked, 52 MATCH, 1 MISMATCH/DISCREPANCY.
 
 - **Raw Captures & Sealed Manifests**: [`data/raw/`](../data/raw/) (full campaign logs and SHA-256 manifests).
 - **Derived Timing & Mode Reports**: [`data/derived/`](../data/derived/).
-- **Host Unit Tests**: Run `python tools/ceepew_pipeline.py --mode host` (**18 / 18 PASS**).
+- **Host Unit Tests**: Run `python tools/ceepew_pipeline.py --mode host` (**22 / 22 PASS**).
 - **On-Device Diagnostics**: Run `python tools/ceepew_pipeline.py --mode diag` (**14 / 14 PASS**).

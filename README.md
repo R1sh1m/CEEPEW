@@ -41,7 +41,7 @@ By eliminating dynamic heap allocation (`malloc`/`free`) in favor of a static re
 | **138 B / 105 B**| **Lite Profile Wire Size** | Symmetric streaming (138 B with FEC, 105 B without FEC) | `C` |
 | **0 Bytes** | **Cleartext Air Leakage** | 100% payload encrypted with Ascon-128a (Shannon entropy: 7.99 bits/B) | `M-HW` |
 | **100 / 100** | **Replay Vectors Rejected** | 64-bit sliding window with commit-after-authentication rule | `M-HOST` |
-| **18 / 18** | **Host Test Suites Passing** | ASan/UBSan unit suites (Ascon, Ed25519, FEC fault-injection, ARQ) | `M-HOST` |
+| **22 / 22** | **Host Test Suites Passing** | ASan/UBSan unit suites (Curve25519, Ascon, Ed25519, Salsa20, HMAC, FEC, ARQ) | `M-HOST` |
 | **14 / 14** | **Hardware Diagnostics Passing** | On-chip diagnostic report verifying crypto, timers, memory, and FSM | `M-HW` |
 
 *Evidence classes follow IEEE reproducibility guidelines: `M-HW` (hardware-measured), `M-HOST` (host harness), `C` (exact equation).*

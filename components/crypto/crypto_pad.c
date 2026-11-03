@@ -1,5 +1,6 @@
 /* components/crypto/crypto_pad.c */
 
+#include "crypto_pad.h"
 #include "ceepew_assert.h"
 #include "ceepew_config.h"
 #include <stdint.h>

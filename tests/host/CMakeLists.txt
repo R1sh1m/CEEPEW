@@ -197,6 +197,43 @@ target_link_libraries(test_pake PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_pake PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_pake COMMAND test_pake)
 
+# test_ecdh — Curve25519 & X25519 ECDH key exchange and RFC 7748 test vectors
+add_executable(test_ecdh
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ecdh.c
+    ${COMPONENT_DIR}/components/crypto/curve25519.c
+    ${COMPONENT_DIR}/components/crypto/crypto_ecdh.c
+)
+target_link_libraries(test_ecdh PRIVATE ceepew_portable)
+target_include_directories(test_ecdh PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_ecdh COMMAND test_ecdh)
+
+# test_stream — Salsa20 / XSalsa20 stream cipher engine
+add_executable(test_stream
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_stream.c
+    ${COMPONENT_DIR}/components/crypto/crypto_stream.c
+)
+target_link_libraries(test_stream PRIVATE ceepew_portable)
+target_include_directories(test_stream PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_stream COMMAND test_stream)
+
+# test_hmac — HMAC-SHA256 and RFC 4231 official test cases
+add_executable(test_hmac
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_hmac.c
+)
+target_link_libraries(test_hmac PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_hmac PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_hmac PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_hmac COMMAND test_hmac)
+
+# test_pad — PKCS#7 64-byte block padding and constant-time unpadding
+add_executable(test_pad
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pad.c
+    ${COMPONENT_DIR}/components/crypto/crypto_pad.c
+)
+target_link_libraries(test_pad PRIVATE ceepew_portable)
+target_include_directories(test_pad PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_pad COMMAND test_pad)
+
 # ── ARQ library: compiles the REAL ecc_arq.c with host runtime stubs ──
 set(ARQ_SRCS
     ${COMPONENT_DIR}/components/ecc/ecc_arq.c

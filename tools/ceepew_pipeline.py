@@ -72,6 +72,9 @@ def find_cmake_bin():
         pass
     
     # Fallback search on Windows
+    for c in ["C:/msys64/ucrt64/bin/cmake.exe", "C:/msys64/mingw64/bin/cmake.exe"]:
+        if os.path.exists(c):
+            return c
     search_dirs = [
         os.path.expanduser("~/.espressif/tools/cmake"),
         os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake"),
@@ -94,6 +97,9 @@ def find_ctest_bin():
         pass
 
     # Fallback search on Windows: ctest ships next to cmake
+    for c in ["C:/msys64/ucrt64/bin/cmake.exe", "C:/msys64/mingw64/bin/cmake.exe"]:
+        if os.path.exists(c):
+            return c
     search_dirs = [
         os.path.expanduser("~/.espressif/tools/cmake"),
         os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake"),
@@ -137,6 +143,10 @@ HOST_TEST_FALLBACK = [
     "test_huffman",
     "test_session_pairing",
     "test_pake",
+    "test_ecdh",
+    "test_stream",
+    "test_hmac",
+    "test_pad",
     "test_arq_sync",
     "test_arq_fault_injection",
     "test_replay_window",

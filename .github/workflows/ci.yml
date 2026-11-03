@@ -100,6 +100,9 @@ jobs:
   # ── Host-compilable unit tests ─────────────────────────────────────
   host-tests:
     runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:detect_leaks=1"
+      UBSAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -113,6 +116,22 @@ jobs:
       - name: Run host tests (CTest)
         run: |
           ctest --test-dir tests/host/build --output-on-failure
+
+  # ── Mathematical claim and paper hygiene verification ──────────────
+  claim-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Recompute and verify all paper arithmetic claims
+        run: |
+          python tools/recompute_paper_numbers.py
+      - name: Run academic paper prose lint
+        run: |
+          python tools/paper_lint.py "docs/paper/The Paper/main.tex"
 
   # ── Static analysis (cppcheck + clang-tidy) ────────────────────────
   static-analysis:
