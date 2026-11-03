@@ -72,11 +72,15 @@ def find_cmake_bin():
         pass
     
     # Fallback search on Windows
-    espressif_cmake = os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake")
-    if os.path.exists(espressif_cmake):
-        for root, dirs, files in os.walk(espressif_cmake):
-            if "cmake.exe" in files:
-                return os.path.join(root, "cmake.exe")
+    search_dirs = [
+        os.path.expanduser("~/.espressif/tools/cmake"),
+        os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake"),
+    ]
+    for sdir in search_dirs:
+        if os.path.exists(sdir):
+            for root, dirs, files in os.walk(sdir):
+                if "cmake.exe" in files:
+                    return os.path.join(root, "cmake.exe")
     return None
 
 
@@ -90,11 +94,15 @@ def find_ctest_bin():
         pass
 
     # Fallback search on Windows: ctest ships next to cmake
-    espressif_cmake = os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake")
-    if os.path.exists(espressif_cmake):
-        for root, dirs, files in os.walk(espressif_cmake):
-            if "ctest.exe" in files:
-                return os.path.join(root, "ctest.exe")
+    search_dirs = [
+        os.path.expanduser("~/.espressif/tools/cmake"),
+        os.path.join(os.environ.get("SystemDrive", "C:"), "\\Espressif", "tools", "cmake"),
+    ]
+    for sdir in search_dirs:
+        if os.path.exists(sdir):
+            for root, dirs, files in os.walk(sdir):
+                if "ctest.exe" in files:
+                    return os.path.join(root, "ctest.exe")
     return None
 
 

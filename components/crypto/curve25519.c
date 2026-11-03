@@ -39,7 +39,7 @@ static void fe_copy(fe o, const fe a){
 static void fe_car(fe o){
     for (int i = 0; i < 16; i++) {
         fe_limb c = o[i] >> 16;
-        o[i] -= c << 16;
+        o[i] -= c * 65536LL;
         if (i < 15) { o[i + 1] += c;} 
         else {
             /* wrap: add 38c to o[0] (since 2^256 ≡ 38 mod p) */

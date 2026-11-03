@@ -7,7 +7,14 @@
 
 CeePewErr_t crypto_rng_fill(uint8_t *buf, uint32_t len)
 {
-    (void)buf; (void)len;
+    if (buf == NULL && len > 0U) {
+        return CEEPEW_ERR_NULL_PTR;
+    }
+    static uint32_t s_state = 0x9E3779B9U;
+    for (uint32_t i = 0U; i < len; i++) {
+        s_state = s_state * 1664525U + 1013904223U;
+        buf[i] = (uint8_t)(s_state >> 24U);
+    }
     return CEEPEW_OK;
 }
 
