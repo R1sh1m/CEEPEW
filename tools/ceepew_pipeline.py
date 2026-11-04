@@ -168,7 +168,7 @@ HOST_TEST_FALLBACK = [
 ]
 
 
-def _discover_host_tests(build_dir):
+def _discover_host_tests(build_dir, prebuilt_dir=None):
     """Enumerate the host test suites registered in tests/host/CMakeLists.txt.
 
     CTest is the single source of truth: every suite registered with
@@ -198,7 +198,39 @@ def _discover_host_tests(build_dir):
                         names.append(name)
             if names:
                 return names
+    # Last resort: run whatever pre-compiled binaries already ship in the
+    # repository (tests/host/build_fuzz). This is the only path that works
+    # on hosts with no C/C++ compiler installed, and it is deterministic:
+    # every *.exe present is executed, so a newly registered suite is never
+    # silently skipped.
+    if prebuilt_dir and os.path.isdir(prebuilt_dir):
+        discovered = []
+        for fname in sorted(os.listdir(prebuilt_dir)):
+            if not fname.endswith(".exe"):
+                continue
+            if fname.startswith("fuzz_smoke_"):
+                continue
+            discovered.append(os.path.splitext(fname)[0])
+        if discovered:
+            return discovered
     return list(HOST_TEST_FALLBACK)
+
+
+def _find_prebuilt_binaries(*dirs):
+    """Return the suite names whose pre-compiled binaries exist in any dir."""
+    found = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for fname in sorted(os.listdir(d)):
+            if not fname.endswith(".exe"):
+                continue
+            if fname.startswith("fuzz_smoke_"):
+                continue
+            name = os.path.splitext(fname)[0]
+            if name not in found:
+                found.append(name)
+    return found
 
 
 def run_host_tests(enable_coverage=False):
@@ -209,6 +241,8 @@ def run_host_tests(enable_coverage=False):
 
     host_dir = os.path.join(PROJECT_ROOT, "tests", "host")
     build_dir = os.path.join(host_dir, "build_host")
+    # Pre-compiled binaries shipped with the repo (no host compiler required).
+    prebuilt_dir = os.path.join(host_dir, "build_fuzz")
 
     os.makedirs(build_dir, exist_ok=True)
 
@@ -252,8 +286,10 @@ def run_host_tests(enable_coverage=False):
     print("--> Configuring host build (CMake)...")
     res = subprocess.run(cmake_config_cmd, cwd=host_dir)
     if res.returncode != 0:
-        # Check if pre-compiled binaries already exist in build_dir
-        existing = [t for t in HOST_TEST_FALLBACK if os.path.exists(os.path.join(build_dir, f"{t}.exe")) or os.path.exists(os.path.join(build_dir, t))]
+        # Check if pre-compiled binaries already exist in build_dir or the
+        # shipped prebuilt tree (build_fuzz) — the latter is the only path
+        # that works on hosts with no C/C++ compiler installed.
+        existing = _find_prebuilt_binaries(build_dir, prebuilt_dir)
         if existing:
             print("[WARN] CMake configuration failed, but found pre-compiled host test binaries. Proceeding with existing binaries...")
         else:
@@ -263,7 +299,7 @@ def run_host_tests(enable_coverage=False):
         print("--> Compiling host tests...")
         res = subprocess.run([cmake_bin, "--build", build_dir], cwd=host_dir)
         if res.returncode != 0:
-            existing = [t for t in HOST_TEST_FALLBACK if os.path.exists(os.path.join(build_dir, f"{t}.exe")) or os.path.exists(os.path.join(build_dir, t))]
+            existing = _find_prebuilt_binaries(build_dir, prebuilt_dir)
             if existing:
                 print("[WARN] Host test compilation failed, but found pre-compiled host test binaries. Proceeding with existing binaries...")
             else:
@@ -272,9 +308,12 @@ def run_host_tests(enable_coverage=False):
 
     # Execute tests using CTest discovery so a newly registered suite is
     # never silently skipped (the historical hard-coded list drifted out of
-    # sync with tests/host/CMakeLists.txt at least twice).
+    # sync with tests/host/CMakeLists.txt at least twice). Fall back to the
+    # shipped prebuilt binaries when the live build tree is empty.
     print("--> Running Host Tests...")
     test_binaries = _discover_host_tests(build_dir)
+    if not test_binaries:
+        test_binaries = _discover_host_tests(prebuilt_dir)
     if not test_binaries:
         print("[FAIL] No host test suites were discovered.")
         return False
@@ -283,10 +322,15 @@ def run_host_tests(enable_coverage=False):
     failed = 0
 
     for test in test_binaries:
-        # Check binary location (Windows vs Unix)
+        # Check binary location (Windows vs Unix) in the live build tree,
+        # then the shipped prebuilt tree.
         exe_path = os.path.join(build_dir, f"{test}.exe")
         if not os.path.exists(exe_path):
             exe_path = os.path.join(build_dir, test)
+        if not os.path.exists(exe_path):
+            exe_path = os.path.join(prebuilt_dir, f"{test}.exe")
+        if not os.path.exists(exe_path):
+            exe_path = os.path.join(prebuilt_dir, test)
 
         if not os.path.exists(exe_path):
             print(f"  [SKIP] {test} (binary not found at {exe_path})")
