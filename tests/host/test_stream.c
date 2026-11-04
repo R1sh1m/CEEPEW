@@ -55,7 +55,7 @@ static void test_encrypt_decrypt_roundtrip(void)
     check(err == CEEPEW_OK, "Stream cipher init succeeds for encryption");
 
     uint8_t ciphertext[128];
-    uint16_t ct_len = 0;
+    uint16_t ct_len = (uint16_t)sizeof(ciphertext);
     err = crypto_stream_process(&enc_ctx, (const uint8_t *)plaintext, pt_len, ciphertext, &ct_len);
     check(err == CEEPEW_OK, "Stream process succeeds for encryption");
     check(ct_len == pt_len, "Ciphertext length matches plaintext length");
@@ -69,7 +69,7 @@ static void test_encrypt_decrypt_roundtrip(void)
     check(err == CEEPEW_OK, "Stream cipher init succeeds for decryption");
 
     uint8_t decrypted[128];
-    uint16_t dec_len = 0;
+    uint16_t dec_len = (uint16_t)sizeof(decrypted);
     err = crypto_stream_process(&dec_ctx, ciphertext, ct_len, decrypted, &dec_len);
     check(err == CEEPEW_OK, "Stream process succeeds for decryption");
     check(dec_len == pt_len, "Decrypted length matches original plaintext");
@@ -94,7 +94,7 @@ static void test_chunked_streaming_equivalence(void)
     StreamCipher_t ctx1;
     crypto_stream_init(&ctx1, key, nonce);
     uint8_t ct_single[sizeof(data)];
-    uint16_t len1 = 0;
+    uint16_t len1 = (uint16_t)sizeof(ct_single);
     crypto_stream_process(&ctx1, data, (uint16_t)sizeof(data), ct_single, &len1);
     crypto_stream_finalise(&ctx1);
 
@@ -110,7 +110,7 @@ static void test_chunked_streaming_equivalence(void)
         if (offset + to_process > (uint16_t)sizeof(data)) {
             to_process = (uint16_t)sizeof(data) - offset;
         }
-        uint16_t out_chunk_len = 0;
+        uint16_t out_chunk_len = to_process;
         CeePewErr_t err = crypto_stream_process(&ctx2, &data[offset], to_process,
                                                &ct_chunked[offset], &out_chunk_len);
         check(err == CEEPEW_OK, "Chunk processing step succeeds");
@@ -137,7 +137,7 @@ static void test_key_and_nonce_sensitivity(void)
 
     uint8_t plain[64] = {0};
     uint8_t ct1[64], ct2[64], ct3[64];
-    uint16_t l1 = 0, l2 = 0, l3 = 0;
+    uint16_t l1 = (uint16_t)sizeof(ct1), l2 = (uint16_t)sizeof(ct2), l3 = (uint16_t)sizeof(ct3);
 
     StreamCipher_t ctx;
     crypto_stream_init(&ctx, key1, nonce1);
@@ -177,7 +177,7 @@ static void test_finalise_zeroing(void)
           "Block buffer is securely wiped to zero upon finalise");
 
     uint8_t in[16] = {0}, out[16];
-    uint16_t out_len = 0;
+    uint16_t out_len = (uint16_t)sizeof(out);
     CeePewErr_t err = crypto_stream_process(&ctx, in, 16, out, &out_len);
     check(err != CEEPEW_OK, "Processing with inactive context fails safely");
 }
