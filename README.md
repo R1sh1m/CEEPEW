@@ -9,7 +9,8 @@
   <img src="https://img.shields.io/badge/Topology-Direct%20P2P%20Mesh-green?style=flat-square" alt="Direct P2P Mesh">
   <img src="https://img.shields.io/badge/Memory-Zero--Heap%20Static%20Region-purple?style=flat-square" alt="Zero-Heap Static Region">
   <img src="https://img.shields.io/badge/Crypto-Ascon--128a%20%7C%20Ed25519%20%7C%20HKDF-blueviolet?style=flat-square" alt="Ascon-128a / Ed25519 / HKDF">
-  <a href="results/registry.json"><img src="https://img.shields.io/badge/Verification-18%2F18%20Suites%20Passing-brightgreen?style=flat-square" alt="18/18 Suites Passing"></a>
+  <a href="results/registry.json"><img src="https://img.shields.io/badge/Host%20Tests-22%2F22%20Passing-brightgreen?style=flat-square" alt="Host Tests: 22/22 Passing"></a>
+  <a href="results/registry.json"><img src="https://img.shields.io/badge/Hardware%20Diag-18%2F18%20Passing-brightgreen?style=flat-square" alt="Hardware Diag: 18/18 Passing"></a>
 </p>
 
 ---
@@ -19,38 +20,38 @@
 
 CEE-PEW (**C**ryptographic **E**nd-to-**E**nd **P**eer-to-peer **E**ncrypted **W**ireless Communicator) is an embedded secure messaging firmware engineered in **C99/FreeRTOS** for resource-constrained microcontrollers (**ESP32 dual-core Xtensa LX6**). Operating over raw **802.11 vendor Action frames via ESP-NOW**, CEE-PEW completely bypasses Wi-Fi access points, cellular towers, and centralized cloud brokers to provide autonomous, air-gapped encrypted communication.
 
-By eliminating dynamic heap allocation (`malloc`/`free`) in favor of a static region bump allocator and a deterministic 16-stage bounded pipeline, CEE-PEW achieves zero heap fragmentation, sub-3 ms over-the-air frame airtimes, and formal fail-closed security. Discovery and pairing are negotiated out-of-band over BLE GATT with 4-character visual PIN commitment before tearing down the Bluetooth stack and handing off to an encrypted ESP-NOW session.
+By eliminating dynamic heap allocation (`malloc`/`free`) in favor of a static region bump allocator and a deterministic 16-stage bounded pipeline, CEE-PEW achieves zero heap fragmentation, sub-3 ms over-the-air frame airtimes, and formal fail-closed security. Discovery and pairing are negotiated out-of-band over BLE GATT with 4-character visual PIN commitment before tearing down the Bluetooth stack and handing off cleanly to an encrypted ESP-NOW session.
 
 <p align="center">
-  <a href="#quickstart"><b>🚀 Quickstart Guide</b></a> &nbsp;•&nbsp;
   <a href="#performance--wire-budget-at-a-glance"><b>⚡ Performance & Wire Budget</b></a> &nbsp;•&nbsp;
   <a href="#system-architecture"><b>🏗️ System Architecture</b></a> &nbsp;•&nbsp;
   <a href="#protocol--packet-dissection"><b>📡 Protocol & Dissection</b></a> &nbsp;•&nbsp;
-  <a href="#documentation-hub"><b>📖 Full Documentation</b></a>
+  <a href="#quickstart"><b>🚀 Quickstart</b></a> &nbsp;•&nbsp;
+  <a href="#documentation-hub"><b>📖 Documentation</b></a>
 </p>
 
 ---
 
 ## Performance & Wire Budget at a Glance
 
-| Metric | Target / Measured Value | Architectural Implementation | Evidence Class |
+| Metric | Target / Capability | Architecture Implementation | Evidence |
 |---|---|---|:---:|
 | **0 Bytes** | **Application Heap Allocation** | 48 KB static bump region pool; zero memory fragmentation | `M-HW` |
 | **249 Bytes** | **Over-the-Air Wire Budget** | Full profile fits strictly within 802.11 Action frame limit (250 B) | `C` |
 | **2.53 ms** | **802.11 MPDU Airtime** | 1 Mbps DSSS airtime for 249 B frame (2.84 ms with hardware ACK) | `C` |
-| **138 B / 105 B**| **Lite Profile Wire Size** | Symmetric streaming (138 B with FEC, 105 B without FEC) | `C` |
+| **138 B / 105 B** | **Lite Profile Wire Size** | Symmetric streaming (138 B with FEC, 105 B without FEC) | `C` |
 | **0 Bytes** | **Cleartext Air Leakage** | 100% payload encrypted with Ascon-128a (Shannon entropy: 7.99 bits/B) | `M-HW` |
 | **100 / 100** | **Replay Vectors Rejected** | 64-bit sliding window with commit-after-authentication rule | `M-HOST` |
 | **22 / 22** | **Host Test Suites Passing** | ASan/UBSan unit suites (Curve25519, Ascon, Ed25519, Salsa20, HMAC, FEC, ARQ) | `M-HOST` |
 | **18 / 18** | **Hardware Diagnostics Passing** | On-chip diagnostic report verifying crypto, timers, memory, and FSM | `M-HW` |
 
-*Evidence classes follow IEEE reproducibility guidelines: `M-HW` (hardware-measured), `M-HOST` (host harness), `C` (exact equation).*
+*Evidence classes follow IEEE reproducibility guidelines: `M-HW` (hardware-measured on ESP32), `M-HOST` (host harness), `C` (exact equation).*
 
 ---
 
 ## Key Capabilities
 
-- **Zero-Heap Memory Architecture**: Replaces the heap with a 48 KB static bump region allocator ([`ceepew_region.h`](components/mem/ceepew_region.h)). Eliminates runtime fragmentation, allocation latency, and out-of-memory crashes.
+- **Zero-Heap Memory Architecture**: Replaces the heap with a 48 KB static bump region allocator ([`ceepew_region.h`](components/mem/ceepew_region.h)). Eliminates runtime fragmentation, allocation latency, and out-of-memory faults.
 - **7-Layer Defense-in-Depth Cryptography**: Incorporates X25519 ECDH (RFC 7748), Ed25519 signatures (RFC 8032), HKDF-SHA256 (RFC 5869), Ascon-128a AEAD (NIST SP 800-232), non-linear digital-sum salt mixing, and 64-bit sliding-window anti-replay.
 - **Hardware-Gated Identity & BLE Pairing**: Ephemeral BLE GATT handshake with mutual PIN commitment (~20.7 bits brute-force resistance against active MITM) before tearing down BLE to hand off cleanly to ESP-NOW.
 - **Forward Error Correction (FEC) & ARQ**: Hamming(15,11) codec with single-bit correction and double-bit error detection coupled to Stop-and-Wait ARQ with exponential backoff.
@@ -67,7 +68,7 @@ By eliminating dynamic heap allocation (`malloc`/`free`) in favor of a static re
 
 The firmware partitions operations across ESP32 cores via FreeRTOS queues:
 - **Core 0 (UI Task)**: Samples 10 kΩ potentiometer (ADC1_CH5 / GPIO33) with moving-average filtering, debounces action (GPIO19) and diagnostic (GPIO5) buttons, and renders UI screens to SSD1306 OLED (GPIO26/27, 400 kHz Fast-Mode I2C).
-- **Core 1 (Session & Crypto Task)**: Manages three-phase pairing FSM (BLE &rarr; ESP-NOW handoff), derives ephemeral keys via HKDF-SHA256, encrypts frames with Ascon-128a, and coordinates channel hopping.
+- **Core 1 (Session & Crypto Task)**: Manages three-phase pairing FSM (BLE to ESP-NOW handoff), derives ephemeral keys via HKDF-SHA256, encrypts frames with Ascon-128a, and coordinates channel hopping.
 - **IPC Safety**: Queues (`g_ui_event_queue`, `g_session_rx_queue`) decouple core operations without shared mutable memory or blocking waits.
 
 ---
@@ -105,7 +106,7 @@ Run the native unit test suite with GCC/Clang AddressSanitizer and UndefinedBeha
 ```bash
 python tools/ceepew_pipeline.py --mode host
 ```
-*Validates 18/18 suites: Ascon-128 KAT, Ed25519, HKDF-SHA256, static Huffman, Hamming(15,11) FEC fault injection, replay window, side-channel timing uniformity, and fail-closed pairing policy.*
+*Validates all 22 unit test suites: Curve25519/X25519 ECDH, Ascon-128a KAT, Ed25519, HKDF-SHA256, HMAC-SHA256, Salsa20, PKCS#7 padding, static Huffman, Hamming(15,11) FEC fault injection, replay window, side-channel timing uniformity, and fail-closed pairing policy.*
 
 ### 2. Verify Protocol Arithmetic & Wire Budgets
 Recompute all wire budgets, airtimes, cycle-to-time formulas, and bounds against `results/registry.json`:
@@ -158,7 +159,7 @@ python tools/ceepew_pipeline.py --mode diag
 ## Verification & Test Integrity
 
 CEE-PEW enforces strict, reproducible verification across every layer of the system:
-- **18 Host C Unit Suites**: Compiled with `-fsanitize=address,undefined` on host toolchains with 100% assertion pass rate.
-- **Hardware Boot Diagnostics**: Automated on-chip self-test verifying AES/Ascon, FSM convergence, key derivation, and low-order point rejection.
+- **22 Host C Unit Suites**: Compiled with `-fsanitize=address,undefined` on host toolchains with 100% assertion pass rate.
+- **Hardware Boot Diagnostics**: Automated on-chip self-test verifying 18 subsystems including AES/Ascon, FSM convergence, key derivation, and low-order point rejection.
 - **Over-the-Air PCAP Analysis**: Promiscuous packet captures analyzed for exact wire byte budgets, Shannon entropy ($7.99\text{ bits/B}$), and cleartext absence.
 - **Automated Signature Analysis**: Device logs ingested via `ceepew_log_pipeline.py` to continuously track hardware regressions against known failure signatures.
