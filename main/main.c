@@ -132,8 +132,13 @@ void app_main(void){
     }
 
 
+    err = hal_radio_init();
+    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "hal_radio_init failed: %d", (int)err); return; }
+
 #ifdef CONFIG_BT_ENABLED
-    /* Release Classic BT memory — BLE only */
+    /* Release Classic BT memory — BLE only. Must run AFTER hal_radio_init()
+     * because releasing BT memory before WiFi init causes net80211 OS adapter
+     * version mismatch (Version 9 expected, got 8) at esp_wifi_init(). */
     esp_err_t bt_mem_err = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
     if (bt_mem_err != ESP_OK) {
         ESP_LOGW(TAG, "esp_bt_controller_mem_release: %d (%s) — continuing",
@@ -142,9 +147,6 @@ void app_main(void){
         ESP_LOGI(TAG, "Classic BT memory released to heap — BLE-only mode");
     }
 #endif
-
-    err = hal_radio_init();
-    if (err != CEEPEW_OK) { ESP_LOGE(TAG, "hal_radio_init failed: %d", (int)err); return; }
 
     /* E5 sync-pulse instrumentation: configure the shared GPIO14 line and its
      * falling-edge ISR BEFORE the radio can transmit anything. Without this the

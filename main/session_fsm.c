@@ -493,6 +493,7 @@ CeePewErr_t session_phase2_derive_key(void){
     uint8_t commitment[CEEPEW_COMMITMENT_BYTES] = {0};
     uint8_t hkdf_info[96U] = {0};
     uint8_t hkdf_output[64] = {0};
+    uint8_t ikm_input[64U] = {0};
 
     /* Step 1: Digital sum preprocessing of session code */
     digital_sum_mix(s_session.session_code, 32U, ds_mix);
@@ -560,7 +561,9 @@ CeePewErr_t session_phase2_derive_key(void){
      * would compute a different HKDF output and crypto_box would fail to
      * decrypt. (The earlier `fresh_salt` mixing was incorrect — it made
      * the IKM diverge even though the commitment match succeeded.) */
-    err = crypto_hkdf_derive(s_session.session_code, 32U,
+    memcpy(ikm_input, s_session.session_code, 32U);
+    memcpy(ikm_input + 32U, g_crypto_ctx.box_shared_secret, 32U);
+    err = crypto_hkdf_derive(ikm_input, 64U,
                              hkdf_salt, 32U,
                              hkdf_info, hkdf_info_len, hkdf_output, 64U);
     if (err != CEEPEW_OK) { goto error_cleanup; }
@@ -634,6 +637,7 @@ CeePewErr_t session_phase2_derive_key(void){
     /* Success: secure zero all sensitive intermediates */
     ceepew_secure_zero(hkdf_output, sizeof(hkdf_output));
     ceepew_secure_zero(hkdf_salt, sizeof(hkdf_salt));
+    ceepew_secure_zero(ikm_input, sizeof(ikm_input));
     ceepew_secure_zero(salt_input, sizeof(salt_input));
     ceepew_secure_zero(ds_mix, sizeof(ds_mix));
     ceepew_secure_zero(commitment, sizeof(commitment));

@@ -255,6 +255,19 @@ void task_ui_run(void *pvParameters)
             }
         }
 
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+        /* Stack high-water-mark sampling (dev builds only). Logs every ~30 s. */
+        {
+            static uint32_t s_ui_hwm_tick = 0U;
+            if (++s_ui_hwm_tick >= 1000U) {
+                s_ui_hwm_tick = 0U;
+                UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
+                ESP_LOGI("UI", "[STACK-HWM] ui_task free=%u B (min observed)",
+                         (unsigned)hwm);
+            }
+        }
+#endif
+
         /* ── 6. Sleep until next 30 ms tick ───────────────────────── */
         vTaskDelayUntil(&last_wake, loop_period);
     }

@@ -2913,6 +2913,21 @@ void task_session_run(void *pvParameters) {
       /* Queue receive timeout (1000ms) — this is normal, no error */
       s_stats.queue_timeouts++;
 
+#if CONFIG_CEEPEW_DEVELOPMENT_MODE
+      /* Stack high-water-mark sampling (dev builds only). Logs every ~30 s
+       * so the "isolated stack overflow marker" note can be closed with
+       * evidence instead of hypothesis. */
+      {
+        static uint32_t s_hwm_tick = 0U;
+        if (++s_hwm_tick >= 300U) {
+          s_hwm_tick = 0U;
+          UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
+          ESP_LOGI(TAG, "[STACK-HWM] session_task free=%u B (min observed)",
+                   (unsigned)hwm);
+        }
+      }
+#endif
+
       /* Phase 2.C1: snapshot current_state once for the periodic
        * maintenance path. The reads at lines below (KEYDER check,
        * pair_err handler) all observe the same logical value within

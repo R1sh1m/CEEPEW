@@ -302,7 +302,7 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 /* -------------------------------------------------------------------------- */
 /* Region Allocator                                                            */
 /* -------------------------------------------------------------------------- */
-#define CEEPEW_REGION_POOL_BYTES         (48U * 1024U)
+#define CEEPEW_REGION_POOL_BYTES         (44U * 1024U)
 #define CEEPEW_REGION_ALIGN              8U
 #define CEEPEW_REGION_MAX_ALLOCS         256U
 

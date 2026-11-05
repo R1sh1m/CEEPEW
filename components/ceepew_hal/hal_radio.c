@@ -40,6 +40,7 @@
 
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_bt.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_now.h"
@@ -458,6 +459,7 @@ static void radio_cleanup(void){
 
 static CeePewErr_t radio_wifi_start(void){
     CEEPEW_ASSERT(CEEPEW_ESPNOW_CHANNEL >= 1U && CEEPEW_ESPNOW_CHANNEL <= 13U, CEEPEW_ERR_PARAM);
+
     esp_err_t rc = nvs_flash_init();
     if (rc == ESP_ERR_NVS_NO_FREE_PAGES || rc == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         rc = nvs_flash_erase();
@@ -465,12 +467,6 @@ static CeePewErr_t radio_wifi_start(void){
         rc = nvs_flash_init();
     }
     if (rc != ESP_OK) { return CEEPEW_ERR_HW; }
-
-    rc = esp_netif_init();
-    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) { return CEEPEW_ERR_HW; }
-
-    rc = esp_event_loop_create_default();
-    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) { return CEEPEW_ERR_HW; }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     rc = esp_wifi_init(&cfg);

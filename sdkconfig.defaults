@@ -31,6 +31,8 @@ CONFIG_BT_GATTS_ENABLE=y
 CONFIG_BT_GATTC_ENABLE=y
 CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+# Disable BT controller auto-init at boot — we init manually after WiFi
+CONFIG_BT_CONTROLLER_ENABLED=n
 
 # On-node promiscuous OTA capture (Phase 3 debug aid, default off).
 # When enabled, the session task starts transport_capture after BLE teardown.

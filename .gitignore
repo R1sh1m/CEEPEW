@@ -16,6 +16,14 @@ sdkconfig.prod_test
 keys/
 *.p12
 
+# API keys, secrets & credentials (defense in depth)
+secrets*
+*secret*
+*apikey*
+*api_key*
+credentials.*
+*.credentials
+
 # Managed components & lockfiles
 managed_components/
 dependencies.lock
@@ -24,6 +32,8 @@ dependencies.lock
 .env
 .env.*
 *.env
+.env.local
+.env.*.local
 __pycache__/
 *.pyc
 venv/
@@ -111,4 +121,8 @@ tools/capture/captures/
 **/*benchmark*.*
 !assets/**
 .slim/deepwork/
+gate*.*
 
+# Root-level scratch & analysis artifacts (keep tools/*.py)
+/*.py
+/*.txt

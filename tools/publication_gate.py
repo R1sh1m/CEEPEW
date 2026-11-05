@@ -35,7 +35,13 @@ PAPERQA_HOME = Path(
     )
 )
 def _bootstrap() -> None:
-    """Make the shared package importable from any interpreter."""
+    """Make the shared package importable from any interpreter and configure SSL CA."""
+    try:
+        import certifi
+        if "SSL_CERT_FILE" not in os.environ:
+            os.environ["SSL_CERT_FILE"] = certifi.where()
+    except Exception:
+        pass
     try:
         import paperqa  # noqa: F401 # type: ignore
         return
@@ -68,6 +74,9 @@ def build_config(config_path: str | Path) -> _config.Config:
     cfg = _config.load(config_path, root=ROOT)
     cfg.banned_profiles = ["ceepew"]
     cfg.corpus = cfg.corpus or "docs/paper"
+    cfg.mailto = os.environ.get("OPENALEX_MAILTO", os.environ.get("CROSSREF_MAILTO", "ceepew-paper@example.com"))
+    if "OPENALEX_API_KEY" in os.environ:
+        cfg.openalex_api_key = os.environ["OPENALEX_API_KEY"]
     # papers.json predates the package and carries no artifact_dir key, so pin
     # the project's own location instead of inheriting the package default.
     cfg.artifact_dir = DEFAULT_ARTIFACT_DIR
@@ -78,6 +87,8 @@ def build_config(config_path: str | Path) -> _config.Config:
     cfg.citations = {
         "grey_keys": sorted(_citations.NO_CROSSREF_EXPECTED),
         "watchlist": {key: note for key, note in _citations.WATCHLIST.values()},
+        "delay": 0.25,
+        "timeout": 8.0,
     }
     return cfg
 
