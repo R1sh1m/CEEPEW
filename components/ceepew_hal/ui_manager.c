@@ -3407,10 +3407,13 @@ CeePewErr_t ui_manager_update(void)
                 s_pdeg_entry_ms = now_ms;
                 ESP_LOGW("headless", "PAIR_DEGRADED entered at %lu", now_ms);
             } else if ((now_ms - s_pdeg_entry_ms) >= 1000U) {
-                /* Headless: auto-confirm degraded mode after 1s */;
-                ESP_LOGW("headless", "PAIR_DEGRADED auto-confirming at %lu", now_ms);
+                /* Headless: auto-restart discovery instead of degraded mode.
+                 * Degraded mode requires explicit user confirmation; in headless
+                 * mode we retry pairing naturally rather than entering the
+                 * terminal IDENTITY-DEGRADED state. */
+                ESP_LOGW("headless", "PAIR_DEGRADED auto-restarting discovery at %lu", now_ms);
                 s_pdeg_entry_ms = 0U;
-                session_set_identity_degraded();
+                (void)ui_restart_discovery_from_pairing();
             }
         } else {
             if ((now_ms % 5000U) < 50U) {

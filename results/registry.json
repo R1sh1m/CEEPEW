@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-11-03T01:24:56Z",
+  "updated_utc": "2026-11-09T12:53:23Z",
   "project": "CEE-PEW",
   "conference": "IEEE ICITIIT 2027",
   "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
@@ -1397,6 +1397,22 @@
         "idf_version": "v6.0.2-dirty",
         "note": "Build succeeded 2026-11-06, flashed to COM3, boots successfully. Lite profile omits outer XSalsa20+HMAC crypto_box and per-fragment Ed25519 signatures, leaving Ascon-128 AEAD as sole confidentiality/integrity layer. Wire size: 105 B without FEC, 138 B with FEC (vs. Full 191 B / 249 B). Throughput measurement pending (requires 2-board OTA or bench58 setup)."
       }
+    },
+    {
+      "id": "X6-FEC-ABLATION-DELIVERY",
+      "description": "FEC ablation delivery ratio",
+      "value": "98.22",
+      "unit": "%",
+      "class": "M-HW",
+      "n": 338,
+      "source": {
+        "script": "tools/campaign/run_x8_delivery.py",
+        "reference": "Section VII.A"
+      },
+      "manifest": "X6_fec_ablation_20261109",
+      "manifest_path": "data/manifests/X6_fec_ablation_20261109.json",
+      "manifest_utc_start": "2026-11-09T12:52:41Z",
+      "manifest_utc_end": "2026-11-09T12:52:41Z"
     }
   ]
 }

@@ -1,0 +1,150 @@
+{
+  "run_id": "X3_replay_reject_20261109",
+  "window_seconds": 2.0,
+  "clock_used": "device",
+  "replay_injections": {
+    "total": 2,
+    "replay_armed": 2,
+    "by_device": {
+      "DEVICE_A": {
+        "count": 1,
+        "payload_lens": [
+          181
+        ]
+      },
+      "DEVICE_B": {
+        "count": 1,
+        "payload_lens": [
+          181
+        ]
+      }
+    }
+  },
+  "rejections": {
+    "total": 9,
+    "by_kind": {
+      "esl": 5,
+      "ascon": 2,
+      "pipeline": 2
+    },
+    "by_device_kind": {
+      "DEVICE_A": {
+        "esl": 3,
+        "ascon": 2,
+        "pipeline": 2
+      },
+      "DEVICE_B": {
+        "esl": 2
+      }
+    },
+    "err17_total": 0,
+    "err17_by_device": {},
+    "err6_total": 2,
+    "err6_by_device": {
+      "DEVICE_A": 1,
+      "DEVICE_B": 1
+    }
+  },
+  "matching": {
+    "matched_count": 2,
+    "unmatched_count": 0,
+    "matched_by_err": {
+      "6": 2
+    },
+    "matched_err17_count": 0,
+    "matched_err3_count": 0,
+    "matched_other_count": 2,
+    "median_delta_us": 350000.0,
+    "max_abs_delta_us": 600000,
+    "median_delta_host_s": 0.35000000000002274
+  },
+  "unexplained_rejections": {
+    "count": 7,
+    "by_kind": {
+      "esl": 3,
+      "ascon": 2,
+      "pipeline": 2
+    },
+    "by_err": {
+      "3": 3,
+      "5": 4
+    }
+  },
+  "match_details": [
+    {
+      "replay_payload_len": 181,
+      "replay_device": "DEVICE_A",
+      "replay_host_ts": 299.4,
+      "replay_device_ts_us": 299190,
+      "reject_kind": "esl",
+      "reject_device": "DEVICE_B",
+      "reject_err": 6,
+      "reject_layer": "ESL sliding-window replay check",
+      "delta_t_us": 600000,
+      "delta_t_host_s": 0.6000000000000227
+    },
+    {
+      "replay_payload_len": 181,
+      "replay_device": "DEVICE_B",
+      "replay_host_ts": 299.9,
+      "replay_device_ts_us": 299762,
+      "reject_kind": "esl",
+      "reject_device": "DEVICE_A",
+      "reject_err": 6,
+      "reject_layer": "ESL sliding-window replay check",
+      "delta_t_us": 100000,
+      "delta_t_host_s": 0.10000000000002274
+    }
+  ],
+  "unexplained_details": [
+    {
+      "device": "DEVICE_A",
+      "kind": "esl",
+      "err": 3,
+      "host_ts": 268.2,
+      "device_ts_us": 268092
+    },
+    {
+      "device": "DEVICE_B",
+      "kind": "esl",
+      "err": 3,
+      "host_ts": 268.6,
+      "device_ts_us": 268361
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "ascon",
+      "err": 5,
+      "host_ts": 276.5,
+      "device_ts_us": 276007
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 276.5,
+      "device_ts_us": 276015
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "ascon",
+      "err": 5,
+      "host_ts": 279.7,
+      "device_ts_us": 279537
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "pipeline",
+      "err": 5,
+      "host_ts": 279.7,
+      "device_ts_us": 279546
+    },
+    {
+      "device": "DEVICE_A",
+      "kind": "esl",
+      "err": 3,
+      "host_ts": 281.3,
+      "device_ts_us": 281193
+    }
+  ]
+}

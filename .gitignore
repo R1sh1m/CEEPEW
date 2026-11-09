@@ -145,6 +145,7 @@ runs/
 .clang-tidy
 .clangd
 
-# Local ESP-IDF runtime config (sdkconfig.defaults is the committed template)
-sdkconfig.production
+# Local ESP-IDF runtime config (sdkconfig.defaults is the committed template;
+# sdkconfig.production is tracked because CI build-production references it)
+# sdkconfig.production
 

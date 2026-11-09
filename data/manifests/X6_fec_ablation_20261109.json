@@ -1,0 +1,69 @@
+{
+  "artifacts": [
+    {
+      "bytes": 5110947,
+      "exists": true,
+      "path": "data/raw/X6_fec_ablation_20261109/capture_fecon.log",
+      "sha256": "123420441a3540d915404d847916924cfa9001f7f214f2ce2c2c959fa88748f2"
+    }
+  ],
+  "boards": [
+    {
+      "ble_mac": "94",
+      "port": "COM3",
+      "role": "Device A",
+      "wifi_mac": "8c"
+    },
+    {
+      "ble_mac": "c3",
+      "port": "COM6",
+      "role": "Device B",
+      "wifi_mac": "1c"
+    }
+  ],
+  "build": {
+    "build_dir": "",
+    "firmware": {
+      "bytes": 1419344,
+      "exists": true,
+      "path": "build_fec2/ceepew.bin",
+      "sha256": "7df199f0cd084052ee42e4f20d0c84feb746f2f437a1439c3e0836b1ad7b6e4c"
+    }
+  },
+  "campaign_id": "X6_fec_ablation_20261109",
+  "git": {
+    "branch": "main",
+    "dirty": true,
+    "dirty_paths": [
+      "M components/ceepew_hal/ui_manager.c",
+      " M data/derived/replay_reject.md",
+      "?? data/derived/Lite_delivery.json",
+      "?? data/derived/Lite_timing.json",
+      "?? data/derived/X3_replay.json",
+      "?? data/derived/X6_fec_ablation.json",
+      "?? data/raw/Lite_throughput_20261109/",
+      "?? data/raw/X3_replay_reject_20261109/",
+      "?? data/raw/X6_fec_ablation_20261109/"
+    ],
+    "sha": "b8a47f90b085d1e87a423e198cfb6cd507e51334"
+  },
+  "notes": "FEC ablation arm: Hamming(15,11) with headless auto-restart fix; 480s capture, 338 messages initiated, 332 delivered, 98.22% delivery ratio",
+  "runner": {
+    "path": "tools/campaign/run_x8_delivery.py",
+    "sha256": "a9cdbbcde6f62616017f951162adce89364b70b74587cc074f7b072736ac300a"
+  },
+  "schema": "ceepew-campaign-manifest/1",
+  "sdkconfig": {
+    "defaults_sha256": "77773668b694bc3c3a97ee8bd8ab67f83b480a47d9e85d84f56cbbc4f37a380e",
+    "path": "sdkconfig",
+    "sha256": "0f633072f8380c85d2ac852612bd0fc2daa2efa82e7c50c06e8d803563262dbb"
+  },
+  "toolchain": {
+    "idf_path": "C:\\esp\\v6.1\\esp-idf",
+    "idf_version": "git:fff9895c82d7",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.10"
+  },
+  "utc_end": "2026-11-09T12:52:41Z",
+  "utc_start": "2026-11-09T12:52:41Z"
+}
