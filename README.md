@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Memory-Zero--Heap%20Static%20Region-purple?style=flat-square" alt="Zero-Heap Static Region">
   <img src="https://img.shields.io/badge/Crypto-Ascon--128%20v1.2%20%7C%20Ed25519%20%7C%20HKDF-blueviolet?style=flat-square" alt="Ascon-128 v1.2 / Ed25519 / HKDF">
   <a href="results/registry.json"><img src="https://img.shields.io/badge/Host%20Tests-22%2F22%20Passing-brightgreen?style=flat-square" alt="Host Tests: 22/22 Passing"></a>
-  <a href="results/registry.json"><img src="https://img.shields.io/badge/Hardware%20Diag-14%2F14%20Passing-brightgreen?style=flat-square" alt="Hardware Diag: 14/14 Passing"></a>
+  <a href="results/registry.json"><img src="https://img.shields.io/badge/Hardware%20Diag-18%2F18%20Passing-brightgreen?style=flat-square" alt="Hardware Diag: 18/18 Passing"></a>
 </p>
 
 ---
@@ -135,7 +135,7 @@ python tools/ceepew_pipeline.py --mode pairing --port1 COM5 --port2 COM6
 ```
 
 ### 5. On-Device Boot Diagnostics (Single Device)
-Run the automated 14-subsystem on-device boot self-test:
+Run the automated 18-subsystem on-device boot self-test:
 ```bash
 python tools/ceepew_pipeline.py --mode diag
 ```
@@ -181,7 +181,7 @@ Sniffer component: [`components/sniffer/`](components/sniffer/) (library `sniffe
 
 CEE-PEW enforces strict, reproducible verification across every layer of the system:
 - **22 Host C Unit Suites**: Compiled with `-fsanitize=address,undefined` on host toolchains with 100% assertion pass rate.
-- **Hardware Boot Diagnostics**: Automated on-chip self-test verifying 14 subsystems including AES/Ascon, FSM convergence, key derivation, and low-order point rejection.
+- **Hardware Boot Diagnostics**: Automated on-chip self-test verifying 18 subsystems including AES/Ascon, FSM convergence, key derivation, and low-order point rejection.
 - **Over-the-Air PCAP Analysis**: Promiscuous packet captures analyzed for exact wire byte budgets, Shannon entropy ($7.99\text{ bits/B}$), and cleartext absence.
 - **Automated Signature Analysis**: Device logs ingested via `ceepew_log_pipeline.py` to continuously track hardware regressions against known failure signatures.
 
