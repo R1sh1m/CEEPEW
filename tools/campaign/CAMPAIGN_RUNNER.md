@@ -13,10 +13,10 @@ foreach ($b in @("build_bench3", "build_fec2", "build_lite2", "build_prod")) {
     if (Test-Path "$b/ceepew.bin") { Write-Host "  OK: $b/ceepew.bin" }
     else { Write-Host "  MISSING: $b/ceepew.bin" }
 }
-if (Test-Path "tools/capture/sniffer_fw/build/ceepew_sniffer.bin") {
-    Write-Host "  OK: tools/capture/sniffer_fw/build/ceepew_sniffer.bin"
+if (Test-Path "build_sniffer/ceepew_sniffer.bin") {
+    Write-Host "  OK: build_sniffer/ceepew_sniffer.bin"
 } else {
-    Write-Host "  MISSING: tools/capture/sniffer_fw/build/ceepew_sniffer.bin"
+    Write-Host "  MISSING: build_sniffer/ceepew_sniffer.bin"
 }
 
 # Step 2: List available ports
@@ -30,7 +30,7 @@ Write-Host "=== Flash commands (run manually) ==="
 Write-Host "  Bench (FEC off): idf.py -B build_bench3 -p COM3 flash; idf.py -B build_bench3 -p COM4 flash"
 Write-Host "  FEC on:          idf.py -B build_fec2 -p COM3 flash; idf.py -B build_fec2 -p COM4 flash"
 Write-Host "  Lite:            idf.py -B build_lite2 -p COM3 flash; idf.py -B build_lite2 -p COM4 flash"
-Write-Host "  Sniffer:         idf.py -C tools/capture/sniffer_fw -p COM6 flash"
+Write-Host "  Sniffer:         idf.py -B build_sniffer -p COM6 flash  (app: components/sniffer/sniffer_app.c)"
 
 # Step 4: Capture commands
 Write-Host ""

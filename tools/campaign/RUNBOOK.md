@@ -182,7 +182,7 @@ the session is over; the analysis needs the complete file, and a half-written
 log produces a plausible but wrong interval.
 
 #### Wireshark PCAP & Figure 2 Screenshot Generation (X10 & X7)
-Campaigns X10 and X7 use the dedicated sniffer on `COM6` (`tools/capture/sniffer_fw/build/ceepew_sniffer.bin`) alongside `COM3` and `COM4`:
+Campaigns X10 and X7 use the dedicated sniffer on `COM6` (`build_sniffer/ceepew_sniffer.bin`, app: `components/sniffer/sniffer_app.c`) alongside `COM3` and `COM4`:
 1. **Capture traffic concurrently:**
    ```powershell
    # In terminal 1 (DUTs):
