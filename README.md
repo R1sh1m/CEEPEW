@@ -140,6 +140,27 @@ Run the automated 14-subsystem on-device boot self-test:
 python tools/ceepew_pipeline.py --mode diag
 ```
 
+### 6. OTA Sniffer Board (3rd ESP32 on COM6)
+Build, flash, and use the dedicated promiscuous sniffer for OTA packet capture:
+
+```powershell
+# Build sniffer firmware (separate build dir, does not collide with DUT builds)
+idf.py -B build_sniffer build
+
+# Flash to sniffer board (COM6)
+idf.py -B build_sniffer -p COM6 flash
+
+# Capture sniffer output while DUTs exchange traffic
+python tools/ceepew_monitor.py --port COM6 --duration 900 --log data/raw/<run>/sniffer_com6.log
+
+# Convert UART hex dump to Wireshark PCAP
+python tools/capture/serial_to_pcap.py --radiotap data/raw/<run>/sniffer_com6.log `
+  --out data/raw/<run>/<run>_sniffer.pcap
+```
+
+Full capture plan and hardware notes: [`tools/capture/ota_sniffer_plan.md`](tools/capture/ota_sniffer_plan.md).
+Sniffer component: [`components/sniffer/`](components/sniffer/) (library `sniffer.c`/`sniffer.h` + example apps `sniffer_app.c` and `sniffer_minimal.c`).
+
 ---
 
 ## Documentation Hub

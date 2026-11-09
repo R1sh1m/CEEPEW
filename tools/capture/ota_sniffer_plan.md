@@ -1,9 +1,9 @@
-# OTA capture scaffold — 3rd-ESP32 promiscuous sniffer (docs only)
+# OTA capture scaffold — 3rd-ESP32 promiscuous sniffer
 
-> Status: **plan / scaffold**. No firmware in this directory. Any future
-> sniffer firmware lives under a new `components/` or standalone app and is
-> **not** part of this change. This document records the agreed capture plan
-> so the workflow manager can schedule the firmware + bench work.
+> Status: **implemented**. Sniffer firmware lives under `components/sniffer/`
+> (library `sniffer.c`/`sniffer.h` + example apps `sniffer_app.c` and
+> `sniffer_minimal.c`). This document records the capture plan and how to
+> build, flash, and use the sniffer board for OTA experiments.
 
 ## 1. Goal
 
@@ -123,3 +123,72 @@ are treated as verified:
   plus a one-line `.txt` sidecar (commit hash, IDF version, channel, distance).
 - Validation (workflow manager): `tshark -r <file> -T fields ...` smoke-reads
   the columns in §3; Fig 3b/3c recompute script consumes `fig3_recompute.csv`.
+
+---
+
+## 7. Building, Flashing & Using the Sniffer Board
+
+The sniffer is a 3rd ESP32 (dedicated capture board, typically on `COM6`) that
+runs in promiscuous `WIFI_MODE_NULL` and streams captured 802.11 frames over
+UART to the host.
+
+### 7.1 Build
+
+From the repository root, build the sniffer app into a separate build
+directory so it does not collide with the DUT firmware builds:
+
+```powershell
+# Full-featured sniffer (button stop on GPIO0, UART hex output):
+idf.py -B build_sniffer -D COMPONENTS="sniffer" build
+
+# Or build from the components/sniffer directory directly:
+idf.py -B build_sniffer build
+```
+
+The component registers `sniffer.c` only. The example app mains
+(`sniffer_app.c`, `sniffer_minimal.c`) are reference implementations — copy the
+desired one into your project's `main/` before building, or point `EXTRA_COMPONENT_DIRS`
+at `components/sniffer` and provide your own `app_main`.
+
+### 7.2 Flash
+
+Flash to the sniffer board (default `COM6`):
+
+```powershell
+idf.py -B build_sniffer -p COM6 flash
+```
+
+### 7.3 Capture
+
+Run the serial monitor on the sniffer port while the two DUTs exchange traffic:
+
+```powershell
+# Capture sniffer output for 900 s
+python tools/ceepew_monitor.py --port COM6 --duration 900 --log data/raw/<run>/sniffer_com6.log
+```
+
+### 7.4 Convert to PCAP
+
+Convert the UART hex dump to a Wireshark-readable PCAP:
+
+```powershell
+python tools/capture/serial_to_pcap.py --radiotap data/raw/<run>/sniffer_com6.log `
+  --out data/raw/<run>/<run>_sniffer.pcap
+```
+
+Open the PCAP in Wireshark with the CEE-PEW Lua dissector:
+
+```powershell
+& "C:\Program Files\Wireshark\Wireshark.exe" -r data\raw\<run>\<run>_sniffer.pcap `
+  -X lua_script:tools\capture\wireshark\ceepew_espnow.lua
+```
+
+### 7.5 Sniffer board hardware notes
+
+- **Port**: `COM6` (3rd ESP32 DevKit v1, separate from DUTs on `COM3`/`COM4`)
+- **MAC**: `58:2a:bd:d8:80:38` (record this in the run sidecar)
+- **Channel**: fixed single channel per run (default 1 or 6). No hopping during
+  a timed run. Record the channel in the capture filename (`ch1_...pcap`).
+- **Baud**: 921600 (matches `sniffer_app.c` default UART config)
+- **Filter**: ESP-NOW action frames only (OUI `18:FE:34`) by default; set
+  `filter_espnow_only = false` to capture all 802.11 management/data/control.
