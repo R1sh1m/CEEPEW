@@ -16,7 +16,7 @@ jobs:
   stub-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
       - name: Find Stub markers
         run: |
           echo "Scanning repository for Stub markers..."
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2.2.2
         with:
           submodules: 'recursive'
       - name: Build (debug / diagnostic mode)
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
         with:
           submodules: 'recursive'
       - name: Build (production)
@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
       - name: Install dependencies
         shell: bash
         run: |
@@ -104,7 +104,7 @@ jobs:
       ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:detect_leaks=1"
       UBSAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -121,7 +121,7 @@ jobs:
   static-analysis:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
       - name: Install tools and dependencies
         run: |
           sudo apt-get update
