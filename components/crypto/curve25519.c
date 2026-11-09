@@ -10,13 +10,19 @@
  *
  * CORRECTNESS: inv25519 uses the exact addition chain from the TweetNaCl
  * reference for p = 2^255 - 19. The exponent is p-2 = 2^255 - 21.
- * Incorrect exponents produce wrong field inversions → wrong shared secrets.
+ * Incorrect exponents produce wrong field inversions -> wrong shared secrets.
  */
 
 #include "curve25519.h"
 #include "ceepew_assert.h"
-#include <string.h>
 #include <stdint.h>
+#ifdef ESP_PLATFORM
+#include <esp_task_wdt.h>
+#endif
+
+#ifdef ESP_PLATFORM
+#include "freertos/task.h"
+#endif
 
 /* ── Field arithmetic ──────────────────────────────────────────────── */
 
@@ -51,7 +57,7 @@ static void fe_car(fe o){
  * Constant-time: no branches on b. */
 static void fe_cswap(fe p, fe q, int b)
 {
-    fe_limb t, mask = -(fe_limb)b;   /* b=1 → mask=0xFFFF…, b=0 → mask=0 */
+    fe_limb t, mask = -(fe_limb)b;   /* b=1 -> mask=0xFFFF…, b=0 -> mask=0 */
     for (int i = 0; i < 16; i++) {
         t    = mask & (p[i] ^ q[i]);
         p[i] ^= t;
@@ -74,7 +80,7 @@ static void fe_mul(fe o, const fe a, const fe b){
             t[i + j] += a[i] * b[j];
         }
     }
-    /* Reduce: t[16..30] contribute via 38 × t[16+k] → t[k] */
+    /* Reduce: t[16..30] contribute via 38 × t[16+k] -> t[k] */
     for (int i = 0; i < 15; i++) {
         t[i] += 38 * t[i + 16];
     }
@@ -134,7 +140,7 @@ static void fe_inv(fe o, const fe z){
     /* z2 = z^2 */
     fe_sq(z2, z);
     /* z9 = z^9 */
-    fe_sq(t, z2);  fe_sq(t, t);  fe_sq(t, t);  /* t = z^(2^4) → reuse */
+    fe_sq(t, z2);  fe_sq(t, t);  fe_sq(t, t);  /* t = z^(2^4) -> reuse */
     fe_sq(t, z2);
     fe_sq(t, t);
     fe_mul(z9, t, z);                            /* z9 = z^9 */
@@ -233,6 +239,13 @@ int curve25519_scalarmult(uint8_t q[32], const uint8_t scalar[32], const uint8_t
         fe_mul(x2, z3, tmp1);
         fe_mul(z3, x3, x1);
         fe_sq(x3, tmp0);
+        /* Feed watchdog + yield every 50 iterations to avoid task watchdog timeout */
+        if ((254 - pos) % 50 == 0) {
+#ifdef ESP_PLATFORM
+            esp_task_wdt_reset();
+            vTaskDelay(0);
+#endif
+        }
     }
 
     fe_cswap(x2, x3, swap);

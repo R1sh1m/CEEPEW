@@ -182,7 +182,7 @@ static bool handoff_test_mismatch_does_not_promote(void)
 }
 
 /*
- * Test 4: No pending peer commitment → the call is a no-op and returns
+ * Test 4: No pending peer commitment -> the call is a no-op and returns
  * CEEPEW_OK.  This is the expected state between beacon exchanges.
  */
 static bool handoff_test_no_pending_returns_ok(void)

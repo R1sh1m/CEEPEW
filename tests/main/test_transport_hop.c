@@ -27,20 +27,20 @@ static uint32_t s_hop_tests_failed = 0U;
 
 static void test_hop_assert_eq_u8(uint8_t expected, uint8_t actual, const char *name) {
     if (expected == actual) {
-        ESP_LOGI(TAG, "  ✓ %s: %u", name, (unsigned)actual);
+        ESP_LOGI(TAG, "  PASS %s: %u", name, (unsigned)actual);
         s_hop_tests_passed++;
     } else {
-        ESP_LOGE(TAG, "  ✗ %s: expected %u, got %u", name, (unsigned)expected, (unsigned)actual);
+        ESP_LOGE(TAG, "  FAIL %s: expected %u, got %u", name, (unsigned)expected, (unsigned)actual);
         s_hop_tests_failed++;
     }
 }
 
 static void test_hop_assert_true(bool condition, const char *name) {
     if (condition) {
-        ESP_LOGI(TAG, "  ✓ %s", name);
+        ESP_LOGI(TAG, "  PASS %s", name);
         s_hop_tests_passed++;
     } else {
-        ESP_LOGE(TAG, "  ✗ %s", name);
+        ESP_LOGE(TAG, "  FAIL %s", name);
         s_hop_tests_failed++;
     }
 }
@@ -91,7 +91,7 @@ static bool is_valid_channel(uint8_t channel) {
 
 static void test_channel_hop_deterministic(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 1: Deterministic Hopping ═══");
+    ESP_LOGI(TAG, "--- Test 1: Deterministic Hopping ---");
     
     /* Fixed test key and session ID */
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
@@ -141,7 +141,7 @@ static void test_channel_hop_deterministic(void) {
         }
     }
     s_hop_tests_passed++;
-    ESP_LOGI(TAG, "  ✓ All 100 generated channels valid (range [1,9])");
+    ESP_LOGI(TAG, "  PASS All 100 generated channels valid (range [1,9])");
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -150,7 +150,7 @@ static void test_channel_hop_deterministic(void) {
 
 static void test_channel_hop_seed_uniqueness(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 2: PRG Seed Uniqueness (Different Session IDs) ═══");
+    ESP_LOGI(TAG, "--- Test 2: PRG Seed Uniqueness (Different Session IDs) ---");
     
     /* Same key, different nonce patterns */
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
@@ -201,7 +201,7 @@ static void test_channel_hop_seed_uniqueness(void) {
 
 static void test_channel_hop_all_channels_present(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 3: All 9 Channels Present in 512 Hops ═══");
+    ESP_LOGI(TAG, "--- Test 3: All 9 Channels Present in 512 Hops ---");
     
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
     for (uint8_t i = 0U; i < CEEPEW_SESSION_KEY_BYTES; i++) {
@@ -236,7 +236,7 @@ static void test_channel_hop_all_channels_present(void) {
             ESP_LOGE(TAG, "  ✗ Channel %u missing from 512-packet sequence", (unsigned)ch);
             all_present = false;
         } else if (channel_counts[ch] < 10U) {
-            ESP_LOGW(TAG, "  ⚠ Channel %u appears only %lu times (expected ≥10)", 
+            ESP_LOGW(TAG, "  [WARN] Channel %u appears only %lu times (expected >=10)", 
                      (unsigned)ch, channel_counts[ch]);
         }
         total_coverage += channel_counts[ch];
@@ -253,7 +253,7 @@ static void test_channel_hop_all_channels_present(void) {
 
 static void test_channel_hop_no_consecutive_duplicates(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 4: No Consecutive Duplicates (Fisher-Yates Quality) ═══");
+    ESP_LOGI(TAG, "--- Test 4: No Consecutive Duplicates (Fisher-Yates Quality) ---");
     
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
     for (uint8_t i = 0U; i < CEEPEW_SESSION_KEY_BYTES; i++) {
@@ -297,7 +297,7 @@ static void test_channel_hop_no_consecutive_duplicates(void) {
 
 static void test_channel_hop_counter_integration(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 5: Hop Counter Integration ═══");
+    ESP_LOGI(TAG, "--- Test 5: Hop Counter Integration ---");
     
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
     for (uint8_t i = 0U; i < CEEPEW_SESSION_KEY_BYTES; i++) {
@@ -359,7 +359,7 @@ static void test_channel_hop_counter_integration(void) {
     }
     
     ESP_LOGI(TAG, "  Unique channels in sample: %u / %u", (unsigned)unique_count, (unsigned)test_count);
-    test_hop_assert_true(unique_count >= 3U, "Hop counter affects channel selection (≥3 unique in 6 samples)");
+    test_hop_assert_true(unique_count >= 3U, "Hop counter affects channel selection (>=3 unique in 6 samples)");
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -368,7 +368,7 @@ static void test_channel_hop_counter_integration(void) {
 
 static void test_channel_hop_zero_nonce(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 6: Edge Case - Zero Nonce ═══");
+    ESP_LOGI(TAG, "--- Test 6: Edge Case - Zero Nonce ---");
     
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
     for (uint8_t i = 0U; i < CEEPEW_SESSION_KEY_BYTES; i++) {
@@ -391,7 +391,7 @@ static void test_channel_hop_zero_nonce(void) {
 
 static void test_channel_hop_large_nonce(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══ Test 7: Large Nonce Values ═══");
+    ESP_LOGI(TAG, "--- Test 7: Large Nonce Values ---");
     
     uint8_t test_key[CEEPEW_SESSION_KEY_BYTES];
     for (uint8_t i = 0U; i < CEEPEW_SESSION_KEY_BYTES; i++) {
@@ -427,7 +427,7 @@ static void test_channel_hop_large_nonce(void) {
     }
     
     s_hop_tests_passed++;
-    ESP_LOGI(TAG, "  ✓ All %u large nonce values produced valid channels", (unsigned)nonce_count);
+    ESP_LOGI(TAG, "  PASS All %u large nonce values produced valid channels", (unsigned)nonce_count);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -436,9 +436,9 @@ static void test_channel_hop_large_nonce(void) {
 
 uint32_t test_transport_hop_comprehensive(void) {
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  Transport Channel-Hop PRG Comprehensive Test Suite        ║");
-    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  Transport Channel-Hop PRG Comprehensive Test Suite        |");
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
     
     /* Reset counters */
     s_hop_tests_passed = 0U;
@@ -455,17 +455,17 @@ uint32_t test_transport_hop_comprehensive(void) {
     
     /* Print summary */
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  Transport Hop Test Results                                ║");
-    ESP_LOGI(TAG, "║  PASSED: %lu                                               ║", s_hop_tests_passed);
-    ESP_LOGI(TAG, "║  FAILED: %lu                                               ║", s_hop_tests_failed);
-    ESP_LOGI(TAG, "║  TOTAL:  %lu                                               ║", s_hop_tests_passed + s_hop_tests_failed);
-    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  Transport Hop Test Results                                |");
+    ESP_LOGI(TAG, "|  PASSED: %lu                                               |", s_hop_tests_passed);
+    ESP_LOGI(TAG, "|  FAILED: %lu                                               |", s_hop_tests_failed);
+    ESP_LOGI(TAG, "|  TOTAL:  %lu                                               |", s_hop_tests_passed + s_hop_tests_failed);
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
     
     if (s_hop_tests_failed == 0U) {
-        ESP_LOGI(TAG, "✓ All transport hop tests PASSED");
+        ESP_LOGI(TAG, "PASS All transport hop tests PASSED");
     } else {
-        ESP_LOGE(TAG, "✗ %lu transport hop test(s) FAILED", s_hop_tests_failed);
+        ESP_LOGE(TAG, "FAIL %lu transport hop test(s) FAILED", s_hop_tests_failed);
     }
     return s_hop_tests_failed;
 }

@@ -12,7 +12,7 @@
  *      SCAN_RSP (manufacturer AD 0xCEEE subtype 0x50), preceded by a
  *      2-byte monotonic nonce. The high bit (bit 15) of the
  *      nonce is the "GATT-ready" flag (set when local commitment_verified
- *      transitions 0→1; see Item 3 of Phase 7 plan).
+ *      transitions 0->1; see Item 3 of Phase 7 plan).
  *   2. Once both beacons are received and the truncated commitments match,
  *      the lower-MAC peer (initiator) opens a brief GATTC connection,
  *      requests MTU 247 upfront, and writes an Ascon-128-AEAD-encrypted
@@ -242,7 +242,7 @@ void transport_ble_peer_cache_expire_ttl(uint32_t now_ms);
  */
 CeePewErr_t transport_ble_set_commitment_beacon(const uint8_t *commitment, uint8_t len);
 
-/* Initiate BLE connection to discovered peer (Phase 1 → Phase 2). */
+/* Initiate BLE connection to discovered peer (Phase 1 -> Phase 2). */
 CeePewErr_t transport_ble_connect_to_peer(const uint8_t peer_mac[6]);
 
 /* Retry a previously failed scan start (called periodically from task_session) */
@@ -387,7 +387,7 @@ CeePewErr_t transport_ble_supervisor_start(void);
 /* Stop the PairingSupervisor task. Call from transport_ble_deinit(). */
 void transport_ble_supervisor_stop(void);
 
-/* Phase → RGB pattern mapping (per spec table in
+/* Phase -> RGB pattern mapping (per spec table in
  * Technical Specification §4 — RGB LED Patterns). */
 #include "rgb_pattern.h"
 RgbPattern_t transport_ble_phase_to_rgb(PairingPhase_t phase);

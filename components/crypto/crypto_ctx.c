@@ -122,7 +122,7 @@ CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk
      * devices must derive the SAME LMK. Including the peer MAC caused
      * each side to derive a different LMK (COM5 uses COM6's MAC, COM6
      * uses COM5's MAC), so encrypted ESP-NOW frames were silently dropped
-     * at the receiver (decrypt-failed → no recv callback). The session
+     * at the receiver (decrypt-failed -> no recv callback). The session
      * seed (box_seed) already uniquely binds this LMK to the session. */
     (void)peer_wifi_mac;
     uint8_t info[] = "ceepew-espnow-lmk-v1";

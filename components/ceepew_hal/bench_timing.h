@@ -11,8 +11,8 @@
  *
  * All timestamps are esp_timer_get_time() microseconds.
  * NEVER subtract timestamps across boards — only same-clock intervals are meaningful:
- *   TX side: t_submit → t_pulse, t_pulse → t_send_cb
- *   RX side: t_edge → t_rx_cb, t_rx_cb → t_accept
+ *   TX side: t_submit -> t_pulse, t_pulse -> t_send_cb
+ *   RX side: t_edge -> t_rx_cb, t_rx_cb -> t_accept
  */
 
 #ifndef BENCH_TIMING_H

@@ -499,7 +499,7 @@ bool session_peer_identity_verified(void);
 
 /* True when this session may transmit application data.
  *
- * Composed from the SAME predicate that gates the pairing → ACTIVE
+ * Composed from the SAME predicate that gates the pairing -> ACTIVE
  * transition (session_pairing_may_activate), so "reached ACTIVE" and
  * "may send" cannot drift apart. In a default build this is exactly
  * session_peer_identity_verified(); in a CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION
@@ -613,10 +613,10 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms);
 
 /* Called by the session task's RX path when a 1-byte post-derive sync
  * payload is decoded. Routes the byte to the appropriate handler:
- *   CEEPEW_KEY_SYNC_HELLO_BYTE → mark cleared, return CEEPEW_ERR_NEED_TX
+ *   CEEPEW_KEY_SYNC_HELLO_BYTE -> mark cleared, return CEEPEW_ERR_NEED_TX
  *                                (caller should send the ACK)
- *   CEEPEW_KEY_SYNC_ACK_BYTE   → mark cleared, return CEEPEW_OK
- *   anything else              → return CEEPEW_ERR_PARAM (ignored) */
+ *   CEEPEW_KEY_SYNC_ACK_BYTE   -> mark cleared, return CEEPEW_OK
+ *   anything else              -> return CEEPEW_ERR_PARAM (ignored) */
 CeePewErr_t session_handle_key_sync_byte(uint8_t magic_byte);
 
 /* Responder-side confirmation: call AFTER the ACK frame has been

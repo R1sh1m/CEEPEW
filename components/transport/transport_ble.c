@@ -892,14 +892,14 @@ static bool transport_ble_payload_contains(const uint8_t *buf, uint16_t buf_len,
  * where a third device rebroadcasts a stale commitment to claim a match.
  *
  * Bit 15 of the nonce carries the "GATT-ready" flag (Hybrid-GATT, Phase 7).
- * When our local commitment_verified transitions 0→1, we re-broadcast
+ * When our local commitment_verified transitions 0->1, we re-broadcast
  * with bit 15 set; the peer's beacon decoder stores the flag in
  * g_ble_ctx.peer_gatt_ready, unblocking the initiator's GATTC connect
  * gate. The wire value (counter | flag<<15) is always strictly
  * increasing because:
  *   - the counter increments on every call
- *   - the flag going 0→1 increases the high bit (no-op to monotonicity)
- *   - the flag going 1→0 only happens on session reset, which also
+ *   - the flag going 0->1 increases the high bit (no-op to monotonicity)
+ *   - the flag going 1->0 only happens on session reset, which also
  *     resets seen_max, so no false rejection.
  *
  * SCAN_RSP budget: 8 (name) + 1+1+2+1+2+16 = 31 bytes — exactly at limit.
@@ -1472,7 +1472,7 @@ CeePewErr_t transport_ble_start_scan(void) {
       .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
       .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
       .scan_interval = 0x50,
-      .scan_window = 0x30,
+      .scan_window = 0x48,
       .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE,
   };
 
@@ -2361,7 +2361,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
   ESP_LOGI(TAG, "gap_event_handler: event=%d", event);
   switch (event) {
 
-  /* ── Advertising data accepted by stack → start advertising only ── */
+  /* ── Advertising data accepted by stack -> start advertising only ── */
   case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
   case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT: {
     s_adv_data_set = true;
@@ -2390,7 +2390,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     }
   } break;
 
-  /* ── Scan response data accepted → no action needed ──────────────── */
+  /* ── Scan response data accepted -> no action needed ──────────────── */
   case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
   case ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT:
     s_scan_rsp_set = true;
@@ -2433,7 +2433,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     }
     break;
 
-  /* ── Scan parameters committed → NOW start scanning ──────────────── */
+  /* ── Scan parameters committed -> NOW start scanning ──────────────── */
   case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT: {
     if (!param) {
       break;
@@ -2842,7 +2842,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
          * the wire so the existing replay defense is preserved
          * — the receiver compares only the 15-bit counter
          * (bits 0-14), ignoring the flag bit, so a flag
-         * transition 1→0 after device reset does not cause
+         * transition 1->0 after device reset does not cause
          * false rejection. */
         uint16_t peer_wire = ((uint16_t)mfr_ptr[3] << 8) | (uint16_t)mfr_ptr[4];
         uint16_t peer_counter = peer_wire & 0x7FFFU;
@@ -3096,7 +3096,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
              (unsigned)g_ble_ctx.conn_id,
              (unsigned)g_ble_ctx.reconnect_attempts);
     /* NOTE: conn param update intentionally omitted — the brief
-     * GATT exchange (connect → write 86B → disconnect) is too short
+     * GATT exchange (connect -> write 86B -> disconnect) is too short
      * for param negotiation; firing esp_ble_gap_update_conn_params()
      * concurrently with GATT service discovery caused status=133. */
     (void)esp_ble_gattc_search_service(gattc_if, g_ble_ctx.conn_id,
@@ -3653,7 +3653,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
        *     (CEEPEW_ERR_AUTH_FAIL) and the write is silently
        *     dropped. The peer relationship is severed.
        *   - The local sign_pk is NEVER sent over BLE — the
-       *     GATTS path remains one-way (peer → us).
+       *     GATTS path remains one-way (peer -> us).
        *
        * MTU validation: reject writes that don't carry the full
        * sign_pk payload (GATT_CRYPTO_TOTAL_BYTES bytes). A truncated
@@ -4378,7 +4378,7 @@ void transport_ble_supervisor_stop(void) {
   }
 }
 
-/* Phase → RGB pattern mapping per spec §4. */
+/* Phase -> RGB pattern mapping per spec §4. */
 RgbPattern_t transport_ble_phase_to_rgb(PairingPhase_t phase) {
   switch (phase) {
   case PAIRING_PHASE_IDLE:

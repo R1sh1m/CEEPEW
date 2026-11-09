@@ -438,7 +438,7 @@ static esp_err_t push_full_frame(ceepew_oled_t *dev,
                                  i2c_master_dev_handle_t dev_handle)
 {
     /* SH1106 uses 0xA0 (direct segment mapping), so frame buffer column
-     * 0 maps directly to GDDRAM column 0 → SEG0 (leftmost pixel).
+     * 0 maps directly to GDDRAM column 0 -> SEG0 (leftmost pixel).
      * No column offset needed — unlike the old 0xA1 remap which required
      * shifting to columns 4-131 to hit the 128 visible segments. */
     const uint8_t col_offset = 0U;
@@ -472,6 +472,8 @@ static esp_err_t push_full_frame(ceepew_oled_t *dev,
         if (rc != ESP_OK) {
             return rc;
         }
+        /* Yield so IDLE0 can run and feed its task watchdog */
+        vTaskDelay(0);
     }
     return ESP_OK;
 }

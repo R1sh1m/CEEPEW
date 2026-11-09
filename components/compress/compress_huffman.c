@@ -252,7 +252,7 @@ CeePewErr_t compress_huffman_compress(
      * followed by the original input length (2 bytes, little-endian).
      * The length prefix lets the decoder stop after exactly in_len
      * symbols, avoiding false matches from zero-padding bits. */
-    out[0] = CEEPEW_HUFFMAN_FLAG_COMPRESSED; /* 0x02 → bits 1:0 = 10 */
+    out[0] = CEEPEW_HUFFMAN_FLAG_COMPRESSED; /* 0x02 -> bits 1:0 = 10 */
     out[1] = (uint8_t)(in_len & 0xFFU);
     out[2] = (uint8_t)((in_len >> 8) & 0xFFU);
     bw.bit_pos = 0U;

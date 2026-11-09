@@ -117,7 +117,7 @@ typedef struct {
     uint32_t      new_msg_first_ts_ms;      /* Timestamp of first unread */
     /* Send pipeline coordination */
     bool          send_pending;             /* True while send in flight on Core 1 */
-    /* Reboot gesture (hold 3 s + left→right pot sweep) */
+    /* Reboot gesture (hold 3 s + left->right pot sweep) */
     bool          reboot_gesture_saw_left;  /* saw pot in left zone during hold */
 
     /* Navigator context for relative pot selection (all selectable screens) */
@@ -203,7 +203,7 @@ CeePewErr_t ui_show_nonce_exhausted(void);
  */
 void ui_manager_reset_to_discovery(void);
 
-/* UI → BLE visual feedback bridge.
+/* UI -> BLE visual feedback bridge.
  * Maps the current BLE pairing phase to an RGB pattern so the user gets
  * fine-grained progress feedback (CONNECTING, MTU, COMMITMENT, etc.) instead
  * of a single "amber pulse" while the pairing countdown runs.

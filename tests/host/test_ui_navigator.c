@@ -100,7 +100,7 @@ static int test_slow_drift_two_units(void)
     uint32_t now = 1000U;
     (void)ui_nav_update(&nav, 100U, now);
     /* Two units per frame (|dv|<=2) activates slow-speed precision threshold (THRESH*2 = 8).
-     * 10 frames of 2 units = 20 total travel → 20 / 8 = 2 steps (fine precision). */
+     * 10 frames of 2 units = 20 total travel -> 20 / 8 = 2 steps (fine precision). */
     for (int i = 0; i < 10; i++) {
         (void)ui_nav_update(&nav, (uint8_t)(102U + i * 2U), now + (i + 1) * 16U);
     }
@@ -224,7 +224,7 @@ static int test_reverse_no_bounce(void)
     (void)ui_nav_update(&nav, 134U, now + 32U);  /* dv = -2 from anchor=136 */
     TEST_ASSERT_EQ(ui_nav_get_index(&nav), 11U, "tiny reverse no bounce");
 
-    /* Large reverse sweep from 134 to 124: 10 units. Prior travel=-2 → total -12 = 3 crossings * vel_mult(10/6=2) = 6 steps back. */
+    /* Large reverse sweep from 134 to 124: 10 units. Prior travel=-2 -> total -12 = 3 crossings * vel_mult(10/6=2) = 6 steps back. */
     (void)ui_nav_update(&nav, 124U, now + 48U);
     TEST_ASSERT_EQ(ui_nav_get_index(&nav), 5U, "large reverse sweeps back 6");
 

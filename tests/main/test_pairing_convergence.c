@@ -4,8 +4,8 @@
  * post-derive sync barrier. Runs on-device (no host test runner).
  *
  * The 4 critical bugs fixed in this sprint:
- *   Bug 1 — fresh_salt broke HKDF IKM symmetry → keys diverged
- *   Bug 2 — beacon had no nonce → replay possible
+ *   Bug 1 — fresh_salt broke HKDF IKM symmetry -> keys diverged
+ *   Bug 2 — beacon had no nonce -> replay possible
  *   Bug 3 — initiator advanced to SUCCESS without peer confirmation
  *   Bug 4 — sign_pk was never sent (no cleartext exposure); threat model
  *           is documented in session_fsm.c
@@ -18,7 +18,7 @@
  *
  * Phase 7 additions:
  *   - GATT sign_pk Ascon-AEAD round-trip + tamper detection
- *   - GATT sign_pk wrong session_code → AUTH_FAIL
+ *   - GATT sign_pk wrong session_code -> AUTH_FAIL
  *   - Beacon nonce bit-15 GATT-ready flag encoding
  *
  * Test entry: test_pairing_convergence_run() — dispatch from main.c.
@@ -165,12 +165,12 @@ static void test_keys_converge_without_fresh_salt(void)
  * encrypted 1-byte sync payload is delivered and decoded.
  *
  *   1. After derive, sync_barrier_cleared must be FALSE on both peers
- *   2. Initiator (A) sees a HELLO byte → returns ERR_NEED_TX (unexpected
+ *   2. Initiator (A) sees a HELLO byte -> returns ERR_NEED_TX (unexpected
  *      for initiator; not a peer HELLO)
- *   3. Initiator (A) sees an ACK byte → barrier clears
- *   4. Responder (B) sees a HELLO byte → barrier clears, returns ERR_NEED_TX
+ *   3. Initiator (A) sees an ACK byte -> barrier clears
+ *   4. Responder (B) sees a HELLO byte -> barrier clears, returns ERR_NEED_TX
  *      so the caller sends the ACK
- *   5. Responder (B) sees a second HELLO → no-op (already cleared)
+ *   5. Responder (B) sees a second HELLO -> no-op (already cleared)
  *   6. session_drive_post_derive_sync on a freshly-derived peer must NOT
  *      transition out of phase 3 on its own
  */
@@ -213,7 +213,7 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(session_sync_barrier_cleared() == false,
           "A: barrier still false after unexpected HELLO");
 
-    /* A receives ACK → barrier clears. */
+    /* A receives ACK -> barrier clears. */
     err = session_handle_key_sync_byte(CEEPEW_KEY_SYNC_ACK_BYTE);
     check(err == CEEPEW_OK,
           "A: ACK byte returns OK");
@@ -250,7 +250,7 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(session_sync_barrier_cleared() == false,
           "B: barrier starts cleared=false after derive");
 
-    /* B receives HELLO → handler returns ERR_NEED_TX, but barrier is NOT
+    /* B receives HELLO -> handler returns ERR_NEED_TX, but barrier is NOT
      * cleared yet — it requires session_confirm_ack_sent() to complete
      * the double-ended rendezvous (HELLO received + ACK sent). */
     err = session_handle_key_sync_byte(CEEPEW_KEY_SYNC_HELLO_BYTE);
@@ -259,7 +259,7 @@ static void test_sync_barrier_gates_pairing_success(void)
     check(session_sync_barrier_cleared() == false,
           "B: barrier NOT cleared after HELLO alone (needs confirm_ack_sent)");
 
-    /* Confirm ACK sent → barrier clears. */
+    /* Confirm ACK sent -> barrier clears. */
     err = session_confirm_ack_sent();
     check(err == CEEPEW_OK,
           "B: confirm_ack_sent returns OK");
@@ -334,11 +334,11 @@ static void test_different_session_code_different_keys(void)
     snapshot_derived(b_ascon, b_box, b_sid);
 
     check(memcmp(a_ascon, b_ascon, 16U) != 0,
-          "different session_code → different ascon_key");
+          "different session_code -> different ascon_key");
     check(memcmp(a_box, b_box, 32U) != 0,
-          "different session_code → different box_seed");
+          "different session_code -> different box_seed");
     check(memcmp(a_sid, b_sid, 8U) != 0,
-          "different session_code → different session_id");
+          "different session_code -> different session_id");
 }
 
 /* Phase 7 / Hybrid-GATT: encrypt a 32-byte sign_pk under the
@@ -404,7 +404,7 @@ static void test_gatt_crypto_tamper(void)
     CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
         CODE_32, MAC_A, MAC_B, encrypted, recovered);
     check(dec_err == CEEPEW_ERR_AUTH_FAIL,
-          "1-bit ct tamper → AUTH_FAIL");
+          "1-bit ct tamper -> AUTH_FAIL");
 }
 
 /* Phase 7: encrypting with session_code A and attempting to decrypt
@@ -433,14 +433,14 @@ static void test_gatt_crypto_wrong_session_code(void)
     CeePewErr_t dec_err = gatt_crypto_decrypt_with_ids(
         WRONG_CODE, MAC_A, MAC_B, encrypted, recovered);
     check(dec_err == CEEPEW_ERR_AUTH_FAIL,
-          "decrypt with wrong session_code → AUTH_FAIL");
+          "decrypt with wrong session_code -> AUTH_FAIL");
 }
 
 /* Phase 7: verify the bit-15 flag bit-packing logic for the beacon
  * nonce. The counter occupies bits 0-14 (15 bits = 32K rebroadcasts
  * max) and the GATT-ready flag occupies bit 15. The wire value is
  * `counter | flag` and MUST be strictly monotonic across rebroadcasts
- * (i.e., counter+1 and flag-flip 0→1 both increase the wire value). */
+ * (i.e., counter+1 and flag-flip 0->1 both increase the wire value). */
 static void test_beacon_nonce_bit15_flag(void)
 {
     ESP_LOGI(TAG, "--- test_beacon_nonce_bit15_flag ---");
@@ -451,14 +451,14 @@ static void test_beacon_nonce_bit15_flag(void)
     uint16_t flag_on  = 0x8000U;
     uint16_t wire_off = (uint16_t)(counter | flag_off);
     uint16_t wire_on  = (uint16_t)(counter | flag_on);
-    check(wire_off == 0x0005U, "counter=5, flag=0 → wire=0x0005");
-    check(wire_on  == 0x8005U, "counter=5, flag=1 → wire=0x8005");
+    check(wire_off == 0x0005U, "counter=5, flag=0 -> wire=0x0005");
+    check(wire_on  == 0x8005U, "counter=5, flag=1 -> wire=0x8005");
 
     /* Monotonicity 1: counter increment from (5,0) to (6,0) increases wire. */
     check((uint16_t)(6U | 0x0000U) > wire_off,
-          "counter increment (5→6, flag=0) is monotonic");
+          "counter increment (5->6, flag=0) is monotonic");
     check((uint16_t)(5U | 0x8000U) > wire_off,
-          "flag flip 0→1 at same counter is monotonic");
+          "flag flip 0->1 at same counter is monotonic");
     check((uint16_t)(6U | 0x8000U) > (uint16_t)(5U | 0x8000U),
           "counter increment after flag set is monotonic");
 

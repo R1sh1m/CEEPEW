@@ -35,6 +35,7 @@
 #include "esp_cpu.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "esp_task_wdt.h"
 #include "hal_radio.h"
 #include "hal_rgb.h"
 #include "bench_timing.h"
@@ -1752,7 +1753,7 @@ if (!scan_active) {
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/* RX Data Pipeline Stages (post-ESL: CRC → FEC → decrypt → decompress)     */
+/* RX Data Pipeline Stages (post-ESL: CRC -> FEC -> decrypt -> decompress)     */
 /* ────────────────────────────────────────────────────────────────────────── */
 
 /* Stage 1: crc_fec — verify inner CRC-32, Hamming(15,11) decode, and
@@ -1867,7 +1868,7 @@ static CeePewErr_t stage_rx_crc_fec(Region_t *region, const uint8_t *in,
     return CEEPEW_OK;
 }
 
-/* Stage 2: decrypt — crypto_box decrypt → Ascon-128 AEAD decrypt → Ed25519 verify.
+/* Stage 2: decrypt — crypto_box decrypt -> Ascon-128 AEAD decrypt -> Ed25519 verify.
  * Output: Ascon-decrypted plaintext (region-allocated).
  * All key material is stack-local and securely zeroed.
  * Capture bench Modes A/B (CEEPEW_CAPTURE_ESL_BYPASS): the entire stage
@@ -2334,7 +2335,7 @@ static CeePewErr_t process_rx_frame(const RadioFrame_t *frame) {
     }
   }
 
-  /* ── RX decrypt pipeline: CRC → FEC decode → decrypt ────────
+  /* ── RX decrypt pipeline: CRC -> FEC decode -> decrypt ────────
    * Run the 2-stage decrypt pipeline on the ESL-stripped payload.
    * Produces fragment payload (with 2-byte header) in region-allocated buffer. */
   if (!s_rx_decrypt_pipeline_built) {
@@ -2791,6 +2792,9 @@ static void bench_prim_run(void) {
  * UIEvent_t
  */
 void task_session_init(void) {
+  /* Subscribe this task to the task watchdog so crypto operations can
+   * feed it with esp_task_wdt_reset() during long scalar multiplications. */
+  esp_task_wdt_add(NULL);
   if (s_session_initialised && g_session_rx_queue != NULL &&
       g_ui_event_queue != NULL) {
     return;
@@ -3093,7 +3097,7 @@ void task_session_run(void *pvParameters) {
          * and activated PFS via the sync barrier, generating a new keypair
          * here would make ascon_key diverge permanently:
          *   - Responder activated PFS with KEY(OLD pubkey)
-         *   - Initiator sends KEY(NEW pubkey) → responds with PFS_RESP
+         *   - Initiator sends KEY(NEW pubkey) -> responds with PFS_RESP
          *   - Initiator activates PFS with KEY(NEW pubkey)
          *   - MISMATCH: responder has KEY(OLD), initiator has KEY(NEW)
          *

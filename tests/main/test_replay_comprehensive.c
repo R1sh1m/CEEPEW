@@ -64,10 +64,10 @@ static uint32_t s_total_failed = 0U;
         CeePewErr_t err = CEEPEW_OK; \
         bool is_replay = check_and_commit(msg_id, &err); \
         if (err == CEEPEW_OK && is_replay == expected_is_replay) { \
-            ESP_LOGI(TAG, "✓ PASS: %s (is_replay=%u)", msg, is_replay); \
+            ESP_LOGI(TAG, "PASS: %s (is_replay=%u)", msg, is_replay); \
             s_total_passed++; \
         } else { \
-            ESP_LOGE(TAG, "✗ FAIL: %s (err=%d, is_replay=%u, expected=%u)", msg, err, is_replay, expected_is_replay); \
+            ESP_LOGE(TAG, "FAIL: %s (err=%d, is_replay=%u, expected=%u)", msg, err, is_replay, expected_is_replay); \
             s_total_failed++; \
         } \
     } while (0)
@@ -294,10 +294,10 @@ static void test_forged_far_forward_no_commit(void) {
     /* Establish s_max = 500 via the production flow (check + commit). */
     is_replay = check_and_commit(500ULL, &err);
     if (err == CEEPEW_OK && !is_replay) {
-        ESP_LOGI(TAG, "✓ PASS: seq=500 (legit baseline) accepted+committed");
+        ESP_LOGI(TAG, "PASS: seq=500 (legit baseline) accepted+committed");
         s_total_passed++;
     } else {
-        ESP_LOGE(TAG, "✗ FAIL: seq=500 baseline (err=%d is_replay=%u)", err, is_replay);
+        ESP_LOGE(TAG, "FAIL: seq=500 baseline (err=%d is_replay=%u)", err, is_replay);
         s_total_failed++;
     }
 
@@ -305,10 +305,10 @@ static void test_forged_far_forward_no_commit(void) {
      * FAILS so we deliberately do NOT commit. */
     err = transport_replay_check(1500ULL, 0U, &is_replay);
     if (err == CEEPEW_OK && !is_replay) {
-        ESP_LOGI(TAG, "✓ PASS: forged seq=1500 admitted by read-only check (no commit — tag fails)");
+        ESP_LOGI(TAG, "PASS: forged seq=1500 admitted by read-only check (no commit — tag fails)");
         s_total_passed++;
     } else {
-        ESP_LOGE(TAG, "✗ FAIL: forged seq=1500 check (err=%d is_replay=%u)", err, is_replay);
+        ESP_LOGE(TAG, "FAIL: forged seq=1500 check (err=%d is_replay=%u)", err, is_replay);
         s_total_failed++;
     }
     /* NOTE: no transport_replay_commit(1500) — forged frame discarded. */
@@ -338,18 +338,18 @@ static void test_uint64_max_edge(void) {
      * returns CEEPEW_ERR_REPLAY (dup-then-confirm path). */
     err = transport_replay_check(UINT64_MAX, 0U, &is_replay);
     if (err == CEEPEW_OK && is_replay) {
-        ESP_LOGI(TAG, "✓ PASS: seq=UINT64_MAX duplicate flagged by check");
+        ESP_LOGI(TAG, "PASS: seq=UINT64_MAX duplicate flagged by check");
         s_total_passed++;
     } else {
-        ESP_LOGE(TAG, "✗ FAIL: seq=UINT64_MAX duplicate check (err=%d is_replay=%u)", err, is_replay);
+        ESP_LOGE(TAG, "FAIL: seq=UINT64_MAX duplicate check (err=%d is_replay=%u)", err, is_replay);
         s_total_failed++;
     }
     err = transport_replay_commit(UINT64_MAX);
     if (err == CEEPEW_ERR_REPLAY) {
-        ESP_LOGI(TAG, "✓ PASS: seq=UINT64_MAX duplicate commit rejected (err=REPLAY)");
+        ESP_LOGI(TAG, "PASS: seq=UINT64_MAX duplicate commit rejected (err=REPLAY)");
         s_total_passed++;
     } else {
-        ESP_LOGE(TAG, "✗ FAIL: seq=UINT64_MAX duplicate commit (err=%d, want REPLAY)", err);
+        ESP_LOGE(TAG, "FAIL: seq=UINT64_MAX duplicate commit (err=%d, want REPLAY)", err);
         s_total_failed++;
     }
 
@@ -360,10 +360,10 @@ static void test_uint64_max_edge(void) {
      * WireGuard: seq MUST increase monotonically across the 64-bit space). */
     err = transport_replay_check(1ULL, 0U, &is_replay);
     if (err == CEEPEW_OK && is_replay) {
-        ESP_LOGI(TAG, "✓ PASS: seq=1 after MAX rejected (no wrap)");
+        ESP_LOGI(TAG, "PASS: seq=1 after MAX rejected (no wrap)");
         s_total_passed++;
     } else {
-        ESP_LOGE(TAG, "✗ FAIL: seq=1 after MAX (err=%d is_replay=%u)", err, is_replay);
+        ESP_LOGE(TAG, "FAIL: seq=1 after MAX (err=%d is_replay=%u)", err, is_replay);
         s_total_failed++;
     }
 }
@@ -372,10 +372,10 @@ static void test_uint64_max_edge(void) {
 /* Test Suite Runner                                                           */
 /* ─────────────────────────────────────────────────────────────────────────── */
 void test_replay_window_comprehensive(void) {
-    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  COMPREHENSIVE WIREGUARD REPLAY WINDOW TEST SUITE        ║");
-    ESP_LOGI(TAG, "║  Coverage: 5 edge cases + 7 extended + 2 check/commit vectors ║");
-    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "+----------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  COMPREHENSIVE WIREGUARD REPLAY WINDOW TEST SUITE        |");
+    ESP_LOGI(TAG, "|  Coverage: 5 edge cases + 7 extended + 2 check/commit vectors |");
+    ESP_LOGI(TAG, "+----------------------------------------------------------+");
     
     s_total_passed = 0U;
     s_total_failed = 0U;
@@ -400,15 +400,15 @@ void test_replay_window_comprehensive(void) {
     test_forged_far_forward_no_commit();
     test_uint64_max_edge();
     
-    ESP_LOGI(TAG, "\n╔══════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  FINAL RESULTS                                           ║");
-    ESP_LOGI(TAG, "╠══════════════════════════════════════════════════════════╣");
-    ESP_LOGI(TAG, "║  Passed: %u                                              ║", s_total_passed);
-    ESP_LOGI(TAG, "║  Failed: %u                                              ║", s_total_failed);
+    ESP_LOGI(TAG, "\n+----------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  FINAL RESULTS                                           |");
+    ESP_LOGI(TAG, "+----------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  Passed: %u                                              |", s_total_passed);
+    ESP_LOGI(TAG, "|  Failed: %u                                              |", s_total_failed);
     if (s_total_failed == 0U) {
-        ESP_LOGI(TAG, "║  Status: ✓ ALL TESTS PASSED                             ║");
+        ESP_LOGI(TAG, "|  Status: PASS ALL TESTS PASSED                             |");
     } else {
-        ESP_LOGI(TAG, "║  Status: ✗ SOME TESTS FAILED                            ║");
+        ESP_LOGI(TAG, "|  Status: ✗ SOME TESTS FAILED                            |");
     }
-    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════╝\n");
+    ESP_LOGI(TAG, "+----------------------------------------------------------+\n");
 }

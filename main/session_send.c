@@ -1,8 +1,8 @@
 /* main/session_send.c
  *
  * End-to-end TX wrapper for a single plaintext message.
- * With fragmentation: compress once → split compressed stream into fragments
- * → each fragment: [frag_hdr][chunk] → encrypt → FEC → ESL → ARQ send.
+ * With fragmentation: compress once -> split compressed stream into fragments
+ * -> each fragment: [frag_hdr][chunk] -> encrypt -> FEC -> ESL -> ARQ send.
  *
  * KEY DESIGN INVARIANTS (do not violate):
  *   - crypto_box_encrypt takes the peer's X25519 public key (g_crypto_ctx.peer_box_pubkey).
@@ -85,7 +85,7 @@ void session_send_bench_replay_next(void)
 static uint8_t s_tx_pending_hdr[CEEPEW_ESL_HEADER_BYTES];
 static bool s_tx_pending_hdr_valid = false;
 
-/* Stage 2: encrypt — mutex-locked ascon → box → sign, produces framed payload.
+/* Stage 2: encrypt — mutex-locked ascon -> box -> sign, produces framed payload.
  * Output layout: [2-byte LE box_ct_len][box_ct][64-byte Ed25519 sig].
  * All intermediate key material is stack-resident and securely zeroed. */
 static CeePewErr_t stage_tx_encrypt(Region_t *region, const uint8_t *in,
@@ -426,7 +426,7 @@ static CeePewErr_t stage_tx_esl_wrap(Region_t *region, const uint8_t *in,
 #endif /* CEEPEW_CAPTURE_ESL_BYPASS */
 }
 
-/* Per-fragment pipeline: encrypt → frame_fec → esl_wrap (no compress) */
+/* Per-fragment pipeline: encrypt -> frame_fec -> esl_wrap (no compress) */
 static Pipeline_t s_tx_frag_pipeline;
 static bool s_tx_frag_pipeline_built = false;
 
@@ -469,7 +469,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
     /* ISS-S01 fail-closed identity gate. No frame carrying application data
      * leaves this function unless the peer's Ed25519 sign_pk was received,
      * canonically encoded, and bound to the pairing commitment — the same
-     * predicate that gates the pairing → ACTIVE transition. The only way
+     * predicate that gates the pairing -> ACTIVE transition. The only way
      * past this in a default build is a verified identity; a degraded
      * pairing is refused for the whole session. */
     {
@@ -579,7 +579,7 @@ CeePewErr_t session_send_message(const uint8_t *plaintext, uint16_t len,
                  (unsigned)(frag_idx + 1U), (unsigned)total_frags,
                  (unsigned)chunk_len, (unsigned)frag_payload_len);
 
-        /* Run per-fragment pipeline: encrypt → fec → esl */
+        /* Run per-fragment pipeline: encrypt -> fec -> esl */
         uint8_t *final_frame = NULL;
         uint16_t final_len = 0U;
         err = pipeline_run(&s_tx_frag_pipeline, &g_region,

@@ -63,10 +63,10 @@ Configuration must go through `SDKCONFIG` and `SDKCONFIG_DEFAULTS`. Passing
 shipping image that measures the wrong binary (ISS-T07).
 
 ```powershell
-$env:IDF_PATH='C:\esp\v6.0.3\esp-idf'
+$env:IDF_PATH='C:\esp\v6.1\esp-idf'
 $env:IDF_TOOLS_PATH='C:\Espressif\tools'
 $env:IDF_PYTHON_ENV_PATH='C:\Espressif\tools\python_env\idf6.0_py3.13_env'
-& 'C:\esp\v6.0.3\esp-idf\export.ps1' | Out-Null
+& 'C:\esp\v6.1\esp-idf\export.ps1' | Out-Null
 
 python tools/campaign/build_matrix.py --configs bench fec lite
 ```

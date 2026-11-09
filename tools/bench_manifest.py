@@ -108,7 +108,7 @@ def idf_version() -> str:
         desc = _run(["git", "-C", idf_path, "describe", "--tags", "--always"])
         if desc:
             return desc
-    for cand in (r"C:\esp\v6.0.3\esp-idf\version.txt",
+    for cand in (r"C:\esp\v6.1\esp-idf\version.txt",
                  os.path.join(idf_path, "version.txt")):
         if cand and os.path.exists(cand):
             return open(cand, encoding="utf-8", errors="replace").read().strip()

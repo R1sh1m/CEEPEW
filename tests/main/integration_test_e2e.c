@@ -535,9 +535,9 @@ uint32_t test_transport_hop_comprehensive(void);
 bool test_pairing_ui_coverage(void);
 
 void integration_tests_run_all(void){
-    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  CEE-PEW End-to-End Integration Test Suite                 ║");
-    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  CEE-PEW End-to-End Integration Test Suite                 |");
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
     ESP_LOGI(TAG, "Firmware: v%u.%u.%u (%s)",
              CEEPEW_FIRMWARE_VERSION_MAJOR,
              CEEPEW_FIRMWARE_VERSION_MINOR,
@@ -693,12 +693,12 @@ void integration_tests_run_all(void){
 
     /* Legacy pass/fail summary (preserved for human readability). */
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║  Test Results                                              ║");
-    ESP_LOGI(TAG, "║  PASSED: %lu                                               ║", s_tests_passed - pass_before);
-    ESP_LOGI(TAG, "║  FAILED: %lu                                               ║", s_tests_failed);
-    ESP_LOGI(TAG, "║  TOTAL:  %lu                                               ║", (s_tests_passed - pass_before) + s_tests_failed);
-    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
+    ESP_LOGI(TAG, "|  Test Results                                              |");
+    ESP_LOGI(TAG, "|  PASSED: %lu                                               |", s_tests_passed - pass_before);
+    ESP_LOGI(TAG, "|  FAILED: %lu                                               |", s_tests_failed);
+    ESP_LOGI(TAG, "|  TOTAL:  %lu                                               |", (s_tests_passed - pass_before) + s_tests_failed);
+    ESP_LOGI(TAG, "+------------------------------------------------------------+");
 
     /* ── DIAGNOSTIC REPORT ── machine-grepable summary used by
      * diagnose.ps1 and any AI agent reading the serial log. Format:

@@ -83,6 +83,7 @@ logs/**
 *log*.*
 *.err
 *.out
+*.bin
 *_output.txt
 host_test_output.txt
 DEVICE_LOG_FINDINGS.md
@@ -93,6 +94,7 @@ drops_report.csv
 !data/**
 data/raw/_tooling/
 data/raw/**/_tooling/
+data/raw/replay_bitmap_ota_20261106/
 
 # Docs — internal design documents, presentations, and paper research
 docs/
@@ -126,3 +128,23 @@ gate*.*
 # Root-level scratch & analysis artifacts (keep tools/*.py)
 /*.py
 /*.txt
+
+# Local diagnostic & capture logs (root level)
+diag_*.txt
+pairing_*.txt
+serial_capture*.txt
+temp_flash.bin
+
+# Local hardware artifacts (board-specific, not part of firmware)
+Hardware/
+
+# Local run artifacts (per-session outputs)
+runs/
+
+# Local IDE/editor configuration
+.clang-tidy
+.clangd
+
+# Local ESP-IDF runtime config (sdkconfig.defaults is the committed template)
+sdkconfig.production
+

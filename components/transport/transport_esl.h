@@ -4,7 +4,7 @@
  * Implements CRC, timestamp validation, replay window, and MAC locking.
  *
  * SECURITY CRITICAL: Receive pipeline order:
- *   DoS → MAC lock → CRC → FEC → timestamp → replay → decrypt → verify
+ *   DoS -> MAC lock -> CRC -> FEC -> timestamp -> replay -> decrypt -> verify
  * All crypto failures = SILENT DISCARD (no response).
  */
 
@@ -83,8 +83,8 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len,
 #define CEEPEW_ESL_MSG_TYPE_PFS_RESP   0x02U  /* PFS public key from responder */
 
 /* Rendezvous phase frame types — sent on static baseline channel before hopping */
-#define CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ  0x03U  /* Initiator → Responder: contains uptime */
-#define CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_ACK  0x04U  /* Responder → Initiator: contains uptime diff */
+#define CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_REQ  0x03U  /* Initiator -> Responder: contains uptime */
+#define CEEPEW_ESL_MSG_TYPE_RENDEZVOUS_ACK  0x04U  /* Responder -> Initiator: contains uptime diff */
 
 /* Extract message type from ESL frame payload (first byte after header) */
 CeePewErr_t transport_esl_peek_msg_type(const uint8_t *frame, uint16_t len, uint8_t *msg_type_out);

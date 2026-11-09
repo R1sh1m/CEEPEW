@@ -75,7 +75,7 @@ def tail(text: str, n: int = 12) -> str:
 
 
 def flash(build_dir: str, port: str, run_dir: str, records: list) -> bool:
-    idf_path = os.environ.get("IDF_PATH", r"C:\esp\v6.0.2\esp-idf")
+    idf_path = os.environ.get("IDF_PATH", r"C:\esp\v6.1\esp-idf")
     idf_py = os.path.join(idf_path, "tools", "idf.py")
     cmd = [PY, idf_py, "-B", build_dir, f"-DSDKCONFIG={build_dir}/sdkconfig",
            "-p", port, "flash"]
@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     records: list = []
     if args.flash:
         # Verify idf.py exists via IDF_PATH rather than PATH lookup
-        idf_path_check = os.environ.get("IDF_PATH", r"C:\esp\v6.0.2\esp-idf")
+        idf_path_check = os.environ.get("IDF_PATH", r"C:\esp\v6.1\esp-idf")
         idf_py_check = os.path.join(idf_path_check, "tools", "idf.py")
         if not os.path.isfile(idf_py_check):
             print("[FAIL] idf.py not found — ensure ESP-IDF is installed and IDF_PATH is set, or pass --no-flash", file=sys.stderr)

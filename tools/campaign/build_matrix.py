@@ -128,7 +128,7 @@ def write_powershell_script(path: str, idf_args: List[str]) -> None:
     form is parsed by cmd.exe first, which mangles the pipeline in the
     IDF export step.
     """
-    idf_path = os.environ.get("IDF_PATH", r"C:\esp\v6.0.3\esp-idf")
+    idf_path = os.environ.get("IDF_PATH", r"C:\esp\v6.1\esp-idf")
     tools_path = os.environ.get("IDF_TOOLS_PATH", r"C:\Espressif\tools")
     python_env = os.environ.get(
         "IDF_PYTHON_ENV_PATH", r"C:\Espressif\tools\python_env\idf6.0_py3.13_env"

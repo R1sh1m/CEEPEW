@@ -493,7 +493,6 @@ CeePewErr_t session_phase2_derive_key(void){
     uint8_t commitment[CEEPEW_COMMITMENT_BYTES] = {0};
     uint8_t hkdf_info[96U] = {0};
     uint8_t hkdf_output[64] = {0};
-    uint8_t ikm_input[64U] = {0};
 
     /* Step 1: Digital sum preprocessing of session code */
     digital_sum_mix(s_session.session_code, 32U, ds_mix);
@@ -561,9 +560,7 @@ CeePewErr_t session_phase2_derive_key(void){
      * would compute a different HKDF output and crypto_box would fail to
      * decrypt. (The earlier `fresh_salt` mixing was incorrect — it made
      * the IKM diverge even though the commitment match succeeded.) */
-    memcpy(ikm_input, s_session.session_code, 32U);
-    memcpy(ikm_input + 32U, g_crypto_ctx.box_shared_secret, 32U);
-    err = crypto_hkdf_derive(ikm_input, 64U,
+    err = crypto_hkdf_derive(s_session.session_code, 32U,
                              hkdf_salt, 32U,
                              hkdf_info, hkdf_info_len, hkdf_output, 64U);
     if (err != CEEPEW_OK) { goto error_cleanup; }
@@ -637,7 +634,6 @@ CeePewErr_t session_phase2_derive_key(void){
     /* Success: secure zero all sensitive intermediates */
     ceepew_secure_zero(hkdf_output, sizeof(hkdf_output));
     ceepew_secure_zero(hkdf_salt, sizeof(hkdf_salt));
-    ceepew_secure_zero(ikm_input, sizeof(ikm_input));
     ceepew_secure_zero(salt_input, sizeof(salt_input));
     ceepew_secure_zero(ds_mix, sizeof(ds_mix));
     ceepew_secure_zero(commitment, sizeof(commitment));
@@ -1035,7 +1031,7 @@ bool session_tx_permitted(void)
 {
     SessionPeerIdentity_t peer_id;
     session_current_peer_identity(&peer_id);
-    /* Same predicate as the pairing → ACTIVE transition, so an activated
+    /* Same predicate as the pairing -> ACTIVE transition, so an activated
      * session and a transmittable session cannot diverge. */
     return session_pairing_may_activate(&peer_id,
                                         s_session.identity_degraded,
@@ -1052,11 +1048,11 @@ void session_set_identity_degraded(void)
     s_session.identity_degraded = true;
 #if CEEPEW_ALLOW_UNAUTH_SESSION_ENABLED
     ESP_LOGW("session_fsm",
-             "Session marked IDENTITY-DEGRADED — Ed25519 peer verification disabled "
+             "Session marked IDENTITY-DEGRADED -- Ed25519 peer verification disabled "
              "(CONFIG_CEEPEW_ALLOW_UNAUTH_SESSION=y: legacy permissive path)");
 #else
     ESP_LOGE("session_fsm",
-             "Session marked IDENTITY-DEGRADED — terminal: ACTIVE and all "
+             "Session marked IDENTITY-DEGRADED -- terminal: ACTIVE and all "
              "transmission are refused until a verified re-pair");
 #endif
 }
@@ -1179,7 +1175,7 @@ CeePewErr_t session_drive_post_derive_sync(uint64_t now_ms)
         s_session.sync_last_send_ms = now_ms;
 
         /* Build the 2-byte HELLO payload with local profile descriptor. We use session_send_message so the
-         * full pipeline (compress → Ascon → crypto_box → sign → FEC → CRC →
+         * full pipeline (compress -> Ascon -> crypto_box -> sign -> FEC -> CRC ->
          * ESP-NOW) runs. A successful receive on the other side is the proof
          * that the key converges and profiles are mutually authenticated. */
         uint8_t hello_plain[2] = { CEEPEW_KEY_SYNC_HELLO_BYTE, session_get_local_profile_byte() };
@@ -1292,11 +1288,11 @@ CeePewErr_t session_mark_sync_barrier_cleared(void)
  * frame from the peer before the barrier is flagged as cleared.
  *
  * Initiator path:
- *   Receives ACK (0x5AU) → marks peer_encrypted_received, clears barrier.
+ *   Receives ACK (0x5AU) -> marks peer_encrypted_received, clears barrier.
  *   The ACK proves the responder has the correct session key.
  *
  * Responder path:
- *   Receives HELLO (0xA5U) → marks peer_encrypted_received, returns
+ *   Receives HELLO (0xA5U) -> marks peer_encrypted_received, returns
  *   CEEPEW_ERR_NEED_TX so the caller sends the ACK. The barrier is
  *   NOT cleared yet — it will be cleared by session_confirm_ack_sent()
  *   after the ACK has been enqueued for transmission. This prevents
@@ -1414,7 +1410,7 @@ CeePewErr_t session_drive_rendezvous(void)
 
     /* Check for initiator timeout */
     if (hal_radio_rendezvous_check_timeout()) {
-        ESP_LOGW("session_fsm", "Rendezvous timeout \u2014 initiator failed to receive ACK");
+        ESP_LOGW("session_fsm", "Rendezvous timeout -- initiator failed to receive ACK");
         return CEEPEW_ERR_TIMEOUT;
     }
 

@@ -180,7 +180,7 @@ static void draw_circle(int16_t cx, int16_t cy, uint8_t r)
  * r_near..r_far: the radial band to fill (for trail gradient effect).
  * Implemented as a line segment from the near point to the far point. */
 static void draw_radial_segment(int16_t cx, int16_t cy, int16_t ex, int16_t ey, uint8_t r_near, uint8_t r_far){
-    /* Interpolate near point along the (cx,cy)→(ex,ey) vector */
+    /* Interpolate near point along the (cx,cy)->(ex,ey) vector */
     /* Full length is r_far (outer ring radius) */
     /* near point: r_near/r_far fraction along the arm */
     if (r_far == 0U) { return; }
@@ -191,7 +191,7 @@ static void draw_radial_segment(int16_t cx, int16_t cy, int16_t ex, int16_t ey, 
     draw_line(nx, ny, ex, ey);
 }
 
-/* RSSI dBm → bar count 1–5 */
+/* RSSI dBm -> bar count 1–5 */
 static uint8_t rssi_to_bars(int8_t rssi){
     if (rssi >= -50) { return 5U; }
     if (rssi >= -60) { return 4U; }
@@ -1025,7 +1025,7 @@ static void draw_progress_bar_inverted_text(uint8_t x, uint8_t y, uint8_t w,
 
     /* Draw centred text with dynamic colour inversion.
      * For each glyph pixel, check if its X falls inside the filled region:
-     * if yes → draw in BLACK (inverted); if no → draw in WHITE. */
+     * if yes -> draw in BLACK (inverted); if no -> draw in WHITE. */
     if (text == NULL) { return; }
 
     uint8_t text_len = 0U;
@@ -1130,23 +1130,23 @@ static CeePewErr_t render_boot_anim(void)
         if (arm_h > 64U) { arm_h = 64U; }
         uint8_t arm_v = arm_h / 2U;
 
-        /* Top-left corner → extends right and down */
+        /* Top-left corner -> extends right and down */
         draw_hline(0U, 0U, arm_h);
         draw_vline(0U, 0U, arm_v);
 
-        /* Top-right corner → extends left and down */
+        /* Top-right corner -> extends left and down */
         if (arm_h <= 128U) {
             draw_hline((uint8_t)(128U - arm_h), 0U, arm_h);
         }
         draw_vline(127U, 0U, arm_v);
 
-        /* Bottom-left corner → extends right and up */
+        /* Bottom-left corner -> extends right and up */
         draw_hline(0U, 63U, arm_h);
         if (arm_v <= 64U) {
             draw_vline(0U, (uint8_t)(64U - arm_v), arm_v);
         }
 
-        /* Bottom-right corner → extends left and up */
+        /* Bottom-right corner -> extends left and up */
         if (arm_h <= 128U) {
             draw_hline((uint8_t)(128U - arm_h), 63U, arm_h);
         }
@@ -1236,7 +1236,9 @@ static CeePewErr_t ui_restart_discovery_from_pairing(void)
                   g_ui_ctx.current_state == UI_STATE_COUNTDOWN ||
                   g_ui_ctx.current_state == UI_STATE_CODE_ENTRY ||
                   g_ui_ctx.current_state == UI_STATE_PAIRING_FAILED ||
-                  g_ui_ctx.current_state == UI_STATE_CONFIRM,
+                  g_ui_ctx.current_state == UI_STATE_CONFIRM ||
+                  g_ui_ctx.current_state == UI_STATE_PAIRING_DEGRADED ||
+                  g_ui_ctx.current_state == UI_STATE_KEYDER,
                   CEEPEW_ERR_PARAM);
     CeePewErr_t err = transport_ble_restart_discovery_session();
     if (err != CEEPEW_OK) {
@@ -1792,20 +1794,20 @@ static CeePewErr_t render_pairing_failed(void)
      * 
      * Worst-case: "Code 0000 not allowed. Please enter a non-zero code." (54 chars)
      * Word-wrap analysis (116px max_width ≈ 19 chars/line at 6px/char):
-     *   Line 1: "Code 0000 not" (13 chars) → y=24, glyphs occupy rows 24..30
-     *   Line 2: "allowed. Please" (15 chars) → y=32, glyphs occupy rows 32..38
-     *   Line 3: "enter a non-zero" (16 chars) → y=40, glyphs occupy rows 40..46
-     *   Line 4: "code." (5 chars) → y=48, glyphs occupy rows 48..54
+     *   Line 1: "Code 0000 not" (13 chars) -> y=24, glyphs occupy rows 24..30
+     *   Line 2: "allowed. Please" (15 chars) -> y=32, glyphs occupy rows 32..38
+     *   Line 3: "enter a non-zero" (16 chars) -> y=40, glyphs occupy rows 40..46
+     *   Line 4: "code." (5 chars) -> y=48, glyphs occupy rows 48..54
      * Last glyph row (54) is 1px above bottom border row (55). ✓
      * 
-     * max_height=31U: max_y = 24 + 31 = 55. Line 4 check: 48+7=55, NOT > 55 → renders.
-     * Line 5 would be at cy=56: 56+7=63 > 55 → rejected. ✓ */
+     * max_height=31U: max_y = 24 + 31 = 55. Line 4 check: 48+7=55, NOT > 55 -> renders.
+     * Line 5 would be at cy=56: 56+7=63 > 55 -> rejected. ✓ */
     HalUIRect_t detail_box = { .x = 4U, .y = 22U, .w = 120U, .h = 34U };
     hal_ui_rect(&detail_box, HAL_UI_WHITE);
     ui_draw_text_wrapped(6U, 24U, detail, 116U, 8U, 31U);
 
     /* Footer: "Press button" + blinking square — positioned below box with 1px gap.
-     * Box bottom border row: 55. Footer y=57 → glyphs occupy rows 57..63.
+     * Box bottom border row: 55. Footer y=57 -> glyphs occupy rows 57..63.
      * Gap: row 56 (1px). Screen bottom: row 63 (footer fits exactly). ✓ */
     {
         const char *footer = "Press button";
@@ -1972,7 +1974,7 @@ static CeePewErr_t render_peer_select(void)
         hal_ui_rect_fill(&scroll_bar, HAL_UI_WHITE);
     }
 
-    /* Hint: single line, 20 chars = 120px fits 128px screen (x=4 → 4..123px) */
+    /* Hint: single line, 20 chars = 120px fits 128px screen (x=4 -> 4..123px) */
     hal_ui_text(4U, 56U, "BTN=select HOLD=blk", HAL_UI_WHITE);
 
     return CEEPEW_OK;
@@ -2034,15 +2036,15 @@ CeePewErr_t ui_peer_select_show(void)
  *
  * List mode (no dialog):
  *   - Potentiometer maps directly to the selected cache index.
- *   - Short press  (< 1500 ms) → select the highlighted peer via
+ *   - Short press  (< 1500 ms) -> select the highlighted peer via
  *     transport_ble_set_selected_peer() and advance to CODE_ENTRY.
- *   - Long press   (>= 1500 ms) → open the blacklist confirm dialog
+ *   - Long press   (>= 1500 ms) -> open the blacklist confirm dialog
  *     for the highlighted peer.
  *
  * Dialog mode (blacklist confirm active):
  *   - Potentiometer toggles YES/NO (left half = YES, right half = NO).
- *   - Short press confirms: YES → peer_cache_blacklist() + close dialog,
- *     NO → close dialog without blacklisting.
+ *   - Short press confirms: YES -> peer_cache_blacklist() + close dialog,
+ *     NO -> close dialog without blacklisting.
  *   - Long press cancels the dialog.
  */
 CeePewErr_t ui_peer_select_handle_input(uint8_t pot_value, bool button_pressed)
@@ -2077,7 +2079,7 @@ CeePewErr_t ui_peer_select_handle_input(uint8_t pot_value, bool button_pressed)
         return CEEPEW_OK;
     }
 
-    /* List mode: pot → index (freeze during button press) */
+    /* List mode: pot -> index (freeze during button press) */
     if (!button_pressed && count > 0U) {
         uint8_t idx = (uint8_t)(((uint16_t)pot_value * (uint16_t)count) / 256U);
         if (idx >= count) { idx = (uint8_t)(count - 1U); }
@@ -2090,13 +2092,13 @@ CeePewErr_t ui_peer_select_handle_input(uint8_t pot_value, bool button_pressed)
         uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                      ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
         if (dur >= 1500U) {
-            /* Long press → blacklist dialog for the selected peer */
+            /* Long press -> blacklist dialog for the selected peer */
             ESP_LOGI("ui", "PEER_SELECT: long press (%u ms) — open blacklist dialog",
                      (unsigned)dur);
             g_ui_ctx.peer_select_blacklist_idx = g_ui_ctx.peer_select_idx;
             g_ui_ctx.peer_select_blacklist_confirm = true;
         } else if (count > 0U) {
-            /* Short press → select peer and advance */
+            /* Short press -> select peer and advance */
             CeePewErr_t err = transport_ble_set_selected_peer(g_ui_ctx.peer_select_idx);
             if (err == CEEPEW_OK) {
                 ESP_LOGI("ui", "PEER_SELECT: peer %u selected — advancing to CODE_ENTRY",
@@ -2335,7 +2337,7 @@ static CeePewErr_t render_keyder_anim(void)
 {
     /* Bail immediately if a state transition is pending (e.g., PAIRING_FAILED
      * set by task_session after sync timeout). Without this guard the KEYDER
-     * animation draws one stale frame before the deferred next_state→current_state
+     * animation draws one stale frame before the deferred next_state->current_state
      * transition fires in ui_manager_update(). */
     if (g_ui_ctx.transition_ready && g_ui_ctx.next_state != UI_STATE_KEYDER) {
         return CEEPEW_OK;
@@ -2396,7 +2398,7 @@ static CeePewErr_t render_keyder_anim(void)
     if (session_sync_barrier_cleared()) {
         prog_pct = 100U;
     } else if (keyder_frames > 0U) {
-        /* Ramp 0 → 95 % over the full KEYDER window */
+        /* Ramp 0 -> 95 % over the full KEYDER window */
         uint32_t capped = (f < keyder_frames) ? f : keyder_frames;
         prog_pct = (uint8_t)(capped * 95U / keyder_frames);
     } else {
@@ -3299,9 +3301,9 @@ CeePewErr_t ui_manager_update(void)
      * Hardcoded session code "ZZZZ" is used for commitment verification.
      *
      * Timing:
-     *   DISCOVERY: wait 3s after peer appears → CODE_ENTRY
-     *   CODE_ENTRY: wait 2s, set ZZZZ → CONFIRM
-     *   CONFIRM → PAIRING: automatic via render_confirm once commitment
+     *   DISCOVERY: wait 3s after peer appears -> CODE_ENTRY
+     *   CODE_ENTRY: wait 2s, set ZZZZ -> CONFIRM
+     *   CONFIRM -> PAIRING: automatic via render_confirm once commitment
      *                       matches (no action needed here)               */
     {
         if (g_ui_ctx.current_state == UI_STATE_DISCOVERY && !g_ui_ctx.diag_mode) {
@@ -3326,7 +3328,7 @@ CeePewErr_t ui_manager_update(void)
                              ? (now_ms - g_ui_ctx.code_entry_start_ms) : 0U;
             ESP_LOGW("headless", "CODE_ENTRY elapsed=%lu", elapsed);
             /* HEADLESS ZZZZ — use a static flag (NOT code_digits[0]) so the
-             * normal code-entry input handler (pot → digit-0 overwrite) cannot
+             * normal code-entry input handler (pot -> digit-0 overwrite) cannot
              * trick the guard into skipping digits[1..3].  Reset the flag on
              * re-entry (elapsed near 0 after CODE_ENTRY entry init). */
             static bool s_zzzz_set = false;
@@ -3443,8 +3445,8 @@ CeePewErr_t ui_manager_update(void)
 
     if (g_ui_ctx.current_state == UI_STATE_PAIRING_DEGRADED) {
         /* PAIRING_DEGRADED requires an explicit decision:
-         *   Short press (click)  → confirm degraded mode, proceed
-         *   Long press (>= 1500ms) → cancel, go to PAIRING_FAILED
+         *   Short press (click)  -> confirm degraded mode, proceed
+         *   Long press (>= 1500ms) -> cancel, go to PAIRING_FAILED
          * This is handled in the session task via the pairing flow.
          * Here we just debounce and set the flag that the pairing flow
          * polls. The actual session_set_identity_degraded() is called
@@ -3456,7 +3458,7 @@ CeePewErr_t ui_manager_update(void)
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                          ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
             if (dur >= 1500U) {
-                /* Long press = cancel → return to discovery */
+                /* Long press = cancel -> return to discovery */
                 ESP_LOGW("ui", "PAIRING_DEGRADED: long press (%u ms) — cancelling degraded mode",
                          (unsigned)dur);
                 (void)ui_restart_discovery_from_pairing();
@@ -3622,11 +3624,11 @@ CeePewErr_t ui_manager_update(void)
             uint32_t dur = (now_ms >= g_ui_ctx.button_press_start_ms)
                            ? (now_ms - g_ui_ctx.button_press_start_ms) : 0U;
             if (dur >= CEEPEW_CHAT_LONG_PRESS_MS) {
-                /* Long press → chat menu */
+                /* Long press -> chat menu */
                 (void)ui_manager_transition_to(UI_STATE_CHAT_MENU);
                 g_ui_ctx.transition_ready = true;
             } else {
-                /* Short press → go back to chat thread */
+                /* Short press -> go back to chat thread */
                 (void)ui_manager_transition_to(UI_STATE_CHAT);
                 g_ui_ctx.transition_ready = true;
             }
@@ -3643,7 +3645,7 @@ CeePewErr_t ui_manager_update(void)
                 (void)ui_manager_transition_to(UI_STATE_CHAT);
                 g_ui_ctx.transition_ready = true;
             } else {
-                /* Short press → act on selected menu option */
+                /* Short press -> act on selected menu option */
                 if (g_ui_ctx.chat_menu_selected == 0U) {
                     /* Write — enter compose */
                     (void)ui_manager_transition_to(UI_STATE_CHAT_COMPOSE);

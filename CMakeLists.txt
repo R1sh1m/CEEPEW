@@ -36,8 +36,8 @@ set(EXTRA_COMPONENT_DIRS
 if(NOT DEFINED ENV{IDF_PATH} OR
    "$ENV{IDF_PATH}" STREQUAL "" OR
    NOT EXISTS "$ENV{IDF_PATH}/tools/cmake/project.cmake")
-    set(ENV{IDF_PATH} "C:/esp/v6.0.3/esp-idf")
-    set(IDF_PATH "C:/esp/v6.0.3/esp-idf")
+    set(ENV{IDF_PATH} "C:/esp/v6.0.2/esp-idf")
+    set(IDF_PATH "C:/esp/v6.0.2/esp-idf")
 else()
     set(IDF_PATH "$ENV{IDF_PATH}")
 endif()

@@ -5,14 +5,14 @@
  * NO other file in the project may contain raw GPIO numbers.
  *
  * Wiring is corrected to the active board mapping:
- *   OLED SDA → GPIO26
- *   OLED SCL → GPIO27
- *   POT      → GPIO33
- *   BUTTON   → GPIO19
- *   DIAG SW  → GPIO5
- *   RGB R    → GPIO15
- *   RGB G    → GPIO18
- *   RGB B    → GPIO23
+ *   OLED SDA -> GPIO26
+ *   OLED SCL -> GPIO27
+ *   POT      -> GPIO33
+ *   BUTTON   -> GPIO19
+ *   DIAG SW  -> GPIO5
+ *   RGB R    -> GPIO15
+ *   RGB G    -> GPIO18
+ *   RGB B    -> GPIO23
  */
 
 #ifndef HAL_PINS_H

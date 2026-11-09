@@ -5,6 +5,9 @@
 #include "ceepew_security_utils.h"
 #include "crypto_eddsa.h"
 #include "crypto_rng.h"
+#ifdef ESP_PLATFORM
+#include <esp_task_wdt.h>
+#endif
 
 #include <stdint.h>
 #include <string.h>
@@ -170,6 +173,9 @@ static void scalarmult(gf p[4], gf q[4], const u8 *s) {
         add(q, p);
         add(p, p);
         cswap(p, q, b);
+#ifdef ESP_PLATFORM
+        esp_task_wdt_reset();
+#endif
     }
 }
 static void scalarbase(gf p[4], const u8 *s) {
@@ -313,6 +319,8 @@ CeePewErr_t crypto_eddsa_keypair(uint8_t pk[32], uint8_t sk[64]) {
 }
 
 CeePewErr_t crypto_eddsa_seeded_keypair(uint8_t pk[32], uint8_t sk[64], const uint8_t seed[32]) {
+    /* Caller must have subscribed this task to TWD (e.g., in task_session).
+     * scalarmult() now yields to the scheduler with vTaskDelay(0) to avoid watchdog timeout. */
     CEEPEW_ASSERT(pk != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(sk != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(seed != NULL, CEEPEW_ERR_NULL_PTR);

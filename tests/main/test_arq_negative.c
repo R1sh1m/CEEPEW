@@ -3,7 +3,7 @@
  * Validates that ecc_arq_decode() correctly rejects:
  *   1. Out-of-order sequence numbers (delta != 1)
  *   2. Duplicate (replayed) sequence numbers
- *   3. Sequence wrap at the 256-boundary (0xFF → 0x00)
+ *   3. Sequence wrap at the 256-boundary (0xFF -> 0x00)
  *   4. NULL pointer inputs (caught by CEEPEW_ASSERT)
  *   5. Zero-length payloads
  *   6. Oversized payloads (exceeding CEEPEW_PACKET_MAX_BYTES)
@@ -61,7 +61,7 @@ static void test_in_order(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Test 2: Out-of-order sequence  (delta != 1 → CEEPEW_ERR_REPLAY)  */
+/*  Test 2: Out-of-order sequence  (delta != 1 -> CEEPEW_ERR_REPLAY)  */
 /* ------------------------------------------------------------------ */
 static void test_out_of_order(void) {
     ESP_LOGI(TAG, "=== Test: Out-of-order rejection ===");
@@ -124,7 +124,7 @@ static void test_duplicate(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Test 4: Sequence wrap at 256 boundary (0xFF → 0x00)              */
+/*  Test 4: Sequence wrap at 256 boundary (0xFF -> 0x00)              */
 /*                                                                     */
 /*  The 8-bit ARQ seq alone CANNOT distinguish a replay from a         */
 /*  legitimate wrap at the exact instant the counter crosses 256       */

@@ -3,6 +3,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/task.h"
+#include "esp_task_wdt.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "esp_log.h"
@@ -67,6 +68,11 @@ static const char *reset_reason_to_str(esp_reset_reason_t reason)
 }
 
 void app_main(void){
+    /* Subscribe main_task to the watchdog so crypto self-tests can feed it. */
+    esp_task_wdt_add(NULL);
+    /* Subscribe IDLE0 to TWD so it feeds watchdog when UI task blocks on OLED I2C */
+    esp_task_wdt_add(xTaskGetIdleTaskHandleForCore(0));
+    
     ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup === [BOARD %02X]", get_board_tag());
 
     esp_reset_reason_t reset_reason = esp_reset_reason();
@@ -74,6 +80,9 @@ void app_main(void){
 
     /* Suppress i2c.common false-positive GPIO reservation warnings */
     esp_log_level_set("i2c.common", ESP_LOG_ERROR);
+    /* Suppress WiFi "failed to post event" errors during BLE-only phase
+     * (WiFi not yet initialized when Bluedroid posts events). Non-fatal. */
+    esp_log_level_set("wifi", ESP_LOG_WARN);
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
@@ -221,17 +230,23 @@ void app_main(void){
 #if CONFIG_CEEPEW_DEVELOPMENT_MODE
     ESP_LOGI(TAG, "DEV-SELFTEST: entering handoff test");
     extern void test_pairing_handoff_run(void);
+    esp_task_wdt_reset();
     test_pairing_handoff_run();
+    esp_task_wdt_reset();
     ESP_LOGI(TAG, "DEV-SELFTEST: handoff test done");
 
     ESP_LOGI(TAG, "DEV-SELFTEST: entering convergence test");
     extern void test_pairing_convergence_run(void);
+    esp_task_wdt_reset();
     test_pairing_convergence_run();
+    esp_task_wdt_reset();
     ESP_LOGI(TAG, "DEV-SELFTEST: convergence test done");
 
     ESP_LOGI(TAG, "DEV-SELFTEST: entering integration tests");
     extern void integration_tests_run_all(void);
+    esp_task_wdt_reset();
     integration_tests_run_all();
+    esp_task_wdt_reset();
     ESP_LOGI(TAG, "DEV-SELFTEST: integration tests done");
 
     extern void ui_manager_reset_to_discovery(void);

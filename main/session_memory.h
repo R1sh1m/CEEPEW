@@ -5,8 +5,8 @@
  * via FreeRTOS queue (g_ui_event_queue).
  *
  * Event flow:
- *   Transport RX callbacks → Session task → UIEvent_t → UI task → Display update
- *   Input (ADC, GPIO) → Session task → UIEvent_t → UI task → Display update
+ *   Transport RX callbacks -> Session task -> UIEvent_t -> UI task -> Display update
+ *   Input (ADC, GPIO) -> Session task -> UIEvent_t -> UI task -> Display update
  *
  * Memory layout:
  *   UIEvent_t is exactly 28 bytes (fits in cache line, efficient for queue).
@@ -250,7 +250,7 @@ _Static_assert(sizeof(UIEventPayload) == 16, "UIEventPayload must be exactly 16 
 /**
  * @var g_ui_event_queue
  *
- * FreeRTOS queue for inter-task communication (session → UI).
+ * FreeRTOS queue for inter-task communication (session -> UI).
  * Type: QueueHandle_t holding UIEvent_t items.
  * Capacity: CEEPEW_UI_EVENT_QUEUE_DEPTH items.
  * Created: task_session_init() (runs during system init, not from task).

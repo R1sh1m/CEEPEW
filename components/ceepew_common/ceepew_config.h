@@ -99,7 +99,7 @@
 #define CEEPEW_NONCE_WARN_THRESHOLD      1000ULL
 #define CEEPEW_NONCE_HARD_LIMIT          (1ULL << 56)
 /* SECURITY: compile-time guard against nonce-wrap catastrophe.
- * If HARD_LIMIT equals UINT64_MAX, incrementing wraps to 0 → nonce reuse. */
+ * If HARD_LIMIT equals UINT64_MAX, incrementing wraps to 0 -> nonce reuse. */
 _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
                "CEEPEW_NONCE_HARD_LIMIT must not equal UINT64_MAX (would wrap nonce counter to zero)");
 #define CEEPEW_NONCE_WARNING_LIMIT       (CEEPEW_NONCE_HARD_LIMIT * 90U / 100U)
@@ -136,11 +136,11 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
  *
  * The magic values are chosen > 0x7F so they can never collide with
  * ASCII chat text typed by the user. */
-#define CEEPEW_KEY_SYNC_HELLO_BYTE       0xA5U   /* initiator → responder */
-#define CEEPEW_KEY_SYNC_ACK_BYTE         0x5AU   /* responder → initiator */
+#define CEEPEW_KEY_SYNC_HELLO_BYTE       0xA5U   /* initiator -> responder */
+#define CEEPEW_KEY_SYNC_ACK_BYTE         0x5AU   /* responder -> initiator */
 #define CEEPEW_KEY_SYNC_PING_BYTE        0xA6U   /* active chat ping */
 #define CEEPEW_KEY_SYNC_PONG_BYTE        0x5BU   /* active chat pong */
-#define CEEPEW_KEY_SYNC_TIMEOUT_MS       30000U  /* Give up → PAIRING_FAILED */
+#define CEEPEW_KEY_SYNC_TIMEOUT_MS       30000U  /* Give up -> PAIRING_FAILED */
 #define CEEPEW_KEY_SYNC_RETRY_MS         250U    /* Initiator retransmit cadence */
 #define CEEPEW_PFS_RETRY_INTERVAL_MS     3000U   /* PFS retransmit interval */
 #define CEEPEW_PFS_TIMEOUT_MS            60000U  /* abandon PFS after 60s, use base key */
@@ -200,13 +200,13 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 
 /* ── Navigator (relative pot selection) ──────────────────────────────────────
  * Step threshold: pot units per cursor step. Larger = less sensitive.
- * Default 4: 256 / 4 = 64 steps across full travel for 66 items → 1 char/step.
+ * Default 4: 256 / 4 = 64 steps across full travel for 66 items -> 1 char/step.
  */
 #define CEEPEW_NAV_STEP_THRESH            4U
 
 /* Velocity ramp: step multiplier = clamp(|frame_dv| / VEL_DIV, 1, MAX_STEP).
  * frame_dv ~ 1..6 per frame at 60 Hz normal turn; 24+ for medium sweep;
- * 48+ for fast flick. VEL_DIV=6 → step 4 at 24/frame, step 8 at 48/frame.
+ * 48+ for fast flick. VEL_DIV=6 -> step 4 at 24/frame, step 8 at 48/frame.
  */
 #define CEEPEW_NAV_VEL_DIV                6U
 #define CEEPEW_NAV_MAX_STEP               8U
@@ -230,7 +230,7 @@ _Static_assert(CEEPEW_NONCE_HARD_LIMIT != ~0ULL,
 #define CEEPEW_PHASE_TIMEOUT_MTU_MS      5000U  /* MTU_NEGOTIATING phase      */
 #define CEEPEW_PHASE_TIMEOUT_DISC_MS     6000U  /* CHAR_DISCOVERING phase     */
 #define CEEPEW_PHASE_TIMEOUT_VERIFY_MS   15000U /* VERIFICATION phase         */
-#define CEEPEW_PHASE_TIMEOUT_GATT_MS     45000U /* Hybrid-GATT: allow human typing delay + GATTC_OPEN → write */
+#define CEEPEW_PHASE_TIMEOUT_GATT_MS     45000U /* Hybrid-GATT: allow human typing delay + GATTC_OPEN -> write */
 #define CEEPEW_PHASE_TIMEOUT_OVERALL_MS  30000U /* Whole-pairing ceiling      */
 
 /* Pairing event queue depth — small because handlers drain quickly. */

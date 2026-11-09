@@ -22,6 +22,7 @@
 #include "freertos/queue.h"
 #include "freertos/timers.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "ceepew_config.h"
 #include "ceepew_assert.h"
 #include "esp_log.h"
@@ -57,7 +58,7 @@ static CeePewErr_t ui_handle_events(void)
         switch (event.type) {
 
         case UI_EVENT_SESSION_ESTABLISHED:
-            /* Session established on Core 1 → drive UI to chat menu.
+            /* Session established on Core 1 -> drive UI to chat menu.
              * The encrypted HELLO/ACK round-trip completed, keys are converged,
              * and the rendezvous handshake synchronized hop timers.
              * Transition directly to CHAT_MENU to enable messaging input. */
@@ -154,6 +155,9 @@ void task_ui_run(void *pvParameters)
 {
     (void)pvParameters;
 
+    /* Subscribe this task to the watchdog so OLED I2C operations can feed it. */
+    esp_task_wdt_add(NULL);
+
     s_ui_task_handle = xTaskGetCurrentTaskHandle();
     CEEPEW_ASSERT_VOID(s_ui_task_handle != NULL);
 
@@ -202,7 +206,7 @@ void task_ui_run(void *pvParameters)
                         s_diag_prev = diag_direct;
                     }
                     (void)ui_manager_handle_input(
-                        (uint8_t)(s_input_ctx.smoothed_adc >> 4U),  /* 12-bit → 8-bit */
+                        (uint8_t)(s_input_ctx.smoothed_adc >> 4U),  /* 12-bit -> 8-bit */
                         (s_input_ctx.click_pending),
                         diag_direct);
                 }
@@ -227,6 +231,8 @@ void task_ui_run(void *pvParameters)
 
         /* ── 3. Draw current screen ────────────────────────────────── */
         err = ui_manager_draw();
+        /* Feed watchdog after slow OLED I2C draw */
+        esp_task_wdt_reset();
         if (err != CEEPEW_OK) {
             TickType_t now = xTaskGetTickCount();
             if ((now - s_last_ui_warn_tick) >= pdMS_TO_TICKS(5000)) {

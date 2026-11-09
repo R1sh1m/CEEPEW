@@ -3,8 +3,8 @@
  * CEE-PEW ESP-NOW Security Layer (hardened receive pipeline)
  *
  * SECURITY: Receive pipeline executes in this EXACT order:
- *   1. DoS guard → MAC-based cookie validation
- *   2. MAC lock → Constant-time peer MAC verification
+ *   1. DoS guard -> MAC-based cookie validation
+ *   2. MAC lock -> Constant-time peer MAC verification
  *   3. CRC-32 validation (returns NACK if failed — transport error, not attack)
  *   4. FEC decode (single-bit correction, returns NACK on uncorrectable errors)
  *   5. Timestamp check (±CEEPEW_TIMESTAMP_SLACK_S, silent fail — timing mitigation)
@@ -574,8 +574,8 @@ CeePewErr_t transport_esl_process_incoming(uint8_t *frame, uint16_t *len,
     s_esl_pipeline_ctx.queue_depth = queue_depth;
     s_esl_pipeline_ctx.payload_offset = CEEPEW_ESL_HEADER_BYTES;
 
-    /* Run the 7-stage ESL ingress pipeline (DoS → MAC → Magic → CRC →
-     * Timestamp → Replay → Strip). All stages pass the frame buffer through
+    /* Run the 7-stage ESL ingress pipeline (DoS -> MAC -> Magic -> CRC ->
+     * Timestamp -> Replay -> Strip). All stages pass the frame buffer through
      * until the final strip stage which memmove-s the payload to the front. */
     uint8_t *output = NULL;
     uint16_t output_len = 0U;

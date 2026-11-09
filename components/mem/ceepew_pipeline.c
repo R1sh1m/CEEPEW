@@ -15,8 +15,8 @@
    a sequence of function pointers in order, threading the output of each
    stage as the input to the next. This decouples the encoding/crypto/FEC
    layers from the specific order and composition of operations, allowing
-   runtime assembly of different processing chains (e.g., TX compress→encrypt→FEC
-   vs RX CRC→FEC decode→decrypt→decompress). Each stage is responsible for
+   runtime assembly of different processing chains (e.g., TX compress->encrypt->FEC
+   vs RX CRC->FEC decode->decrypt->decompress). Each stage is responsible for
    allocating its own output from the region. */
 
 static bool s_initialised = false;

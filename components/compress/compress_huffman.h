@@ -48,7 +48,7 @@ extern "C" {
 /* Maximum input/output sizes (region allocator bound).
  * Max output for 255-byte input with worst-case expansion:
  * 3 bytes header + each symbol as 12-bit escape + 8-bit literal.
- * 255 symbols × 20 bits = 638 bytes → 80 bytes header overhead.
+ * 255 symbols × 20 bits = 638 bytes -> 80 bytes header overhead.
  * Round up to 416 for safety with 7-bit codes (padding bits). */
 #define CEEPEW_HUFFMAN_MAX_INPUT_BYTES  (255U)
 #define CEEPEW_HUFFMAN_MAX_OUTPUT_BYTES (416U)
