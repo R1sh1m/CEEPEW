@@ -90,11 +90,10 @@ DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
 CEEPEW_ICITIIT_HARDWARE_LOGS*.md
 drops_report.csv
-# Published test data & paper evidence (unignore data/ contents, re-ignore private scratch/tooling)
-!data/**
-data/raw/_tooling/
-data/raw/**/_tooling/
-data/raw/replay_bitmap_ota_20261106/
+# Experiment logs & captures (local run artifacts, not firmware source)
+data/raw/
+data/derived/
+data/manifests/
 
 # Docs — internal design documents, presentations, and paper research
 docs/
@@ -114,7 +113,6 @@ tools/build_technical_report.py
 tools/archive/build_technical_report.py
 tools/capture/captures/
 *.pcap
-!data/**/*.pcap
 *review_pack*
 *REVIEW_PACK*
 
