@@ -1,0 +1,23 @@
+{
+  "test_id": "B_pairing_stress",
+  "cycles_attempted": 10,
+  "cycles_successful": 10,
+  "cycles_failed": 0,
+  "success_rate": 1.0,
+  "failure_breakdown": {},
+  "mutex_failures": 0,
+  "watchdog_resets": 0,
+  "unexplained_failures": 0,
+  "duration_stats": {
+    "median_s": 62.7161066532135,
+    "min_s": 62.64029836654663,
+    "max_s": 63.11495518684387,
+    "mean_s": 62.73476142883301
+  },
+  "stress_modes": [],
+  "timestamp_utc": "2026-11-16T14:53:44.621221+00:00",
+  "ports": {
+    "a": "COM3",
+    "b": "COM4"
+  }
+}

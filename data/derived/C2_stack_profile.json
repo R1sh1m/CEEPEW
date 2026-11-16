@@ -1,0 +1,140 @@
+{
+  "test_id": "CL_stack_load",
+  "profile": "lite",
+  "duration_seconds": 300,
+  "workloads": [
+    "espnow_max",
+    "ascon_only",
+    "burst",
+    "ui_concurrent"
+  ],
+  "stack_analysis": {
+    "stack_samples": [
+      {
+        "task": "ui_task",
+        "free_bytes": 7968,
+        "line": "52.4 [DEVICE_A] I (41705) UI: [STACK-HWM] ui_task free=7968 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7968,
+        "line": "53.6 [DEVICE_B] I (41532) UI: [STACK-HWM] ui_task free=7968 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7968,
+        "line": "115.8 [DEVICE_A] I (84433) UI: [STACK-HWM] ui_task free=7968 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7968,
+        "line": "121.1 [DEVICE_B] I (85446) UI: [STACK-HWM] ui_task free=7968 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10904,
+        "line": "139.4 [DEVICE_A] I (104387) task_session: [STACK-HWM] session_task free=10904 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "149.0 [DEVICE_B] I (106301) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7968,
+        "line": "162.7 [DEVICE_A] I (123427) UI: [STACK-HWM] ui_task free=7968 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7968,
+        "line": "169.9 [DEVICE_B] I (124303) UI: [STACK-HWM] ui_task free=7968 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "178.3 [DEVICE_B] I (141868) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10904,
+        "line": "178.5 [DEVICE_A] I (137045) task_session: [STACK-HWM] session_task free=10904 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7936,
+        "line": "185.6 [DEVICE_B] I (153044) UI: [STACK-HWM] ui_task free=7936 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "195.0 [DEVICE_B] I (172574) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7936,
+        "line": "201.1 [DEVICE_B] I (182936) UI: [STACK-HWM] ui_task free=7936 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10904,
+        "line": "216.7 [DEVICE_A] I (167728) task_session: [STACK-HWM] session_task free=10904 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "225.1 [DEVICE_B] I (204596) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7936,
+        "line": "234.8 [DEVICE_B] I (218646) UI: [STACK-HWM] ui_task free=7936 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "249.5 [DEVICE_B] I (234608) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7936,
+        "line": "275.5 [DEVICE_B] I (258644) UI: [STACK-HWM] ui_task free=7936 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8096,
+        "line": "278.8 [DEVICE_A] I (41013) UI: [STACK-HWM] ui_task free=8096 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "285.6 [DEVICE_B] I (268249) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      }
+    ],
+    "min_highwater_bytes": 7936,
+    "max_highwater_bytes": 10904,
+    "stack_canary_failures": 0,
+    "freertos_overflow_hooks": 0,
+    "queue_max_depth": 2,
+    "queue_overflow_events": 0,
+    "tasks_seen": [
+      "session_task",
+      "ui_task"
+    ]
+  },
+  "safety_margin": {
+    "ui_task": {
+      "stack_size_bytes": 10240,
+      "min_highwater_bytes": 7936,
+      "utilisation_pct": 22.5,
+      "safety_margin_bytes": 7936,
+      "safety_margin_pct": 77.5
+    }
+  },
+  "verdict": "PASS",
+  "timestamp_utc": "2026-11-16T15:17:16.830429+00:00",
+  "ports": {
+    "a": "COM3",
+    "b": "COM4"
+  }
+}

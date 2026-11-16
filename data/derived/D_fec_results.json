@@ -1,0 +1,70 @@
+{
+  "test_id": "D_fec_corruption",
+  "per_log": {
+    "clean": {
+      "fec_corrections": 0,
+      "fec_decode_failures": 0,
+      "fec_off_rx": 0,
+      "ascon_failures": 0,
+      "messages_delivered": 0,
+      "messages_failed": 0,
+      "error_codes": {},
+      "error": "log file not found",
+      "file": "D_clean.log"
+    },
+    "1bit": {
+      "fec_corrections": 0,
+      "fec_decode_failures": 0,
+      "fec_off_rx": 0,
+      "ascon_failures": 0,
+      "messages_delivered": 0,
+      "messages_failed": 0,
+      "error_codes": {},
+      "error": "log file not found",
+      "file": "D_1bit.log"
+    },
+    "2bit": {
+      "fec_corrections": 0,
+      "fec_decode_failures": 0,
+      "fec_off_rx": 0,
+      "ascon_failures": 0,
+      "messages_delivered": 0,
+      "messages_failed": 0,
+      "error_codes": {},
+      "error": "log file not found",
+      "file": "D_2bit.log"
+    },
+    "3bit": {
+      "fec_corrections": 0,
+      "fec_decode_failures": 0,
+      "fec_off_rx": 0,
+      "ascon_failures": 0,
+      "messages_delivered": 0,
+      "messages_failed": 0,
+      "error_codes": {},
+      "error": "log file not found",
+      "file": "D_3bit.log"
+    },
+    "burst": {
+      "fec_corrections": 0,
+      "fec_decode_failures": 0,
+      "fec_off_rx": 0,
+      "ascon_failures": 0,
+      "messages_delivered": 0,
+      "messages_failed": 0,
+      "error_codes": {},
+      "error": "log file not found",
+      "file": "D_burst.log"
+    }
+  },
+  "summary": {},
+  "verdict": "WARN",
+  "issues": [
+    "1-bit correction rate 0.0% < 100%",
+    "2bit detection rate 0.0% < 100%",
+    "3bit detection rate 0.0% < 100%",
+    "burst detection rate 0.0% < 100%"
+  ],
+  "timestamp_utc": "2026-11-16T15:34:43.180170+00:00",
+  "log_dir": "data/raw/D_fec_corruption"
+}

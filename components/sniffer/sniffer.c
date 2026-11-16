@@ -61,8 +61,12 @@ typedef struct {
 static void wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type);
 static void uart_output_task(void *arg);
 static void test_frame_task(void *arg);
+static void uart_command_task(void *arg);
 static bool is_espnow_action_frame(const uint8_t *frame, uint16_t len);
 static void hex_dump_uart(uint64_t timestamp_us, const uint8_t *data, uint16_t len);
+static esp_err_t inject_raw_frame(const uint8_t *data, uint16_t len);
+static esp_err_t inject_bitflip_frame(const uint8_t *data, uint16_t len, int bit_index);
+static esp_err_t inject_burst_frame(const uint8_t *data, uint16_t len, int start_bit, int num_bits);
 
 esp_err_t sniffer_init(const sniffer_config_t *config)
 {
@@ -93,7 +97,7 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Initialize UART */
+    /* Initialize UART for frame output */
     uart_config_t uart_conf = {
         .baud_rate = s_config.baud_rate,
         .data_bits = UART_DATA_8_BITS,
@@ -102,9 +106,8 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
+    // Configure output UART (default UART1) on GPIO16 (TX) / GPIO17 (RX)
     ESP_ERROR_CHECK(uart_param_config(s_config.uart_port, &uart_conf));
-    
-    /* Configure UART pins - use GPIO17 for TX on UART1 (GPIO9/10 are flash) */
     if (s_config.uart_port == 1) {
         ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, 16, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     } else {
@@ -112,6 +115,12 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
                                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     }
     ESP_ERROR_CHECK(uart_driver_install(s_config.uart_port, 4096, 0, 0, NULL, 0));
+
+    /* Initialize UART for command input */
+    // Use UART2 (GPIO4 TX, GPIO5 RX) as default command port
+    ESP_ERROR_CHECK(uart_param_config(s_config.cmd_uart_port, &uart_conf));
+    ESP_ERROR_CHECK(uart_set_pin(s_config.cmd_uart_port, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_driver_install(s_config.cmd_uart_port, 4096, 0, 0, NULL, 0));
 
     /* Initialize NVS (required for Wi-Fi) */
     esp_err_t ret = nvs_flash_init();
@@ -142,6 +151,9 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
 
     /* Start test frame generator task */
     xTaskCreatePinnedToCore(test_frame_task, "sniffer_test", 4096, NULL, 4, &s_test_task_handle, 1);
+
+    /* Start UART command task for host-controlled injection */
+    xTaskCreatePinnedToCore(uart_command_task, "sniffer_cmd", 4096, NULL, 6, NULL, 1);
 
     s_running = true;
     ESP_LOGI(TAG, "Sniffer started on channel %d, UART%d @ %d baud, ESP-NOW filter: %s",
@@ -186,8 +198,9 @@ esp_err_t sniffer_stop(void)
         s_state_mutex = NULL;
     }
 
-    /* Uninstall UART driver */
+    /* Uninstall UART drivers */
     uart_driver_delete(s_config.uart_port);
+    uart_driver_delete(s_config.cmd_uart_port);
 
     ESP_LOGI(TAG, "Sniffer stopped");
     return ESP_OK;
@@ -378,5 +391,205 @@ static void test_frame_task(void *arg)
     }
 
     ESP_LOGI(TAG, "Test frame generator exiting");
+    vTaskDelete(NULL);
+}
+
+/* ------------------------------------------------------------------------
+ * Raw 802.11 frame injection via esp_wifi_80211_tx()
+ * ------------------------------------------------------------------------ */
+static esp_err_t inject_raw_frame(const uint8_t *data, uint16_t len)
+{
+    if (!data || len == 0 || len > MAX_FRAME_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* esp_wifi_80211_tx requires Wi-Fi to be started; we are in NULL mode
+     * which permits raw TX on the configured channel. */
+    esp_err_t ret = esp_wifi_80211_tx(s_config.uart_port == 1 ? WIFI_IF_STA : WIFI_IF_STA,
+                                      data, len, true);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_80211_tx failed: %d", ret);
+        return ret;
+    }
+    ESP_LOGD(TAG, "Injected raw frame len=%u", len);
+    return ESP_OK;
+}
+
+static esp_err_t inject_bitflip_frame(const uint8_t *data, uint16_t len, int bit_index)
+{
+    if (!data || len == 0 || bit_index < 0 || bit_index >= (int)(len * 8)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Copy to a mutable buffer */
+    static uint8_t buf[MAX_FRAME_LEN];
+    if (len > MAX_FRAME_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memcpy(buf, data, len);
+
+    /* Flip the bit */
+    int byte_idx = bit_index / 8;
+    int bit_idx  = bit_index % 8;
+    buf[byte_idx] ^= (1 << bit_idx);
+
+    ESP_LOGI(TAG, "Injecting bit-flip frame: bit=%d byte=%d mask=0x%02X",
+             bit_index, byte_idx, (1 << bit_idx));
+    return inject_raw_frame(buf, len);
+}
+
+static esp_err_t inject_burst_frame(const uint8_t *data, uint16_t len, int start_bit, int num_bits)
+{
+    if (!data || len == 0 || start_bit < 0 || num_bits <= 0 ||
+        start_bit + num_bits > (int)(len * 8)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    static uint8_t buf[MAX_FRAME_LEN];
+    if (len > MAX_FRAME_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memcpy(buf, data, len);
+
+    /* Flip each bit in the burst range */
+    for (int i = 0; i < num_bits; i++) {
+        int bit_index = start_bit + i;
+        int byte_idx = bit_index / 8;
+        int bit_idx  = bit_index % 8;
+        buf[byte_idx] ^= (1 << bit_idx);
+    }
+
+    ESP_LOGI(TAG, "Injecting burst frame: start_bit=%d num_bits=%d",
+             start_bit, num_bits);
+    return inject_raw_frame(buf, len);
+}
+
+/* Parse a hex string into a byte buffer. Returns number of bytes written. */
+static int parse_hex(const char *hex_str, uint8_t *out, int max_len)
+{
+    int len = (int)strlen(hex_str);
+    if (len % 2 != 0) return -1;
+    int byte_count = len / 2;
+    if (byte_count > max_len) return -1;
+
+    for (int i = 0; i < byte_count; i++) {
+        unsigned int val;
+        if (sscanf(hex_str + i * 2, "%02x", &val) != 1) return -1;
+        out[i] = (uint8_t)val;
+    }
+    return byte_count;
+}
+
+/* UART command task - reads commands from UART and executes injection */
+static void uart_command_task(void *arg)
+{
+    (void)arg;
+    static uint8_t cmd_buf[512];
+    static uint8_t hex_buf[MAX_FRAME_LEN];
+
+    ESP_LOGI(TAG, "UART command task started");
+
+    while (s_running) {
+        int len = uart_read_bytes(s_config.cmd_uart_port, cmd_buf, sizeof(cmd_buf) - 1,
+                                  pdMS_TO_TICKS(100));
+        if (len <= 0) continue;
+
+        cmd_buf[len] = '\0';
+
+        /* Trim trailing whitespace/newline */
+        while (len > 0 && (cmd_buf[len-1] == '\n' || cmd_buf[len-1] == '\r' ||
+                           cmd_buf[len-1] == ' ' || cmd_buf[len-1] == '\t')) {
+            cmd_buf[--len] = '\0';
+        }
+
+        if (len == 0) continue;
+
+        /* Command: INJECT <hex_payload> */
+        if (strncmp((char *)cmd_buf, "INJECT ", 7) == 0) {
+            int payload_len = parse_hex((char *)cmd_buf + 7, hex_buf, MAX_FRAME_LEN);
+            if (payload_len < 0) {
+                ESP_LOGE(TAG, "INJECT: invalid hex payload");
+                continue;
+            }
+            esp_err_t ret = inject_raw_frame(hex_buf, (uint16_t)payload_len);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "INJECT OK: %d bytes", payload_len);
+            } else {
+                ESP_LOGE(TAG, "INJECT FAILED: %d", ret);
+            }
+            continue;
+        }
+
+        /* Command: BITFLIP <hex_payload> <bit_index> */
+        if (strncmp((char *)cmd_buf, "BITFLIP ", 8) == 0) {
+            char *space = strchr((char *)cmd_buf + 8, ' ');
+            if (!space) {
+                ESP_LOGE(TAG, "BITFLIP: missing bit index");
+                continue;
+            }
+            *space = '\0';
+            int bit_index = atoi(space + 1);
+            int payload_len = parse_hex((char *)cmd_buf + 8, hex_buf, MAX_FRAME_LEN);
+            if (payload_len < 0) {
+                ESP_LOGE(TAG, "BITFLIP: invalid hex payload");
+                continue;
+            }
+            esp_err_t ret = inject_bitflip_frame(hex_buf, (uint16_t)payload_len, bit_index);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "BITFLIP OK: bit=%d", bit_index);
+            } else {
+                ESP_LOGE(TAG, "BITFLIP FAILED: %d", ret);
+            }
+            continue;
+        }
+
+        /* Command: BURST <hex_payload> <start_bit> <num_bits> */
+        if (strncmp((char *)cmd_buf, "BURST ", 6) == 0) {
+            char *space1 = strchr((char *)cmd_buf + 6, ' ');
+            if (!space1) {
+                ESP_LOGE(TAG, "BURST: missing start_bit");
+                continue;
+            }
+            *space1 = '\0';
+            char *space2 = strchr(space1 + 1, ' ');
+            if (!space2) {
+                ESP_LOGE(TAG, "BURST: missing num_bits");
+                continue;
+            }
+            *space2 = '\0';
+            int start_bit = atoi(space1 + 1);
+            int num_bits  = atoi(space2 + 1);
+            int payload_len = parse_hex((char *)cmd_buf + 6, hex_buf, MAX_FRAME_LEN);
+            if (payload_len < 0) {
+                ESP_LOGE(TAG, "BURST: invalid hex payload");
+                continue;
+            }
+            esp_err_t ret = inject_burst_frame(hex_buf, (uint16_t)payload_len, start_bit, num_bits);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "BURST OK: start=%d num=%d", start_bit, num_bits);
+            } else {
+                ESP_LOGE(TAG, "BURST FAILED: %d", ret);
+            }
+            continue;
+        }
+
+        /* Command: STATUS */
+        if (strcmp((char *)cmd_buf, "STATUS") == 0) {
+            ESP_LOGI(TAG, "STATUS: running=%d channel=%d filter=%d",
+                     s_running, s_config.channel, s_config.filter_espnow_only);
+            continue;
+        }
+
+        /* Command: STOP */
+        if (strcmp((char *)cmd_buf, "STOP") == 0) {
+            ESP_LOGI(TAG, "STOP command received");
+            sniffer_stop();
+            continue;
+        }
+
+        ESP_LOGW(TAG, "Unknown command: %s", (char *)cmd_buf);
+    }
+
+    ESP_LOGI(TAG, "UART command task exiting");
     vTaskDelete(NULL);
 }

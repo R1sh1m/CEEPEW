@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "updated_utc": "2026-11-09T12:53:23Z",
+  "last_updated_utc": "2026-11-16T00:00:00Z",
   "project": "CEE-PEW",
   "conference": "IEEE ICITIIT 2027",
   "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
@@ -1413,6 +1414,82 @@
       "manifest_path": "data/manifests/X6_fec_ablation_20261109.json",
       "manifest_utc_start": "2026-11-09T12:52:41Z",
       "manifest_utc_end": "2026-11-09T12:52:41Z"
+    },
+    {
+      "id": "B_PAIRING_STRESS",
+      "description": "BLE pairing stress test: 10 consecutive pairing cycles with full BLE teardown and ESP-NOW handoff",
+      "formula": "cycles_successful / cycles_attempted",
+      "value": "10/10",
+      "unit": "cycles",
+      "class": "M-HW",
+      "n": 10,
+      "source": {
+        "script": "python tools/ceepew_pipeline.py --mode pairing",
+        "raw_log": "logs/pairing_stress_20261116.txt",
+        "note": "2026-11-16 test campaign. 100% success rate across 10 cycles. Median cycle duration 62.7 s (includes BLE discovery, GATT pairing, PIN confirmation, BLE teardown, ESP-NOW handoff, and session teardown)."
+      },
+      "cycles_attempted": 10,
+      "cycles_successful": 10,
+      "success_rate": 1.0,
+      "median_duration_s": 62.7
+    },
+    {
+      "id": "C1_STACK_LOAD_FULL",
+      "description": "Stack profiling under Full profile build (CONFIG_CEEPEW_PROFILE_LITE unset): uxTaskGetStackHighWaterMark samples across UI and Session tasks",
+      "formula": "min_free_bytes across stack_samples",
+      "value": "7984",
+      "unit": "B free (min observed)",
+      "class": "M-HW",
+      "n": 28,
+      "source": {
+        "script": "python tools/ceepew_pipeline.py --mode diag",
+        "raw_log": "logs/stack_profile_full_20261116.txt",
+        "note": "2026-11-16 test campaign. Full profile build. 28 stack samples collected. Min free 7984 B, max free 10904 B. Zero canary failures and zero overflow hooks triggered."
+      },
+      "profile": "full",
+      "stack_samples": 28,
+      "min_free_bytes": 7984,
+      "max_free_bytes": 10904,
+      "canary_failures": 0,
+      "overflow_hooks": 0
+    },
+    {
+      "id": "C2_STACK_LOAD_LITE",
+      "description": "Stack profiling under Lite profile build (CONFIG_CEEPEW_PROFILE_LITE=y): uxTaskGetStackHighWaterMark samples across UI and Session tasks",
+      "formula": "min_free_bytes across stack_samples",
+      "value": "7936",
+      "unit": "B free (min observed)",
+      "class": "M-HW",
+      "n": 20,
+      "source": {
+        "script": "python tools/ceepew_pipeline.py --mode diag",
+        "raw_log": "logs/stack_profile_lite_20261116.txt",
+        "note": "2026-11-16 test campaign. Lite profile build. 20 stack samples collected. Min free 7936 B, max free 10904 B. Zero canary failures and zero overflow hooks triggered."
+      },
+      "profile": "lite",
+      "stack_samples": 20,
+      "min_free_bytes": 7936,
+      "max_free_bytes": 10904,
+      "canary_failures": 0,
+      "overflow_hooks": 0
+    },
+    {
+      "id": "E_MULTI_DISTANCE",
+      "description": "Multi-distance RSSI measurement at ~20 cm separation between two ESP32 boards",
+      "formula": "rssi_avg_dbm across received frames",
+      "value": "-54.3",
+      "unit": "dBm",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "script": "python tools/ceepew_pipeline.py --mode diag",
+        "raw_log": "logs/rssi_20cm_20261116.txt",
+        "note": "2026-11-16 test campaign. Distance ~20 cm. RSSI average -54.3 dBm, min -78 dBm, max 0 dBm (0 dBm indicates near-field saturation artifact)."
+      },
+      "distance_cm": 20,
+      "rssi_avg_dbm": -54.3,
+      "rssi_min_dbm": -78,
+      "rssi_max_dbm": 0
     }
   ]
 }

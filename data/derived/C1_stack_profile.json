@@ -1,0 +1,183 @@
+{
+  "test_id": "CF_stack_load",
+  "profile": "full",
+  "duration_seconds": 300,
+  "workloads": [
+    "ed25519",
+    "x25519",
+    "espnow_max",
+    "fec_on",
+    "malformed",
+    "burst",
+    "ui_concurrent"
+  ],
+  "stack_analysis": {
+    "stack_samples": [
+      {
+        "task": "ui_task",
+        "free_bytes": 8096,
+        "line": "62.1 [DEVICE_A] I (40648) UI: [STACK-HWM] ui_task free=8096 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8096,
+        "line": "65.9 [DEVICE_B] I (41072) UI: [STACK-HWM] ui_task free=8096 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8096,
+        "line": "134.4 [DEVICE_A] I (80522) UI: [STACK-HWM] ui_task free=8096 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "141.1 [DEVICE_B] I (83063) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10904,
+        "line": "156.0 [DEVICE_A] I (106137) task_session: [STACK-HWM] session_task free=10904 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 10896,
+        "line": "161.1 [DEVICE_B] I (105134) task_session: [STACK-HWM] session_task free=10896 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "172.4 [DEVICE_A] I (119388) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "180.3 [DEVICE_B] I (122108) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9144,
+        "line": "185.2 [DEVICE_A] I (145383) task_session: [STACK-HWM] session_task free=9144 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "188.2 [DEVICE_A] I (150841) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "204.9 [DEVICE_A] I (180466) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9136,
+        "line": "210.8 [DEVICE_B] I (154535) task_session: [STACK-HWM] session_task free=9136 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "211.0 [DEVICE_B] I (156699) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9144,
+        "line": "215.4 [DEVICE_A] I (188491) task_session: [STACK-HWM] session_task free=9144 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "219.5 [DEVICE_B] I (183612) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "225.4 [DEVICE_A] I (210978) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9136,
+        "line": "225.6 [DEVICE_B] I (190474) task_session: [STACK-HWM] session_task free=9136 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9144,
+        "line": "225.8 [DEVICE_A] I (222906) task_session: [STACK-HWM] session_task free=9144 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "234.9 [DEVICE_B] I (213158) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9136,
+        "line": "236.1 [DEVICE_B] I (226304) task_session: [STACK-HWM] session_task free=9136 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "238.9 [DEVICE_A] I (238832) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "241.1 [DEVICE_B] I (240958) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9144,
+        "line": "261.8 [DEVICE_A] I (261691) task_session: [STACK-HWM] session_task free=9144 B (min observed)"
+      },
+      {
+        "task": "session_task",
+        "free_bytes": 9136,
+        "line": "265.3 [DEVICE_B] I (265205) task_session: [STACK-HWM] session_task free=9136 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "269.5 [DEVICE_A] I (269367) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "271.6 [DEVICE_B] I (271449) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 8080,
+        "line": "297.3 [DEVICE_A] I (297234) UI: [STACK-HWM] ui_task free=8080 B (min observed)"
+      },
+      {
+        "task": "ui_task",
+        "free_bytes": 7984,
+        "line": "299.4 [DEVICE_B] I (299247) UI: [STACK-HWM] ui_task free=7984 B (min observed)"
+      }
+    ],
+    "min_highwater_bytes": 7984,
+    "max_highwater_bytes": 10904,
+    "stack_canary_failures": 0,
+    "freertos_overflow_hooks": 0,
+    "queue_max_depth": 2,
+    "queue_overflow_events": 0,
+    "tasks_seen": [
+      "session_task",
+      "ui_task"
+    ]
+  },
+  "safety_margin": {
+    "ui_task": {
+      "stack_size_bytes": 10240,
+      "min_highwater_bytes": 7984,
+      "utilisation_pct": 22.03125,
+      "safety_margin_bytes": 7984,
+      "safety_margin_pct": 77.96875
+    }
+  },
+  "verdict": "PASS",
+  "timestamp_utc": "2026-11-16T15:10:46.097634+00:00",
+  "ports": {
+    "a": "COM3",
+    "b": "COM4"
+  }
+}
