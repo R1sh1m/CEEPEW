@@ -60,7 +60,8 @@ void app_main(void)
     sniffer_config_t config = SNIFFER_DEFAULT_CONFIG();
     config.channel = 1;
     config.filter_espnow_only = true;
-    config.uart_port = UART_NUM_0;  /* Use UART0 (COM6) - mixed with logs/noise, filter in software */
+    /* Split-UART design: UART1 (GPIO16/17) for frame output, UART2 (GPIO4/5) for command input.
+     * Do NOT override uart_port — the default (UART_NUM_1) keeps output and commands on separate ports. */
     config.baud_rate = 921600;
 
     esp_err_t err = sniffer_init(&config);
