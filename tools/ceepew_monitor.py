@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from typing import TextIO
 import serial
+import serial.tools.list_ports
 
 log_lock = threading.Lock()
 stop_event = threading.Event()
@@ -136,10 +137,28 @@ def monitor_port(
         write_per_port_log(per_port_log, msg)
 
 
+def auto_detect_ports() -> list[str]:
+    """Auto-detect connected USB serial ports (CP210x, CH34x, FTDI, Espressif)."""
+    detected: list[str] = []
+    candidates = list(serial.tools.list_ports.comports())
+    # Prioritize dedicated USB-to-UART bridge controllers
+    for p in candidates:
+        desc = (p.description or "").lower()
+        mfg = (getattr(p, "manufacturer", "") or "").lower()
+        if any(k in desc or k in mfg for k in ("silicon labs", "cp210", "ch340", "ch341", "ftdi", "espressif", "usb-serial")):
+            detected.append(p.device)
+    if not detected and candidates:
+        # Fallback to any non-Bluetooth COM ports
+        for p in candidates:
+            if "bluetooth" not in (p.description or "").lower():
+                detected.append(p.device)
+    return detected[:2]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="CEE-PEW unified serial monitor")
-    parser.add_argument("--port", action="append", required=True,
-                        help="Serial port(s); use twice for dual-port mode")
+    parser.add_argument("--port", action="append", default=None,
+                        help="Serial port(s); specify up to twice for dual-port mode (default: auto-detect)")
     parser.add_argument("--baud", type=int, default=115200,
                         help="Baud rate (default: 115200)")
     parser.add_argument("--duration", type=int, default=900,
@@ -163,6 +182,13 @@ def main():
     COLOR_ENABLED = _supports_color() and not args.no_color
 
     ports = args.port
+    if not ports:
+        ports = auto_detect_ports()
+        if not ports:
+            print("error: no active serial ports detected. Specify --port manually.", file=sys.stderr)
+            sys.exit(1)
+        print(f"[INFO] Auto-detected serial port(s): {', '.join(ports)}")
+
     if len(ports) < 1 or len(ports) > 2:
         print("error: specify 1 or 2 --port arguments", file=sys.stderr)
         sys.exit(1)
