@@ -45,3 +45,12 @@
 3. **Stack Safety & Pairing Resilience (B, C1, C2, E)**:
    - Stack high-water mark demonstrates ≥7936 B headroom across both cores with zero stack overflows and zero canary trips.
    - BLE pairing achieved 10/10 consecutive successful pairing cycles under stress.
+
+---
+
+## Evidence Integration & Manuscript Synchronization
+
+- **Results Ledger**: Updated in `results/registry.json` (95 cataloged claims; verified via `tools/validate_registry.py`).
+- **Archival Monograph**: Synced byte-identical between `docs/paper/The Paper/main.tex` and `docs/paper/The Paper/FINAL/ceepew_unrestricted.tex`.
+- **Pre-Publication Gate**: Full gate executed with `--external` flag $\rightarrow$ **AUTHORISED (0 fail, 12 pass, 2 warn)**.
+- **Continuous Integration**: GitHub Actions CI workflow all-green across production build, debug build, host tests, static analysis, and fuzzing.
