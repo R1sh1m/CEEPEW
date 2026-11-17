@@ -1,4 +1,4 @@
-# Test Campaign Results — 2026-11-16
+# Test Campaign Results — 2026-11-17
 
 ## Summary
 
@@ -8,28 +8,37 @@
 | C1 (stack profiling, full) | ✅ PASS | 28 stack samples, 7984-10904 bytes free, 0 canary/overflow |
 | C2 (stack profiling, lite) | ✅ PASS | 20 stack samples, 7936-10904 bytes free, 0 canary/overflow |
 | E (multi-distance) | ✅ PASS | RSSI avg=-54.3 dBm at ~20cm (current placement) |
-| A2 (replay edge) | ⏸️ PENDING | Sniffer UART fix already in code (separate UART1 output/UART2 commands); needs sniffer re-flash + ESP-IDF |
-| A3 (ARQ duplicate) | ⏸️ PENDING | Same as A2 |
-| D (FEC corruption) | ⏸️ PENDING | Same as A2; also requires pre-captured log files from sniffer injection |
-| A1 (OTA replay) | ⏸️ PENDING | Same as A2 |
+| Sniffer firmware | ✅ BUILT & FLASHED | ESP-IDF v6.1, COM6, `CONFIG_CEEPEW_SNIFFER_BUILD=y`, `WIFI_MODE_STA`, OTA RX & TX injection verified (`INJECT OK`) |
+| DUTs | ⚠️ COM3 BLOCKED | COM4 (Device B) active. COM3 (Device A) in hardware reset, requires physical RESET button press to recover. |
+| A2 (replay edge) | ⏸️ PENDING | Ready to run once COM3 is reset (sniffer OTA injection verified) |
+| A3 (ARQ duplicate) | ⏸️ PENDING | Ready to run once COM3 is reset |
+| D (FEC corruption) | ⏸️ PENDING | Ready to run once COM3 is reset |
+| A1 (OTA replay) | ⏸️ PENDING | Ready to run once COM3 is reset |
 
-## Sniffer UART Fix — RESOLVED IN CODE
+## Sniffer OTA Injection — OPERATIONAL ON HARDWARE
 
-The sniffer firmware (`components/sniffer/sniffer.c`) already implements separate UART ports:
-1. **UART1 (GPIO16/17)**: Frame output (`s_config.uart_port`, default `UART_NUM_1`)
-2. **UART2 (GPIO4/5)**: Command input (`s_config.cmd_uart_port`, default `UART_NUM_2`)
+The sniffer firmware (`components/sniffer/sniffer.c` and `sniffer_app.c`) is built as a dedicated standalone firmware (`CONFIG_CEEPEW_SNIFFER_BUILD=y`) and flashed to COM6:
+1. **Wi-Fi Mode**: Configured `WIFI_MODE_STA` so `esp_wifi_80211_tx()` functions properly for raw OTA injection.
+2. **UART Architecture**: Single-driver UART0 @ 921600 baud with interactive command handling (`INJECT`, `BITFLIP`, `BURST`, `STATUS`, `STOP`).
+3. **Live Hardware Verification**:
+   - `STATUS` response: `STATUS: running=1 channel=1 filter=1`
+   - Real promiscuous frame capture from the air: verified.
+   - `INJECT` response: `INJECT OK: 48 bytes` transmitted over the air.
+4. **Host Tooling**: `tools/sniffer_inject.py` hardened with `dtr=False, rts=False` to prevent CP2102 port reset issues.
 
-The `uart_command_task` reads from `cmd_uart_port` (UART2) while `uart_output_task` writes to `uart_port` (UART1). No shared UART — the conflict described below no longer exists in source.
+## DUT Hardware State
 
-**Status**: Fix is compile-verified in source. The sniffer board (COM6) needs to be re-flashed with the updated firmware, then A1/A2/A3/D can be run. ESP-IDF (`idf.py`) is required for the build/flash step and is not available in this environment.
+- **COM4 (Device B, MAC `1c:c3:ab:c2:52:ac`)**: Active and responsive, running `build_dev` firmware (dev mode enabled, bench timing disabled), actively scanning for BLE advertisements.
+- **COM3 (Device A, MAC `8c:94:df:97:d0:c0`)**: In a hardware reset / bootloader hold state. Does not transmit serial data (`No serial data received`). Requires physical power cycle or EN/RESET button press to reboot.
 
-**Next steps once ESP-IDF is available:**
-1. Build and flash sniffer firmware to COM6
-2. Re-run A2/A3/D/A1
-3. Update `results/registry.json` with results
-4. Update `docs/paper/The Paper/main.tex` with new test data
-5. Run publication gate: `python tools/publication_gate.py --paper the_paper --external`
-6. Commit changes (excluding `.agents/`)
+## Next Steps
+
+1. **Press RESET button on COM3 board** — Device A reboots into `build_dev` firmware and auto-pairs with COM4.
+2. **Run A2/A3/D/A1** — Execute `run_replay_edge.py`, `run_arq_duplicate.py`, and `run_fec_analysis.py`.
+3. **Update `results/registry.json`** — Add A1/A2/A3/D measured findings.
+4. **Sync Paper** — Verify and re-compile `docs/paper/The Paper/FINAL/ceepew_unrestricted.tex` and sync with `main.tex`.
+5. **Run publication gate** — `python tools/publication_gate.py --paper the_paper --external`.
+6. **Commit changes** (excluding `.agents/`).
 
 ## Test Results Detail
 

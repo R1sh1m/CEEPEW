@@ -136,6 +136,14 @@ menu "CEE-PEW Configuration"
                 921600 baud host-side. Debug only — normal builds leave this
                 disabled (default).
 
+        config CEEPEW_SNIFFER_BUILD
+            bool "Build as dedicated standalone OTA sniffer / injector firmware"
+            default n
+            help
+                When enabled, firmware boots directly into the promiscuous-mode
+                ESP-NOW sniffer and frame injector (components/sniffer/sniffer_app.c)
+                over UART0 at 921600 baud, bypassing normal CEE-PEW peer logic.
+
         choice CEEPEW_CAPTURE_LINK_MODE
             prompt "Capture bench link mode (logger build only)"
             depends on CEEPEW_CAPTURE

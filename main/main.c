@@ -68,6 +68,11 @@ static const char *reset_reason_to_str(esp_reset_reason_t reason)
 }
 
 void app_main(void){
+#if CONFIG_CEEPEW_SNIFFER_BUILD
+    extern void sniffer_app_main(void);
+    sniffer_app_main();
+    return;
+#endif
     /* Subscribe main_task to the watchdog so crypto self-tests can feed it. */
     esp_task_wdt_add(NULL);
     /* Subscribe IDLE0 to TWD so it feeds watchdog when UI task blocks on OLED I2C */

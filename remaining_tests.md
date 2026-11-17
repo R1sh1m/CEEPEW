@@ -1,7 +1,7 @@
 # Remaining Tests — Detailed Execution & Capture Plan
 
-**Last Updated**: 2026-11-16  
-**Status**: **PARTIAL** — B/C1/C2/E completed; A2/A3/D/A1 ready to run (sniffer UART fix already in code; requires ESP-IDF build + flash + hardware)  
+**Last Updated**: 2026-11-17  
+**Status**: **PARTIAL** — B/C1/C2/E completed; sniffer fully operational on COM6; A2/A3/D/A1 pending DUT physical reset (COM3 requires button press)  
 **Evidence Goal**: Close security, reliability, and performance gaps in IEEE ICITIIT 2027 paper
 
 ---
@@ -17,24 +17,40 @@
 | **C2** | Stack profiling: lite-profile | ✅ PASS (20 samples, 7936-10904 bytes free) | `run_load_profile.py --profile lite` |
 | **E** | Multi-distance radio evaluation | ✅ PASS (RSSI avg=-54.3 dBm at ~20cm) | `run_multi_distance.py` |
 
-**🔧 Sniffer UART Fix — RESOLVED IN CODE**:
+**✅ Sniffer / Injector Firmware — Built, Flashed & Verified**:
 
-The sniffer firmware (`components/sniffer/sniffer.c`) already implements separate UART ports:
-1. **UART1 (GPIO16/17)**: Frame output (`s_config.uart_port`, default `UART_NUM_1`)
-2. **UART2 (GPIO4/5)**: Command input (`s_config.cmd_uart_port`, default `UART_NUM_2`)
+- Configured with `CONFIG_CEEPEW_SNIFFER_BUILD=y` and `WIFI_MODE_STA` so `esp_wifi_80211_tx()` functions properly for OTA frame injection.
+- Built cleanly with ESP-IDF v6.1 (`-Werror` intact).
+- Flashed to COM6 (`20:50:0d:4f:e8:e4`) at 921600 baud.
+- Hardware verified: promiscuous capture of real ESP-NOW frames from the air and live OTA transmission (`INJECT OK: 48 bytes`).
+- `tools/sniffer_inject.py` hardened with `dtr=False, rts=False` to prevent CP2102 port reset hanging.
 
-The `uart_command_task` reads from `cmd_uart_port` (UART2) while `uart_output_task` writes to `uart_port` (UART1). No shared UART — the conflict described below no longer exists in source.
+**⏸️ Pending Over-the-Air Tests**:
 
-**Status**: Fix is compile-verified in source. The sniffer board (COM6) needs to be re-flashed with the updated firmware, then A1/A2/A3/D can be run. ESP-IDF (`idf.py`) is required for the build/flash step and is not available in this environment.
+| Test | Description | Status | Script | Blocker |
+|------|-------------|--------|--------|---------|
+| **A1** | OTA replay-gate: exact duplicate | Ready | `extract_frame.py` → `sniffer_inject.py` | Requires COM3 physical RESET button press |
+| **A2** | OTA replay-gate: edge cases | Ready | `run_replay_edge.py` | Requires COM3 physical RESET button press |
+| **A3** | ARQ duplicate vs. replay bitmap | Ready | `run_arq_duplicate.py` | Requires COM3 physical RESET button press |
+| **D** | FEC controlled corruption | Ready | `run_fec_analysis.py` | Requires COM3 physical RESET button press |
 
-**⏸️ Pending Tests** (require sniffer re-flash + ESP-IDF + hardware):
+**Hardware Port Status** (2026-11-17):
 
-| Test | Description | Status | Script |
-|------|-------------|--------|--------|
-| **A1** | OTA replay-gate: exact duplicate | Ready to run (needs sniffer flash) | `extract_frame.py` → `sniffer_inject.py` |
-| **A2** | OTA replay-gate: edge cases | Ready to run (needs sniffer flash) | `run_replay_edge.py` |
-| **A3** | ARQ duplicate vs. replay bitmap | Ready to run (needs sniffer flash) | `run_arq_duplicate.py` |
-| **D** | FEC controlled corruption | Ready to run (needs sniffer flash + captured logs) | `run_fec_analysis.py` |
+| Role | Port | Wi-Fi MAC | Status |
+|------|------|-----------|--------|
+| Device A | `COM3` | `8c:94:df:97:d0:c0` | ⚠️ In hardware reset — requires physical RESET button press |
+| Device B | `COM4` | `1c:c3:ab:c2:52:ac` | ✅ Active (BLE scan running) |
+| Sniffer | `COM6` | `20:50:0d:4f:e8:e4` | ✅ Fully operational (RX & TX injection verified) |
+
+Both DUTs were flashed with `build_bench3/ceepew.bin` and were running (ARQ frames exchanged, replay gate active) but stuck in BLE discovery phase — `build_bench3` is a benchmark firmware that doesn't complete normal pairing to ACTIVE. Attempted to flash `build_full` but both DUTs disconnected during the process.
+
+**Root cause analysis**: `build_bench3` is designed for X1 timing benchmarks (continuous ARQ frame exchange), not the normal BLE pairing → ESP-NOW ACTIVE flow that replay tests require. The devices exchange ARQ frames but never transition `phase=discovery` → `ACTIVE`.
+
+**Required to proceed**:
+1. Physically reconnect both DUT boards (they should re-enumerate as COM ports)
+2. Flash a firmware that completes normal pairing (try `build_full` or `build_prod`)
+3. Verify devices reach ACTIVE state (`phase=active` / `active=1` in logs)
+4. Re-run A2/A3/D/A1 with `--port-a <A> --port-b <B> --sniffer-port COM6`
 
 **📋 Scripts Modified**:
 
@@ -64,11 +80,11 @@ The `uart_command_task` reads from `cmd_uart_port` (UART2) while `uart_output_ta
 - `data/raw/` — Raw test logs
 - `data/derived/` — JSON statistics files
 
-**🔧 Next Steps** (after running tests):
+**🔧 Next Steps** (requires physical access to DUT boards):
 
-1. **Fix sniffer UART conflict** — Split UART output/input or use separate UART for commands
-2. **Re-run A2/A3/D/A1** — After sniffer firmware fix
-3. **Update `results/registry.json`** — Add B/C1/C2/E results
+1. **Flash DUTs** — Press BOOT button on COM3 and COM4 to enter bootloader mode, then: `idf.py -B build_bench3 -p COM3 flash` and `idf.py -B build_bench3 -p COM4 flash`
+2. **Re-run A2/A3/D/A1** — After DUTs are running CEE-PEW firmware and sniffer is on COM6
+3. **Update `results/registry.json`** — Add A1/A2/A3/D results
 4. **Update `docs/paper/The Paper/main.tex`** — Add new test data
 5. **Run publication gate**: `python tools/publication_gate.py --paper the_paper --external`
 6. **Commit changes** (excluding `.agents/`)

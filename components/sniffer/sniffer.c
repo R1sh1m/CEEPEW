@@ -63,7 +63,6 @@ static void uart_output_task(void *arg);
 static void test_frame_task(void *arg);
 static void uart_command_task(void *arg);
 static bool is_espnow_action_frame(const uint8_t *frame, uint16_t len);
-static void hex_dump_uart(uint64_t timestamp_us, const uint8_t *data, uint16_t len);
 static esp_err_t inject_raw_frame(const uint8_t *data, uint16_t len);
 static esp_err_t inject_bitflip_frame(const uint8_t *data, uint16_t len, int bit_index);
 static esp_err_t inject_burst_frame(const uint8_t *data, uint16_t len, int start_bit, int num_bits);
@@ -97,7 +96,7 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Initialize UART for frame output */
+    /* Initialize UART for frame output and command input */
     uart_config_t uart_conf = {
         .baud_rate = s_config.baud_rate,
         .data_bits = UART_DATA_8_BITS,
@@ -106,21 +105,32 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    // Configure output UART (default UART1) on GPIO16 (TX) / GPIO17 (RX)
-    ESP_ERROR_CHECK(uart_param_config(s_config.uart_port, &uart_conf));
-    if (s_config.uart_port == 1) {
-        ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, 16, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    } else {
-        ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
-                                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    }
-    ESP_ERROR_CHECK(uart_driver_install(s_config.uart_port, 4096, 0, 0, NULL, 0));
 
-    /* Initialize UART for command input */
-    // Use UART2 (GPIO4 TX, GPIO5 RX) as default command port
-    ESP_ERROR_CHECK(uart_param_config(s_config.cmd_uart_port, &uart_conf));
-    ESP_ERROR_CHECK(uart_set_pin(s_config.cmd_uart_port, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_driver_install(s_config.cmd_uart_port, 4096, 0, 0, NULL, 0));
+    if (s_config.uart_port == s_config.cmd_uart_port) {
+        ESP_ERROR_CHECK(uart_param_config(s_config.uart_port, &uart_conf));
+        if (s_config.uart_port == 1) {
+            ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, 16, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+        } else {
+            ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
+                                          UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+        }
+        ESP_ERROR_CHECK(uart_driver_install(s_config.uart_port, 4096, 4096, 0, NULL, 0));
+    } else {
+        // Output port
+        ESP_ERROR_CHECK(uart_param_config(s_config.uart_port, &uart_conf));
+        if (s_config.uart_port == 1) {
+            ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, 16, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+        } else {
+            ESP_ERROR_CHECK(uart_set_pin(s_config.uart_port, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
+                                          UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+        }
+        ESP_ERROR_CHECK(uart_driver_install(s_config.uart_port, 4096, 0, 0, NULL, 0));
+
+        // Command port
+        ESP_ERROR_CHECK(uart_param_config(s_config.cmd_uart_port, &uart_conf));
+        ESP_ERROR_CHECK(uart_set_pin(s_config.cmd_uart_port, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+        ESP_ERROR_CHECK(uart_driver_install(s_config.cmd_uart_port, 4096, 4096, 0, NULL, 0));
+    }
 
     /* Initialize NVS (required for Wi-Fi) */
     esp_err_t ret = nvs_flash_init();
@@ -130,11 +140,11 @@ esp_err_t sniffer_init(const sniffer_config_t *config)
     }
     ESP_ERROR_CHECK(ret);
 
-    /* Initialize Wi-Fi in NULL mode (no STA/AP) */
+    /* Initialize Wi-Fi in STA mode so esp_wifi_80211_tx() works for injection */
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
     /* Set promiscuous callback and enable */
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_promiscuous_cb));
@@ -200,7 +210,9 @@ esp_err_t sniffer_stop(void)
 
     /* Uninstall UART drivers */
     uart_driver_delete(s_config.uart_port);
-    uart_driver_delete(s_config.cmd_uart_port);
+    if (s_config.cmd_uart_port != s_config.uart_port) {
+        uart_driver_delete(s_config.cmd_uart_port);
+    }
 
     ESP_LOGI(TAG, "Sniffer stopped");
     return ESP_OK;
@@ -509,13 +521,16 @@ static void uart_command_task(void *arg)
             int payload_len = parse_hex((char *)cmd_buf + 7, hex_buf, MAX_FRAME_LEN);
             if (payload_len < 0) {
                 ESP_LOGE(TAG, "INJECT: invalid hex payload");
+                uart_write_bytes(s_config.uart_port, "INJECT ERROR\n", 13);
                 continue;
             }
             esp_err_t ret = inject_raw_frame(hex_buf, (uint16_t)payload_len);
             if (ret == ESP_OK) {
                 ESP_LOGI(TAG, "INJECT OK: %d bytes", payload_len);
+                uart_write_bytes(s_config.uart_port, "INJECT OK\n", 10);
             } else {
                 ESP_LOGE(TAG, "INJECT FAILED: %d", ret);
+                uart_write_bytes(s_config.uart_port, "INJECT FAILED\n", 14);
             }
             continue;
         }
@@ -525,6 +540,7 @@ static void uart_command_task(void *arg)
             char *space = strchr((char *)cmd_buf + 8, ' ');
             if (!space) {
                 ESP_LOGE(TAG, "BITFLIP: missing bit index");
+                uart_write_bytes(s_config.uart_port, "BITFLIP ERROR\n", 14);
                 continue;
             }
             *space = '\0';
@@ -532,13 +548,16 @@ static void uart_command_task(void *arg)
             int payload_len = parse_hex((char *)cmd_buf + 8, hex_buf, MAX_FRAME_LEN);
             if (payload_len < 0) {
                 ESP_LOGE(TAG, "BITFLIP: invalid hex payload");
+                uart_write_bytes(s_config.uart_port, "BITFLIP ERROR\n", 14);
                 continue;
             }
             esp_err_t ret = inject_bitflip_frame(hex_buf, (uint16_t)payload_len, bit_index);
             if (ret == ESP_OK) {
                 ESP_LOGI(TAG, "BITFLIP OK: bit=%d", bit_index);
+                uart_write_bytes(s_config.uart_port, "BITFLIP OK\n", 11);
             } else {
                 ESP_LOGE(TAG, "BITFLIP FAILED: %d", ret);
+                uart_write_bytes(s_config.uart_port, "BITFLIP FAILED\n", 15);
             }
             continue;
         }
@@ -548,12 +567,14 @@ static void uart_command_task(void *arg)
             char *space1 = strchr((char *)cmd_buf + 6, ' ');
             if (!space1) {
                 ESP_LOGE(TAG, "BURST: missing start_bit");
+                uart_write_bytes(s_config.uart_port, "BURST ERROR\n", 12);
                 continue;
             }
             *space1 = '\0';
             char *space2 = strchr(space1 + 1, ' ');
             if (!space2) {
                 ESP_LOGE(TAG, "BURST: missing num_bits");
+                uart_write_bytes(s_config.uart_port, "BURST ERROR\n", 12);
                 continue;
             }
             *space2 = '\0';
@@ -562,13 +583,16 @@ static void uart_command_task(void *arg)
             int payload_len = parse_hex((char *)cmd_buf + 6, hex_buf, MAX_FRAME_LEN);
             if (payload_len < 0) {
                 ESP_LOGE(TAG, "BURST: invalid hex payload");
+                uart_write_bytes(s_config.uart_port, "BURST ERROR\n", 12);
                 continue;
             }
             esp_err_t ret = inject_burst_frame(hex_buf, (uint16_t)payload_len, start_bit, num_bits);
             if (ret == ESP_OK) {
                 ESP_LOGI(TAG, "BURST OK: start=%d num=%d", start_bit, num_bits);
+                uart_write_bytes(s_config.uart_port, "BURST OK\n", 9);
             } else {
                 ESP_LOGE(TAG, "BURST FAILED: %d", ret);
+                uart_write_bytes(s_config.uart_port, "BURST FAILED\n", 13);
             }
             continue;
         }
@@ -577,12 +601,14 @@ static void uart_command_task(void *arg)
         if (strcmp((char *)cmd_buf, "STATUS") == 0) {
             ESP_LOGI(TAG, "STATUS: running=%d channel=%d filter=%d",
                      s_running, s_config.channel, s_config.filter_espnow_only);
+            uart_write_bytes(s_config.uart_port, "STATUS OK\n", 10);
             continue;
         }
 
         /* Command: STOP */
         if (strcmp((char *)cmd_buf, "STOP") == 0) {
             ESP_LOGI(TAG, "STOP command received");
+            uart_write_bytes(s_config.uart_port, "EXITING\n", 8);
             sniffer_stop();
             continue;
         }

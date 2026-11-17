@@ -46,7 +46,7 @@ static void configure_button(void)
     ESP_ERROR_CHECK(gpio_isr_handler_add(BOOT_BUTTON_GPIO, button_isr_handler, NULL));
 }
 
-void app_main(void)
+void sniffer_app_main(void)
 {
     ESP_LOGI(TAG, "=========================================");
     ESP_LOGI(TAG, "  CEE-PEW OTA Sniffer Starting");
@@ -60,8 +60,8 @@ void app_main(void)
     sniffer_config_t config = SNIFFER_DEFAULT_CONFIG();
     config.channel = 1;
     config.filter_espnow_only = true;
-    /* Split-UART design: UART1 (GPIO16/17) for frame output, UART2 (GPIO4/5) for command input.
-     * Do NOT override uart_port — the default (UART_NUM_1) keeps output and commands on separate ports. */
+    config.uart_port = UART_NUM_0;
+    config.cmd_uart_port = UART_NUM_0;
     config.baud_rate = 921600;
 
     esp_err_t err = sniffer_init(&config);

@@ -140,7 +140,15 @@ def capture_clean_frame(sniffer_port: str, duration_s: int = 10,
     """
     # First, try to capture a real frame from the air
     print(f"[DEBUG] capture_clean_frame: opening {sniffer_port} at {SNIFFER_BAUD} baud")
-    ser = serial.Serial(sniffer_port, SNIFFER_BAUD, timeout=2)
+    ser = serial.Serial()
+    ser.port = sniffer_port
+    ser.baudrate = SNIFFER_BAUD
+    ser.dtr = False
+    ser.rts = False
+    ser.timeout = 2.0
+    ser.open()
+    time.sleep(1.0)
+    ser.reset_input_buffer()
     print(f"[DEBUG] capture_clean_frame: serial port opened successfully")
     captured: Optional[str] = None
     raw_lines: List[str] = []
@@ -159,9 +167,9 @@ def capture_clean_frame(sniffer_port: str, duration_s: int = 10,
                 raw_lines.append(line)
                 # Sniffer format: <timestamp_us>,<rssi>,<channel>,<len>,<hex_payload>
                 parts = line.split(",", 4)
-                if len(parts) == 5:
+                if len(parts) == 5 and parts[0].isdigit():
                     hex_payload = parts[4].strip()
-                    if hex_payload and len(hex_payload) >= 16:
+                    if hex_payload and len(hex_payload) >= 16 and all(c in "0123456789abcdefABCDEF" for c in hex_payload):
                         captured = hex_payload
                         print(f"[DEBUG] capture_clean_frame: captured real frame ({len(hex_payload)//2} bytes)")
                         break
@@ -369,10 +377,11 @@ def run_sub_test(st: Dict[str, Any], port_a: str, port_b: str,
     # Small delay to let the injected frame propagate over the air
     time.sleep(3.0)
 
-    # 3. Wait for monitor to complete
+    # 3. Stop monitor and collect output
     try:
-        stdout, stderr = monitor.communicate(timeout=duration_per + 10)
-    except subprocess.TimeoutExpired:
+        monitor.terminate()
+        stdout, stderr = monitor.communicate(timeout=5)
+    except (subprocess.TimeoutExpired, OSError):
         monitor.kill()
         stdout, stderr = monitor.communicate()
 

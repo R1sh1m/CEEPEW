@@ -32,8 +32,8 @@ static inline sniffer_config_t sniffer_default_config(void)
     sniffer_config_t cfg = {
         .channel = 1,
         .filter_espnow_only = true,
-        .uart_port = 1,       /* UART1 (GPIO16/17) for frame output */
-        .cmd_uart_port = 2,   /* UART2 (GPIO4/5) for command input */
+        .uart_port = 0,       /* UART0 (USB / console) */
+        .cmd_uart_port = 0,   /* UART0 (USB / console) */
         .baud_rate = 921600
     };
     return cfg;
@@ -49,6 +49,9 @@ esp_err_t sniffer_stop(void);
 
 /* Check if sniffer is running */
 bool sniffer_is_running(void);
+
+/* Sniffer app entry point */
+void sniffer_app_main(void);
 
 #ifdef __cplusplus
 }

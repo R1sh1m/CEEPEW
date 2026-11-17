@@ -250,18 +250,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         log_path = os.path.join(args.log_dir, f"{test_id}_{st['name']}.log")
 
         # Start monitor on DUT ports
-        monitor = start_monitor(args.port_a, args.port_b, log_path, args.duration_per)
-        time.sleep(2.0)  # Let devices settle and pair
+        monitor = start_monitor(args.port_a, args.port_b, log_path, 90)
+        for attempt in range(60):
+            time.sleep(1.0)
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                if "phase=active" in content or "active=1" in content:
+                    break
 
         # Inject frame via sniffer (bypasses DUT serial ports entirely)
         inject_ok = inject_via_sniffer(args.sniffer_port, frame_hex_path)
         if not inject_ok:
             print(f"[WARN] Sniffer injection failed for {test_id}")
+        time.sleep(3.0)
 
-        # Wait for monitor to complete
+        # Stop monitor and collect output
         try:
-            stdout, stderr = monitor.communicate(timeout=args.duration_per + 10)
-        except subprocess.TimeoutExpired:
+            monitor.terminate()
+            stdout, stderr = monitor.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
             monitor.kill()
             stdout, stderr = monitor.communicate()
 

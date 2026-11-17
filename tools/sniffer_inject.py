@@ -38,8 +38,15 @@ from typing import Optional, List
 def open_serial(port: str, baud: int = 921600, timeout: float = 2.0) -> serial.Serial:
     """Open a serial connection to the sniffer board."""
     try:
-        ser = serial.Serial(port, baud, timeout=timeout)
-        time.sleep(0.5)  # Let the board settle
+        ser = serial.Serial()
+        ser.port = port
+        ser.baudrate = baud
+        ser.dtr = False
+        ser.rts = False
+        ser.timeout = timeout
+        ser.open()
+        time.sleep(1.0)  # Let the board settle
+        ser.reset_input_buffer()
         return ser
     except serial.SerialException as e:
         print(f"[ERROR] Could not open serial port {port}: {e}", file=sys.stderr)
