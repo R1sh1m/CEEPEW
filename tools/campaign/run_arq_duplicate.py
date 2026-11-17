@@ -86,6 +86,7 @@ def start_monitor(port_a: str, port_b: str, log_path: str,
         "--baud", str(BAUD),
         "--duration", str(duration_s),
         "--log", log_path,
+        "--no-reset",
     ]
     return subprocess.Popen(cmd, cwd=PROJECT_ROOT,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)

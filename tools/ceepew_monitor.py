@@ -66,25 +66,33 @@ def monitor_port(
     per_port_log: str | None,
     start_time: float,
     diag_event: threading.Event | None,
+    no_reset: bool = False,
 ):
     try:
-        ser = serial.Serial(port_name, baud, timeout=0.1)
+        ser = serial.Serial()
+        ser.port = port_name
+        ser.baudrate = baud
+        ser.timeout = 0.1
+        ser.dtr = False
+        ser.rts = False
+        ser.open()
     except Exception as e:
         msg = f"[{label}] Error opening port: {e}"
         print(colorize(msg), file=sys.stderr)
         write_log(log_file, msg)
         return
 
-    try:
-        ser.setDTR(False)
-        ser.setRTS(True)
-        time.sleep(0.1)
-        ser.setRTS(False)
-        time.sleep(0.5)
-    except Exception as e:
-        msg = f"[{label}] Warning: could not reset board: {e}"
-        print(colorize(msg), file=sys.stderr)
-        write_log(log_file, msg)
+    if not no_reset:
+        try:
+            ser.setDTR(False)
+            ser.setRTS(True)
+            time.sleep(0.1)
+            ser.setRTS(False)
+            time.sleep(0.5)
+        except Exception as e:
+            msg = f"[{label}] Warning: could not reset board: {e}"
+            print(colorize(msg), file=sys.stderr)
+            write_log(log_file, msg)
 
     msg = f"[{label}] Monitoring started."
     print(colorize(msg))
@@ -143,6 +151,8 @@ def parse_args():
                         help="Exit after diagnostic report completes (single-port)")
     parser.add_argument("--no-color", action="store_true",
                         help="Disable ANSI color output")
+    parser.add_argument("--no-reset", action="store_true",
+                        help="Do not pulse DTR/RTS on port open")
     return parser.parse_args()
 
 
@@ -200,6 +210,7 @@ def main():
                 per_port_paths[i],
                 start_time,
                 diag_event,
+                args.no_reset,
             ),
         )
         t.daemon = True
