@@ -60,6 +60,19 @@ if(TARGET __idf_espressif__esp-modbus)
     target_compile_options(__idf_espressif__esp-modbus PRIVATE -Wno-error=stringop-truncation)
 endif()
 
+# Arduino-ESP32 GCC 15 + picolibc compatibility (project config only — NO third-party code modified):
+# In GCC 15 / C++26 on IDF v6.x (picolibc), Arduino.h skips `using std::isnan; using std::isinf;`
+# while <cmath> undefines the C macros, causing Print.cpp's unqualified isnan()/isinf() calls to fail.
+# Inject arduino_picolibc_compat.h into all C++ translation units for this target.
+if(TARGET __idf_espressif__arduino-esp32)
+    target_include_directories(__idf_espressif__arduino-esp32 PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/components/ceepew_oled_arduino/include"
+    )
+    target_compile_options(__idf_espressif__arduino-esp32 PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-includearduino_picolibc_compat.h>
+    )
+endif()
+
 # Inject git hash as a compile definition for firmware versioning
 execute_process(
     COMMAND git describe --always --dirty
