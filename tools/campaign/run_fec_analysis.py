@@ -101,19 +101,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="FEC correction statistics analysis for CEE-PEW."
     )
-    parser.add_argument("--log-dir", required=True,
-                        help="Directory containing FEC test logs")
-    parser.add_argument("--out-json", required=True,
-                        help="Output JSON statistics file")
+    parser.add_argument("--log-dir", default="data/raw/D_fec_corruption",
+                        help="Directory containing FEC test logs (default: data/raw/D_fec_corruption)")
+    parser.add_argument("--out-json", default="data/derived/D_fec_results.json",
+                        help="Output JSON statistics file (default: data/derived/D_fec_results.json)")
     parser.add_argument("--clean-log", default="D_clean.log",
                         help="Baseline log filename (default: D_clean.log)")
-    parser.add_argument("--1bit-log", default="D_1bit.log",
+    parser.add_argument("--1bit-log", dest="log_1bit", default="D_1bit.log",
                         help="1-bit error log filename (default: D_1bit.log)")
-    parser.add_argument("--2bit-log", default="D_2bit.log",
+    parser.add_argument("--2bit-log", dest="log_2bit", default="D_2bit.log",
                         help="2-bit error log filename (default: D_2bit.log)")
-    parser.add_argument("--3bit-log", default="D_3bit.log",
+    parser.add_argument("--3bit-log", dest="log_3bit", default="D_3bit.log",
                         help="3-bit error log filename (default: D_3bit.log)")
-    parser.add_argument("--burst-log", default="D_burst.log",
+    parser.add_argument("--burst-log", dest="log_burst", default="D_burst.log",
                         help="Burst error log filename (default: D_burst.log)")
     args = parser.parse_args(argv)
 
@@ -121,19 +121,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     log_files = {
         "clean": args.clean_log,
-        "1bit": args._1bit_log if hasattr(args, "_1bit_log") else args.__dict__.get("1bit-log", "D_1bit.log"),
-        "2bit": args._2bit_log if hasattr(args, "_2bit_log") else args.__dict__.get("2bit-log", "D_2bit.log"),
-        "3bit": args._3bit_log if hasattr(args, "_3bit_log") else args.__dict__.get("3bit-log", "D_3bit.log"),
-        "burst": args.burst_log,
-    }
-
-    # Fix argparse dest for arguments with hyphens
-    log_files = {
-        "clean": args.clean_log,
-        "1bit": getattr(args, "1bit_log", "D_1bit.log"),
-        "2bit": getattr(args, "2bit_log", "D_2bit.log"),
-        "3bit": getattr(args, "3bit_log", "D_3bit.log"),
-        "burst": args.burst_log,
+        "1bit": args.log_1bit,
+        "2bit": args.log_2bit,
+        "3bit": args.log_3bit,
+        "burst": args.log_burst,
     }
 
     results: Dict[str, Any] = {}

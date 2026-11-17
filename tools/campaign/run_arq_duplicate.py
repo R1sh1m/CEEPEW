@@ -219,11 +219,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--port-a", default="COM3", help="Device A serial port")
     parser.add_argument("--port-b", default="COM4", help="Device B serial port")
-    parser.add_argument("--sniffer-port", default="COM6", help="Sniffer serial port")
-    parser.add_argument("--log-dir", required=True,
-                        help="Directory for per-test logs")
-    parser.add_argument("--out-json", required=True,
-                        help="Output JSON statistics file")
+    parser.add_argument("--sniffer-port", default="COM6", help="Sniffer serial port (default: COM6)")
+    parser.add_argument("--log-dir", default="data/raw/A3_arq_duplicate",
+                        help="Directory for per-test logs (default: data/raw/A3_arq_duplicate)")
+    parser.add_argument("--out-json", default="data/derived/A3_arq.json",
+                        help="Output JSON statistics file (default: data/derived/A3_arq.json)")
     parser.add_argument("--duration-per", type=int, default=30,
                         help="Duration per sub-test in seconds (default: 30)")
     args = parser.parse_args(argv)
