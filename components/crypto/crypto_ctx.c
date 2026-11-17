@@ -115,7 +115,12 @@ CeePewErr_t crypto_espnow_derive_pmk(uint8_t pmk_out[16])
 }
 
 /* Derive a 16-byte ESP-NOW Local Master Key for a specific peer.
- * Incorporates the peer's WiFi MAC so different peers get different LMKs. */
+ * The peer WiFi MAC is deliberately NOT included in the HKDF info string:
+ * including it caused each side to derive a different LMK (one side used
+ * the peer's MAC, the other used its own), so encrypted ESP-NOW frames
+ * were silently dropped at the receiver (decrypt-failed -> no recv callback).
+ * The session seed (box_seed) already uniquely binds this LMK to the session,
+ * so the LMK is bound to the session context rather than to a specific peer MAC. */
 CeePewErr_t crypto_espnow_derive_lmk(const uint8_t peer_wifi_mac[6], uint8_t lmk_out[16])
 {
     /* IMPORTANT: DO NOT include peer_wifi_mac in the HKDF info — both
