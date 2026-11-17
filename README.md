@@ -161,6 +161,26 @@ python tools/capture/serial_to_pcap.py --radiotap data/raw/<run>/sniffer_com6.lo
 Full capture plan and hardware notes: [`tools/capture/ota_sniffer_plan.md`](tools/capture/ota_sniffer_plan.md).
 Sniffer component: [`components/sniffer/`](components/sniffer/) (library `sniffer.c`/`sniffer.h` + example apps `sniffer_app.c` and `sniffer_minimal.c`).
 
+### 7. Over-the-Air Adversarial & Fault-Injection Campaign
+Execute automated OTA injection tests using the dedicated sniffer injector (COM6) against active DUT nodes (COM3/COM4):
+
+```powershell
+# Test A1: Over-the-Air Replay Attack (5× replay injection, verifies anti-replay window rejection)
+python tools/extract_frame.py logs/pairing_20261117_064506.txt --out frame.hex
+python tools/sniffer_inject.py --port COM6 --frame frame.hex --repeat 5 --delay 0.05
+
+# Test A2: Replay Window Boundary Edge Cases (past window, left-edge, duplicate seq)
+python tools/campaign/run_replay_edge.py --port-a COM4 --port-b COM3 --sniffer-port COM6
+
+# Test A3: ARQ Duplicate & Loss Injection (seq duplication, ACK drop, retransmit exhaustion)
+python tools/campaign/run_arq_duplicate.py --port-a COM4 --port-b COM3 --sniffer-port COM6
+
+# Test D: Forward Error Correction (FEC) & Channel BER Characterization
+python tools/campaign/run_fec_analysis.py --output data/derived/D_fec_results.json
+```
+
+Detailed test findings and packet logs: [`TEST_CAMPAIGN_RESULTS.md`](TEST_CAMPAIGN_RESULTS.md).
+
 ---
 
 ## Documentation Hub
