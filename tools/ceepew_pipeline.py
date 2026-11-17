@@ -371,13 +371,21 @@ def run_host_tests(enable_coverage=False):
 
 
 def run_production_check():
-    """Run production deployment configuration audit."""
+    """Run production deployment configuration audit and registry validation."""
     print("\n============================================")
     print(" CEE-PEW Production Configuration Audit")
     print("============================================")
 
     script_path = os.path.join(TOOLS_DIR, "ceepew_production_check.py")
     res = subprocess.run([sys.executable, script_path], cwd=PROJECT_ROOT)
+
+    val_script = os.path.join(TOOLS_DIR, "validate_registry.py")
+    if os.path.isfile(val_script):
+        print("\n--> Verifying Results Registry integrity...")
+        val_res = subprocess.run([sys.executable, val_script], cwd=PROJECT_ROOT)
+        if val_res.returncode != 0:
+            return False
+
     return res.returncode == 0
 
 
