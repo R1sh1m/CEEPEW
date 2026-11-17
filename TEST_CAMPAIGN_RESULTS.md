@@ -115,3 +115,24 @@ The sniffer firmware (`components/sniffer/sniffer.c` and `sniffer_app.c`) is bui
 | `run_fec_analysis.py` | Log analysis of FEC correction/detection rates under controlled bit corruption |
 | `sniffer_inject.py` | Hardened with `dtr=False, rts=False` to prevent CP2102 port reset hanging |
 | `components/sniffer/sniffer.c` | Restructured UART handling to support interactive injection commands on COM6 |
+
+---
+
+## Synthesis & Production Readiness Summary
+
+| Test ID | Domain | Methodology | Hardware Nodes | Pass Rate | Verdict |
+|---|---|---|---|---|:---:|
+| **B** | Pairing Stress | 10× automated re-pairing cycles | DUT A (COM4) + DUT B (COM3) | 100% (10/10) | **PASS** |
+| **C1** | Load Profile | 100-packet continuous throughput burst | DUT A (COM4) + DUT B (COM3) | 100% (100/100) | **PASS** |
+| **C2** | Range / RSSI | Multi-meter link margin & attenuation | DUT A (COM4) + DUT B (COM3) | 100% | **PASS** |
+| **E** | Heap / HWM | On-chip runtime stack & region watermark | DUT A (COM4) + DUT B (COM3) | 0 B heap alloc | **PASS** |
+| **A1** | Replay Attack | 5× consecutive OTA packet injection | DUTs + Sniffer (COM6) | 100% (5/5 rejected) | **PASS** |
+| **A2** | Replay Edge | 8 window boundary & sequence conditions | DUTs + Sniffer (COM6) | 100% (8/8 verified) | **PASS** |
+| **A3** | ARQ Duplication | Retransmit duplicate vs. anti-replay | DUTs + Sniffer (COM6) | 100% (5/5 verified) | **PASS** |
+| **D** | FEC Corruption | Hamming(15,11) error injection | DUTs + Sniffer (COM6) | 100% (100/100 events) | **PASS** |
+
+### Verified System Invariants
+1. **Zero Dynamic Allocation**: 0 bytes allocated from FreeRTOS / ESP-IDF dynamic heap across all benchmark and attack runs. All allocations bounded to static 48 KB bump pool.
+2. **Fail-Closed Security**: Under malformed, replayed, or corrupted packets, the radio transport and cryptographic pipeline consistently fail closed without state corruption or session crashes.
+3. **Reproducibility**: All quantitative assertions cross-checked and passing in `tools/recompute_paper_numbers.py` (52/53 match, 1 registered LAT-SUM exception) and `tools/validate_registry.py` (95/95 valid claims).
+
