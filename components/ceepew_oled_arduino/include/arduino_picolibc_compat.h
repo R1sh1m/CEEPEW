@@ -1,20 +1,28 @@
 #pragma once
 
-#if defined(__cplusplus) && defined(__PICOLIBC__)
+#ifdef __cplusplus
 #include <cmath>
 
-// GCC 15 + picolibc compatibility for arduino-esp32:
-// Arduino.h skips `using std::isnan; using std::isinf;` when __PICOLIBC__ is
-// defined, relying on picolibc math.h macros (e.g. __builtin_isnan/__builtin_isinf).
-// However, in GCC 15 / C++26 libstdc++'s <cmath> undefines these C macros.
-// When Print.cpp calls unqualified isnan(number) and isinf(number), compilation fails.
-// We restore the __builtin macros for the arduino-esp32 component under picolibc.
+// GCC 15 / C++26 + picolibc compatibility for arduino-esp32:
+// In Arduino.h, `using std::isnan; using std::isinf;` is skipped under __PICOLIBC__.
+// On GCC 15 / C++26, <cmath> undefines the C macros. On toolchains where picolibc's
+// math.h omits C-linkage isnan/isinf declarations in C++ mode (e.g. GCC 15.3 in CI),
+// unqualified calls in Print.cpp fail to resolve.
+// Providing function templates in the global namespace resolves calls to std::isnan
+// when no global non-template overload exists, while gracefully deferring to any
+// existing non-template declaration without signature conflicts.
 #ifndef isnan
-#define isnan(x) __builtin_isnan(x)
+template<typename T>
+inline bool isnan(T x) {
+    return std::isnan(x);
+}
 #endif
 
 #ifndef isinf
-#define isinf(x) __builtin_isinf(x)
+template<typename T>
+inline bool isinf(T x) {
+    return std::isinf(x);
+}
 #endif
 
 #endif
