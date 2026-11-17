@@ -128,6 +128,7 @@ gate*.*
 /*.txt
 # Local audit/analysis outputs (not source; regenerated per session)
 /DEFECT_CANDIDATE_MAP.json
+results/*_findings.json
 
 # Local diagnostic & capture logs (root level)
 diag_*.txt

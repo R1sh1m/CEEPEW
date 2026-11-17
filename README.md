@@ -40,7 +40,7 @@ By eliminating dynamic heap allocation (`malloc`/`free`) in favor of a static re
 | **249 Bytes** | **Over-the-Air Wire Budget** | Full profile fits strictly within 802.11 Action frame limit (250 B) | `C` |
 | **2.53 ms** | **802.11 MPDU Airtime** | 1 Mbps DSSS airtime for 249 B frame (2.84 ms with hardware ACK) | `C` |
 | **138 B / 105 B** | **Lite Profile Wire Size** | Symmetric streaming (138 B with FEC, 105 B without FEC) | `C` |
-| **0 Bytes** | **Cleartext Air Leakage** | 100% payload encrypted with Ascon-128 v1.2 (Shannon entropy: 7.99 bits/B) | `M-HW` |
+| **0 Bytes** | **Cleartext Air Leakage** | 100% payload encrypted with Ascon-128 v1.2 (Shannon entropy: 7.34 bits/B ESL encapsulated) | `M-HW` |
 | **100 / 100** | **Replay Vectors Rejected** | 64-bit sliding window with commit-after-authentication rule | `M-HOST` |
 | **22 / 22** | **Host Test Suites Passing** | ASan/UBSan unit suites (Curve25519, Ascon, Ed25519, Salsa20, HMAC, FEC, ARQ) | `M-HOST` |
 | **14 / 14** | **Hardware Diagnostics Passing** | On-chip diagnostic report verifying crypto, timers, memory, and FSM | `M-HW` |
@@ -81,7 +81,7 @@ The firmware partitions operations across ESP32 cores via FreeRTOS queues:
 
 Promiscuous 802.11 capture decoded via custom Wireshark dissector ([`tools/capture/wireshark/ceepew_espnow.lua`](tools/capture/wireshark/ceepew_espnow.lua)):
 - **Wire Budget**: Payload ($P_c = 58\text{ B}$), Ascon-128 v1.2 ciphertext + tag, Ed25519 signature ($64\text{ B}$), and Hamming(15,11) parity bytes fit within **249 B** (under the 250 B ESP-NOW ceiling).
-- **Cryptographic Entropy**: Unencrypted frames show structured ASCII ($4.48\text{ bits/B}$); CEE-PEW achieves near-ideal pseudo-randomness (**$7.99\text{ bits/B}$**) with zero cleartext leakage.
+- **Cryptographic Entropy**: Unencrypted plaintext baseline ($6.79\text{ bits/B}$, $N=7{,}953$ bytes); ESL encapsulated packet ($7.34\text{ bits/B}$, $N=12{,}409$ bytes) with zero cleartext leakage.
 
 ---
 
