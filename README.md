@@ -189,7 +189,7 @@ Detailed test findings and packet logs: [`TEST_CAMPAIGN_RESULTS.md`](TEST_CAMPAI
 |---|---|
 | 🏗️ [**Architecture Guide**](ARCHITECTURE.md) | Dual-core task affinity, state machine transitions, FreeRTOS queue IPC |
 | 🛡️ [**Security Policy & Threat Model**](SECURITY.md) | Threat boundaries, side-channel mitigations, responsible disclosure |
-| 📡 [**Over-the-Air Testing**](docs/OVER_THE_AIR_TESTING.md) | 3-node OTA testbed, replay injection attacks, and ARQ/FEC fault tests |
+| 📡 [**Over-the-Air Testing**](OVER_THE_AIR_TESTING.md) | 3-node OTA testbed, replay injection attacks, and ARQ/FEC fault tests |
 | 📊 [**Results Registry**](results/registry.json) | Canonical JSON ledger of all quantitative claims, timings, and evidence |
 | 🔬 [**Results Documentation**](results/README.md) | Recomputation instructions, evidence classes (`M-HW`, `M-HOST`, `C`, `S`) |
 | 🐞 [**Device Log Findings**](DEVICE_LOG_FINDINGS.md) | Continuous hardware log analysis and auto-detected bug signature index |
