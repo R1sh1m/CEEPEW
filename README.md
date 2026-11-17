@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square" alt="License: GPL v3"></a>
   <img src="https://img.shields.io/badge/Platform-ESP32%20Xtensa%20LX6-red?style=flat-square&logo=espressif&logoColor=white" alt="ESP32 Xtensa Dual-Core">
-  <img src="https://img.shields.io/badge/ESP--IDF-v6.0.3-orange?style=flat-square" alt="ESP-IDF v6.0.3">
+  <img src="https://img.shields.io/badge/ESP--IDF-v6.1-orange?style=flat-square" alt="ESP-IDF v6.1">
   <img src="https://img.shields.io/badge/Topology-Direct%20P2P%20Mesh-green?style=flat-square" alt="Direct P2P Mesh">
   <img src="https://img.shields.io/badge/Memory-Zero--Heap%20Static%20Region-purple?style=flat-square" alt="Zero-Heap Static Region">
   <img src="https://img.shields.io/badge/Crypto-Ascon--128%20v1.2%20%7C%20Ed25519%20%7C%20HKDF-blueviolet?style=flat-square" alt="Ascon-128 v1.2 / Ed25519 / HKDF">
@@ -115,7 +115,7 @@ python tools/recompute_paper_numbers.py
 ```
 
 ### 3. Build Firmware
-Initialize the ESP-IDF environment (v6.0.3) and compile the firmware:
+Initialize the ESP-IDF environment (v6.1) and compile the firmware:
 ```bash
 # Full Profile (Default: 7-layer stack, Ed25519 signatures, Hamming FEC)
 idf.py build
