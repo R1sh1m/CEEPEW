@@ -75,8 +75,6 @@ void app_main(void){
 #endif
     /* Subscribe main_task to the watchdog so crypto self-tests can feed it. */
     esp_task_wdt_add(NULL);
-    /* Subscribe IDLE0 to TWD so it feeds watchdog when UI task blocks on OLED I2C */
-    esp_task_wdt_add(xTaskGetIdleTaskHandleForCore(0));
     
     ESP_LOGI(TAG, "=== CEE-PEW Firmware Startup === [BOARD %02X]", get_board_tag());
 
@@ -264,6 +262,9 @@ void app_main(void){
     wifi_mac_err = esp_read_mac(local_wifi_mac, ESP_MAC_WIFI_STA);
     if (wifi_mac_err == ESP_OK) { session_set_self_wifi_mac(local_wifi_mac); }
 
+    /* Clean all residual BLE test state so production pairing starts completely fresh */
+    transport_ble_clear_discovery_peer_state();
+
     err = transport_ble_init();
     if (err != CEEPEW_OK) { ESP_LOGE(TAG, "transport_ble_init failed: %d", (int)err); esp_restart(); }
 #endif
@@ -296,4 +297,5 @@ void app_main(void){
 #endif
 
     ESP_LOGI(TAG, "=== CEE-PEW Ready ===");
+    (void)esp_task_wdt_delete(NULL);
 }

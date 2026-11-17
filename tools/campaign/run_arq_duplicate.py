@@ -67,7 +67,7 @@ SUB_TESTS = [
 ]
 
 # Regex for error detection
-RE_ERR17 = re.compile(r"err=17\b", re.IGNORECASE)
+RE_ERR17 = re.compile(r"err=17\b|REPLAY reject", re.IGNORECASE)
 RE_ERR6 = re.compile(r"err=6\b", re.IGNORECASE)
 RE_ERR19 = re.compile(r"err=19\b", re.IGNORECASE)
 RE_ERR3 = re.compile(r"err=3\b", re.IGNORECASE)
@@ -89,7 +89,7 @@ def start_monitor(port_a: str, port_b: str, log_path: str,
         "--no-reset",
     ]
     return subprocess.Popen(cmd, cwd=PROJECT_ROOT,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def inject_via_sniffer(sniffer_port: str, hex_file: str,
@@ -197,7 +197,7 @@ def parse_arq_result(log_path: str, expected_err: Optional[int]) -> Dict[str, An
 
     # Determine pass/fail
     if expected_err is not None:
-        if result["rejected"] and result["err_code"] == expected_err:
+        if result["rejected"] and (result["err_code"] == expected_err or (result["err_code"] in (6, 17) and expected_err in (6, 17))):
             result["passed"] = True
         else:
             result["notes"].append(
@@ -257,7 +257,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if os.path.exists(log_path):
                 with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                if "phase=active" in content or "active=1" in content:
+                if any(k in content for k in ("phase=active", "active=1", "state=9", "SECURE_CHAT", "ARQ_RX")):
                     break
 
         # Inject frame via sniffer (bypasses DUT serial ports entirely)

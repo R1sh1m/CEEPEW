@@ -28,6 +28,7 @@
 #include "ceepew_config.h"
 #include "crypto_ctx.h"
 #include "session_fsm.h"
+#include "transport_ble.h"
 #include "transport_ble_gatt_crypto.h"
 #include "esp_log.h"
 #include <stdint.h>
@@ -611,6 +612,11 @@ uint32_t test_pairing_convergence_run(void)
 
     /* Cleanup: reset to phase 1 so production state is preserved. */
     (void)session_reset_to_discovery();
+    g_ble_ctx.commitment_verified = false;
+    g_ble_ctx.handoff_ready = false;
+    g_ble_ctx.ready_for_chat = false;
+    g_ble_ctx.peer_ready_for_chat = false;
+    g_ble_ctx.peer_gatt_ready = false;
 
     ESP_LOGI(TAG, "Pairing convergence summary: passed=%u failed=%u",
              (unsigned)s_pass_count, (unsigned)s_fail_count);

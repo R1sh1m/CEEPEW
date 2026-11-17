@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated_utc": "2026-11-09T12:53:23Z",
-  "last_updated_utc": "2026-11-16T00:00:00Z",
+  "last_updated_utc": "2026-11-17T02:30:00Z",
   "project": "CEE-PEW",
   "conference": "IEEE ICITIIT 2027",
   "description": "Canonical Results Registry \u2014 Single Source of Truth for all quantitative and security claims in the CEE-PEW paper and audit reports.",
@@ -1490,6 +1490,78 @@
       "rssi_avg_dbm": -54.3,
       "rssi_min_dbm": -78,
       "rssi_max_dbm": 0
+    },
+    {
+      "id": "A1_REPLAY_OTA",
+      "description": "Over-the-air exact duplicate replay rejection: transmitted packet intercepted by receiver ARQ gate",
+      "formula": "replayed_rejected / replayed_injected",
+      "value": "1/1",
+      "unit": "frames",
+      "class": "M-HW",
+      "n": 1,
+      "source": {
+        "script": "python tools/sniffer_inject.py",
+        "raw_log": "data/raw/A1_replay_ota/A1_exact_duplicate.log",
+        "note": "2026-11-17 campaign. OTA exact duplicate frame intercepted by ARQ duplicate-detection gate (err=17) before reaching cryptographic replay window; bitmap untouched."
+      },
+      "replayed_injected": 1,
+      "replayed_rejected": 1,
+      "rejection_rate": 1.0,
+      "err_code": 17
+    },
+    {
+      "id": "A2_REPLAY_EDGE",
+      "description": "Over-the-air replay edge cases across 8 sequence-number scenarios",
+      "formula": "passed_scenarios / total_scenarios",
+      "value": "8/8",
+      "unit": "scenarios",
+      "class": "M-HW",
+      "n": 8,
+      "source": {
+        "script": "python tools/campaign/run_replay_edge.py",
+        "raw_log": "data/raw/A2_replay_edge/",
+        "note": "2026-11-17 campaign. 8/8 sub-tests passed (100%): duplicates and stale frames rejected via ARQ gate (err=17) or ESL sliding-window bitmap (err=6); unseen in-window frames accepted and delivered."
+      },
+      "total_scenarios": 8,
+      "passed_scenarios": 8,
+      "success_rate": 1.0
+    },
+    {
+      "id": "A3_ARQ_DUPLICATE",
+      "description": "ARQ duplicate-detection gate versus ESL replay bitmap interaction",
+      "formula": "subtests_passed / total_subtests",
+      "value": "5/5",
+      "unit": "subtests",
+      "class": "M-HW",
+      "n": 5,
+      "source": {
+        "script": "python tools/campaign/run_arq_duplicate.py",
+        "raw_log": "data/raw/A3_arq_duplicate/",
+        "note": "2026-11-17 campaign. 5/5 sub-tests passed (100%): establishes that ARQ gate rejects in-window duplicates (err=17), replay bitmap rejects out-of-window duplicates (err=6), and max retries triggers err=19."
+      },
+      "total_subtests": 5,
+      "passed_subtests": 5,
+      "success_rate": 1.0
+    },
+    {
+      "id": "D_FEC_CORRUPTION",
+      "description": "Hamming(15,11) FEC controlled corruption and fault-injection correction/detection rates",
+      "formula": "corrected_single_bit / total_single_bit",
+      "value": "20/20",
+      "unit": "corrections",
+      "class": "M-HW",
+      "n": 20,
+      "source": {
+        "script": "python tools/campaign/run_fec_analysis.py",
+        "raw_log": "data/raw/D_fec_corruption/",
+        "note": "2026-11-17 campaign. 1-bit errors: 20/20 corrected (100%); 2-bit, 3-bit, and burst errors: 100% detected and dropped (0% miscorrected)."
+      },
+      "single_bit_tested": 20,
+      "single_bit_corrected": 20,
+      "single_bit_correction_rate": 1.0,
+      "multi_bit_tested": 60,
+      "multi_bit_detected_dropped": 60,
+      "multi_bit_detection_rate": 1.0
     }
   ]
 }

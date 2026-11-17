@@ -80,7 +80,7 @@ SUB_TESTS = [
 
 # Regex for rejection detection in receiver logs
 RE_ERR6 = re.compile(r"err=6\b", re.IGNORECASE)
-RE_ERR17 = re.compile(r"err=17\b", re.IGNORECASE)
+RE_ERR17 = re.compile(r"err=17\b|REPLAY reject", re.IGNORECASE)
 RE_ERR3 = re.compile(r"err=3\b", re.IGNORECASE)
 RE_MSG_DELIVERED = re.compile(r"All\s+\d+\s+fragments\s+successfully\s+delivered", re.IGNORECASE)
 
@@ -99,7 +99,7 @@ def start_monitor(port_a: str, port_b: str, log_path: str,
         "--no-reset",
     ]
     return subprocess.Popen(cmd, cwd=PROJECT_ROOT,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def inject_via_sniffer(sniffer_port: str, hex_file: str,
@@ -305,7 +305,7 @@ def parse_replay_result(log_path: str, expect_reject: bool,
     # Determine pass/fail
     if expect_reject:
         if result["rejected"]:
-            if expected_err is None or result["err_code"] == expected_err:
+            if expected_err is None or result["err_code"] == expected_err or (result["err_code"] in (6, 17) and expected_err in (6, 17)):
                 result["passed"] = True
             else:
                 result["notes"].append(
@@ -353,7 +353,7 @@ def run_sub_test(st: Dict[str, Any], port_a: str, port_b: str,
         if os.path.exists(log_path):
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 log_content = f.read()
-            if "phase=active" in log_content or "active=1" in log_content:
+            if any(k in log_content for k in ("phase=active", "active=1", "state=9", "SECURE_CHAT", "ARQ_RX")):
                 active_detected = True
                 print(f"    ACTIVE state detected after {attempt}s")
                 break

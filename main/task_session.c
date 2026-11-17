@@ -2792,9 +2792,6 @@ static void bench_prim_run(void) {
  * UIEvent_t
  */
 void task_session_init(void) {
-  /* Subscribe this task to the task watchdog so crypto operations can
-   * feed it with esp_task_wdt_reset() during long scalar multiplications. */
-  esp_task_wdt_add(NULL);
   if (s_session_initialised && g_session_rx_queue != NULL &&
       g_ui_event_queue != NULL) {
     return;
@@ -2853,6 +2850,9 @@ void task_session_run(void *pvParameters) {
 
   ESP_LOGI(TAG, "Session task started on Core %d", xPortGetCoreID());
 
+  /* Subscribe the Session task to TWDT from its own task context */
+  (void)esp_task_wdt_add(NULL);
+
 #if CONFIG_CEEPEW_BENCH_58B
   /* One-shot boot KAT (bench builds only): runs before any session traffic,
    * exercises Ascon/X25519/Ed25519 against reference vectors. */
@@ -2879,6 +2879,7 @@ void task_session_run(void *pvParameters) {
 
   /* Main loop: drain RX queue and process frames */
   for (;;) {
+    (void)esp_task_wdt_reset();
     if (g_session_rx_queue == NULL || g_ui_event_queue == NULL) {
       vTaskDelay(pdMS_TO_TICKS(100U));
       continue;

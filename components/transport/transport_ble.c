@@ -472,12 +472,13 @@ static void transport_ble_clear_discovery_peer_state_unlocked(void) {
   g_ble_ctx.scan_seen_count = 0U;
   g_ble_ctx.adv_packet_count = 0U;
   g_ble_ctx.discovered = false;
-  if (!g_ble_ctx.commitment_verified) {
-    g_ble_ctx.commitment_verified = false;
-    g_ble_ctx.handoff_ready = false;
-    g_ble_ctx.ready_for_chat = false;
-    g_ble_ctx.peer_ready_for_chat = false;
-  }
+  g_ble_ctx.commitment_verified = false;
+  g_ble_ctx.handoff_ready = false;
+  g_ble_ctx.ready_for_chat = false;
+  g_ble_ctx.peer_ready_for_chat = false;
+  g_ble_ctx.peer_gatt_ready = false;
+  g_ble_ctx.beacon_nonce_peer_counter_max = 0U;
+  transport_ble_enter_phase_unlocked(PAIRING_PHASE_IDLE);
   g_ble_ctx.peer_ready_timestamp_ms = 0U;
   g_ble_ctx.local_commitment_len = 0U;
   g_ble_ctx.pending_peer_commitment_len = 0U;
