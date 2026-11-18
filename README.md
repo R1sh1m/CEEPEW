@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Topology-Direct%20P2P%20Mesh-green?style=flat-square" alt="Direct P2P Mesh">
   <img src="https://img.shields.io/badge/Memory-Zero--Heap%20Static%20Region-purple?style=flat-square" alt="Zero-Heap Static Region">
   <img src="https://img.shields.io/badge/Crypto-Ascon--128%20v1.2%20%7C%20Ed25519%20%7C%20HKDF-blueviolet?style=flat-square" alt="Ascon-128 v1.2 / Ed25519 / HKDF">
-  <a href="results/registry.json"><img src="https://img.shields.io/badge/Host%20Tests-23%2F23%20Passing-brightgreen?style=flat-square" alt="Host Tests: 23/23 Passing"></a>
+  <a href="results/registry.json"><img src="https://img.shields.io/badge/Host%20Tests-24%2F24%20Passing-brightgreen?style=flat-square" alt="Host Tests: 24/24 Passing"></a>
   <a href="results/registry.json"><img src="https://img.shields.io/badge/Hardware%20Diag-18%2F18%20Passing-brightgreen?style=flat-square" alt="Hardware Diag: 18/18 Passing"></a>
 </p>
 
@@ -106,7 +106,7 @@ Run the native unit test suite with GCC/Clang AddressSanitizer and UndefinedBeha
 ```bash
 python tools/ceepew_pipeline.py --mode host
 ```
-*Validates all 23 unit test suites: Curve25519/X25519 ECDH, Ascon-128 v1.2 KAT, Ed25519, HKDF-SHA256, HMAC-SHA256, Salsa20, PKCS#7 padding, static Huffman, Hamming(15,11) FEC fault injection, replay window, side-channel timing uniformity, nonce uniqueness (P0), and fail-closed pairing policy.*
+*Validates all 24 unit test suites: Curve25519/X25519 ECDH, Ascon-128 v1.2 KAT, Ed25519, HKDF-SHA256, HMAC-SHA256, Salsa20, PKCS#7 padding, static Huffman, Hamming(15,11) FEC fault injection, replay window, side-channel timing uniformity, nonce uniqueness (P0), GATT nonce lifecycle, and fail-closed pairing policy.*
 
 ### 2. Verify Protocol Arithmetic & Wire Budgets
 Recompute all wire budgets, airtimes, cycle-to-time formulas, and bounds against `results/registry.json`:

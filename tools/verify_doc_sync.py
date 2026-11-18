@@ -77,8 +77,8 @@ def check_sync():
             cmake_text = f.read()
         unit_tests = re.findall(r'add_test\s*\(\s*NAME\s+(test_[^\s\)]+)', cmake_text)
         fuzz_tests = re.findall(r'add_test\s*\(\s*NAME\s+(fuzz_[^\s\)]+)', cmake_text)
-        if len(unit_tests) != 23:
-            errors.append(f"tests/host/CMakeLists.txt has {len(unit_tests)} unit tests, expected 23.")
+        if len(unit_tests) != 24:
+            errors.append(f"tests/host/CMakeLists.txt has {len(unit_tests)} unit tests, expected 24.")
         if len(fuzz_tests) != 5:
             errors.append(f"tests/host/CMakeLists.txt has {len(fuzz_tests)} fuzz smoke tests, expected 5.")
 

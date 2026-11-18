@@ -43,6 +43,8 @@
 #define TRANSPORT_BLE_GATT_CRYPTO_H
 
 #include <stdint.h>
+#include <stdbool.h>
+#include "ceepew_assert.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -166,6 +166,7 @@ HOST_TEST_FALLBACK = [
     "test_ui_navigator",
     "test_pfs_auth",
     "test_gatt_nonce",
+    "test_nonce_uniqueness",
 ]
 
 
