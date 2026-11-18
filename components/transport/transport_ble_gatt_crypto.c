@@ -29,12 +29,10 @@
 static const uint8_t GATT_SALT_LABEL[]    = "CEEPEW_GATT_SALT_v2";
 static const uint8_t GATT_INFO_LABEL[]    = "CEEPEW_GATT_SIGN_PK_v2";
 static const uint8_t GATT_NONCE_LABEL[]   = "CEEPEW_GATT_NONCE_v2";
-static const uint8_t GATT_BOOT_SALT_LABEL[] = "CEEPEW_GATT_BOOT_SALT_v2";
 
 #define GATT_SALT_LABEL_LEN  (sizeof(GATT_SALT_LABEL) - 1U)
 #define GATT_INFO_LABEL_LEN  (sizeof(GATT_INFO_LABEL) - 1U)
 #define GATT_NONCE_LABEL_LEN (sizeof(GATT_NONCE_LABEL) - 1U)
-#define GATT_BOOT_SALT_LABEL_LEN (sizeof(GATT_BOOT_SALT_LABEL) - 1U)
 
 /* Volatile monotonic counter for nonce diversification — increments on
  * every GATT encryption during the current boot session. Conforms to the
@@ -223,6 +221,7 @@ CeePewErr_t gatt_crypto_encrypt_with_ids(const uint8_t session_code[32],
     /* Ensure per-boot salt is initialised before any encrypt call. */
     CeePewErr_t err = gatt_crypto_ensure_boot_salt();
     if (err != CEEPEW_OK) {
+        ceepew_secure_zero(out, GATT_CRYPTO_TOTAL_BYTES);
         return err;
     }
 
