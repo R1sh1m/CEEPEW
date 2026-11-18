@@ -185,6 +185,26 @@ target_link_libraries(test_session_pairing PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
 target_include_directories(test_session_pairing PRIVATE ${COMMON_INCLUDES})
 add_test(NAME test_session_pairing COMMAND test_session_pairing)
 
+# test_gatt_nonce — Stage 1 GATT nonce lifecycle, fail-closed exhaustion & directional separation
+add_executable(test_gatt_nonce
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_gatt_nonce.c
+    ${COMPONENT_DIR}/components/transport/transport_ble_gatt_crypto.c
+)
+target_link_libraries(test_gatt_nonce PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_gatt_nonce PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_gatt_nonce PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_gatt_nonce COMMAND test_gatt_nonce)
+
+# test_nonce_uniqueness — P0 regression: 100 consecutive pairings with same
+# code, verify 0 (ascon_key, session_id) collisions.
+add_executable(test_nonce_uniqueness
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_nonce_uniqueness.c
+)
+target_link_libraries(test_nonce_uniqueness PRIVATE ceepew_mbedtls ceepew_portable)
+target_link_libraries(test_nonce_uniqueness PRIVATE ${MBEDCRYPTO_STATIC_LIBS})
+target_include_directories(test_nonce_uniqueness PRIVATE ${COMMON_INCLUDES})
+add_test(NAME test_nonce_uniqueness COMMAND test_nonce_uniqueness)
+
 # test_pake — PAKE (RFC 9382 CPace principles) mutual key agreement and tag verification
 add_executable(test_pake
     ${CMAKE_CURRENT_SOURCE_DIR}/test_pake.c
