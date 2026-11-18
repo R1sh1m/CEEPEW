@@ -377,7 +377,7 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     /* P0: Generate fresh pairing-specific randomness for this pairing session.
      * Mixed into the HKDF salt below so every pairing produces unique
      * Ascon key/nonce material even with identical session codes. */
-    err = crypto_rng_fill(s_session.pairing_random_self, 16U);
+    CeePewErr_t err = crypto_rng_fill(s_session.pairing_random_self, 16U);
     if (err != CEEPEW_OK) { s_session_fsm_locked = false; return err; }
     s_session.pairing_random_received = false;
 
@@ -388,7 +388,7 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
 
     /* Derive a deterministic session_id using helper function */
     uint8_t session_id_bytes[8];
-    CeePewErr_t err = session_compute_id(session_id_bytes);
+    err = session_compute_id(session_id_bytes);
     if (err != CEEPEW_OK) { s_session_fsm_locked = false; return err; }
 
     /* Store session_id as 64-bit value */
