@@ -88,6 +88,8 @@ logs/**
 host_test_output.txt
 DEVICE_LOG_FINDINGS.md
 ceepew_log_store.json
+# Generated phase / audit reports (local run artefacts, not source)
+/PHASE*_REPORT.md
 CEEPEW_ICITIIT_HARDWARE_LOGS*.md
 drops_report.csv
 # Experiment logs & captures (local run artifacts, not firmware source)
