@@ -144,6 +144,15 @@ Hardware/
 # Local run artifacts (per-session outputs)
 runs/
 
+# Local-use-only run artifacts (not committed project documentation)
+/remaining_tests.md
+tools/*_run_plan.md
+tools/*_plan.md
+tools/*_script.md
+tools/*_report.md
+tools/*_spec.md
+tools/*_checklist.md
+
 # Local IDE/editor configuration
 .clang-tidy
 .clangd
