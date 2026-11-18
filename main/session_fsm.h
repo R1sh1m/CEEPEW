@@ -409,6 +409,36 @@ CeePewErr_t session_get_local_sign_pk(uint8_t pk_out[32]);
  */
 CeePewErr_t session_get_local_box_pubkey(uint8_t pk_out[32]);
 
+/* P0: Get the locally generated pairing-specific randomness (16 bytes).
+ * Generated at session_phase2_initiate() and exchanged over GATT during
+ * Phase 2 pairing. Mixed into the HKDF salt so every pairing produces
+ * unique Ascon key/nonce material.
+ * Available once session_phase2_initiate() has completed (phase >= 2).
+ *
+ * PARAMETERS:
+ *   out: Output buffer for 16-byte pairing_random_self (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — pairing_random_self populated
+ *   CEEPEW_ERR_PARAM — Not yet generated (phase < 2)
+ *   CEEPEW_ERR_NULL_PTR — out is NULL
+ */
+CeePewErr_t session_get_pairing_random_self(uint8_t out[16]);
+
+/* P0: Store the peer's pairing-specific randomness (16 bytes), received
+ * over GATT during Phase 2 pairing. Mixed into the HKDF salt together with
+ * pairing_random_self so both peers compute identical session keys.
+ *
+ * PARAMETERS:
+ *   peer_random: 16-byte pairing_random_peer from peer's GATT payload (not NULL)
+ *
+ * RETURNS:
+ *   CEEPEW_OK — Stored and marked received
+ *   CEEPEW_ERR_PARAM — Not in phase 2 or 3
+ *   CEEPEW_ERR_NULL_PTR — peer_random is NULL
+ */
+CeePewErr_t session_set_pairing_random_peer(const uint8_t peer_random[16]);
+
 /* Store the peer's ephemeral X25519 public key, received over BLE.
  * Must be called before crypto_box encrypt/decrypt will work correctly.
  * Idempotent.

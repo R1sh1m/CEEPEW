@@ -3191,8 +3191,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
       break;
     }
 
-    /* Plaintext = sign_pk[32] || box_pubkey[32] || wifi_mac[6] = 70 bytes.
-     * Encrypted output = 70B ct + 16B tag = 86 bytes. */
+    /* Plaintext = sign_pk[32] || box_pubkey[32] || wifi_mac[6] || uptime_s[4] ||
+     * pairing_random[16] = 90 bytes. */
     uint8_t plaintext[GATT_PLAINTEXT_BYTES];
     memcpy(plaintext, sign_pk, CEEPEW_ED25519_PUBKEY_BYTES);
     memcpy(plaintext + CEEPEW_ED25519_PUBKEY_BYTES, box_pk, 32U);
@@ -3214,9 +3214,25 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
     plaintext[71U] = (uint8_t)((local_uptime_s >> 8U) & 0xFFU);
     plaintext[72U] = (uint8_t)((local_uptime_s >> 16U) & 0xFFU);
     plaintext[73U] = (uint8_t)((local_uptime_s >> 24U) & 0xFFU);
+
+    /* P0: Append pairing-specific randomness (16 bytes) so every pairing
+     * produces unique Ascon key/nonce material even with identical codes. */
+    uint8_t pairing_random[16];
+    CeePewErr_t pr_err = session_get_pairing_random_self(pairing_random);
+    if (pr_err != CEEPEW_OK) {
+      ESP_LOGE(TAG, "GATTC: pairing random unavailable: %d", (int)pr_err);
+      ceepew_secure_zero(sign_pk, sizeof(sign_pk));
+      ceepew_secure_zero(box_pk, sizeof(box_pk));
+      ceepew_secure_zero(wifi_mac, sizeof(wifi_mac));
+      ceepew_secure_zero(session_code, sizeof(session_code));
+      (void)transport_ble_disconnect();
+      break;
+    }
+    memcpy(plaintext + 74U, pairing_random, 16U);
     ceepew_secure_zero(sign_pk, sizeof(sign_pk));
     ceepew_secure_zero(box_pk, sizeof(box_pk));
     ceepew_secure_zero(wifi_mac, sizeof(wifi_mac));
+    ceepew_secure_zero(pairing_random, sizeof(pairing_random));
 
     uint8_t encrypted[GATT_CRYPTO_TOTAL_BYTES];
     CeePewErr_t enc_err =
@@ -3790,6 +3806,17 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
       uint32_t local_now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
       int32_t peer_offset_s = (int32_t)(peer_uptime_s - local_now_s);
       (void)session_set_peer_uptime_offset(peer_offset_s);
+
+      /* P0: Store peer's pairing-specific randomness for HKDF salt mixing. */
+      CeePewErr_t pr_set_err =
+          session_set_pairing_random_peer(decrypted + 74U);
+      if (pr_set_err != CEEPEW_OK) {
+        ESP_LOGE(TAG, "GATTS: failed to store peer pairing random: %d",
+                 (int)pr_set_err);
+        ceepew_secure_zero(decrypted, sizeof(decrypted));
+        break;
+      }
+
       ESP_LOGI(TAG, "GATTS: Peer uptime=%lu s, local=%lu s, offset=%ld s",
                (unsigned long)peer_uptime_s, (unsigned long)local_now_s,
                (long)peer_offset_s);

@@ -15,8 +15,10 @@
  */
 
 #include "transport_ble_gatt_crypto.h"
+#include "ceepew_assert.h"
 #include "crypto_ascon.h"
 #include "crypto_hkdf.h"
+#include "crypto_rng.h"
 #include "crypto_sha256.h"
 #include "ceepew_security_utils.h"
 #include "ceepew_config.h"
@@ -27,27 +29,78 @@
 static const uint8_t GATT_SALT_LABEL[]    = "CEEPEW_GATT_SALT_v2";
 static const uint8_t GATT_INFO_LABEL[]    = "CEEPEW_GATT_SIGN_PK_v2";
 static const uint8_t GATT_NONCE_LABEL[]   = "CEEPEW_GATT_NONCE_v2";
+static const uint8_t GATT_BOOT_SALT_LABEL[] = "CEEPEW_GATT_BOOT_SALT_v2";
 
 #define GATT_SALT_LABEL_LEN  (sizeof(GATT_SALT_LABEL) - 1U)
 #define GATT_INFO_LABEL_LEN  (sizeof(GATT_INFO_LABEL) - 1U)
 #define GATT_NONCE_LABEL_LEN (sizeof(GATT_NONCE_LABEL) - 1U)
+#define GATT_BOOT_SALT_LABEL_LEN (sizeof(GATT_BOOT_SALT_LABEL) - 1U)
 
-/* Monotonic counter for nonce diversification — prevents nonce reuse across
- * GATT writes within the same pairing session. Incremented on every encrypt
- * call. The current value is prepended to the GATT payload and transmitted
- * in-band so the decryptor derives the identical nonce without needing a
- * synchronised local counter. A single byte is sufficient; the counter
- * will never wrap (max 2 retries per pairing). */
+/* Volatile monotonic counter for nonce diversification — increments on
+ * every GATT encryption during the current boot session. Conforms to the
+ * zero-NVS key policy (restarts at 0 on power-on and is never written to flash).
+ * Enforces a fail-closed exhaustion policy at ctr == 255 to strictly prevent
+ * integer wraparound under the same (Kboot, boot_salt) pair. */
 static uint8_t s_gatt_nonce_ctr = 0U;
+
+/* Per-boot TRNG salt for GATT nonce diversification. Generated once per
+ * device boot via crypto_rng_fill() and held in volatile static memory.
+ * Transmitted in-band with every GATT ciphertext so the decryptor derives the
+ * identical nonce. By the birthday bound, provides a 2^-33 collision bound
+ * across 2^16 reboots under identical pairing code. */
+static uint8_t s_gatt_boot_salt[GATT_BOOT_SALT_BYTES];
+static bool    s_gatt_boot_salt_ready = false;
+
+#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
+static bool    s_gatt_boot_salt_force_fail = false;
+
+void gatt_crypto_test_set_trng_fail(bool fail)
+{
+    s_gatt_boot_salt_force_fail = fail;
+    if (fail) {
+        s_gatt_boot_salt_ready = false;
+        ceepew_secure_zero(s_gatt_boot_salt, sizeof(s_gatt_boot_salt));
+    }
+}
+#endif
+
+/* Lazily initialise the per-boot salt from TRNG on first use. Safe to call
+ * from any context; subsequent calls are no-ops. */
+static CeePewErr_t gatt_crypto_ensure_boot_salt(void)
+{
+    if (s_gatt_boot_salt_ready) {
+        return CEEPEW_OK;
+    }
+#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
+    if (s_gatt_boot_salt_force_fail) {
+        ceepew_secure_zero(s_gatt_boot_salt, sizeof(s_gatt_boot_salt));
+        return CEEPEW_ERR_HW;
+    }
+#endif
+    CeePewErr_t err = crypto_rng_fill(s_gatt_boot_salt, GATT_BOOT_SALT_BYTES);
+    if (err != CEEPEW_OK) {
+        /* Fail closed: TRNG failure must never fall back to predictable constants,
+         * timestamps, or MAC addresses. Zero state and abort pairing immediately. */
+        ceepew_secure_zero(s_gatt_boot_salt, sizeof(s_gatt_boot_salt));
+        s_gatt_boot_salt_ready = false;
+        return err;
+    }
+    s_gatt_boot_salt_ready = true;
+    return CEEPEW_OK;
+}
 
 /* Derive the Ascon-128 key and nonce used for the GATT sign_pk write.
  * Both peers run this with the same session_code + sorted device IDs
- * and the same wire_ctr value, producing identical key + nonce.
+ * and the same wire_ctr + boot_salt values, producing identical key + nonce.
  *
  * wire_ctr:      Transmitted counter byte (read by decrypt from in[0],
  *                read by encrypt from the local s_gatt_nonce_ctr before
  *                incrementing). Both peers use the same value so the
  *                nonce matches.
+ * boot_salt:     8-byte per-boot TRNG salt from the encrypting device,
+ *                transmitted in-band (read by decrypt from in[1..8]).
+ *                Changes on every device reboot, preventing cross-reboot
+ *                nonce reuse when ctr restarts at 0.
  * id_a, id_b:    6-byte device IDs (sorted lexicographically by the caller)
  * key_out:       16-byte Ascon key
  * nonce_out:     16-byte Ascon nonce
@@ -57,11 +110,13 @@ static CeePewErr_t gatt_crypto_derive_key_and_nonce(
     const uint8_t id_a[6],
     const uint8_t id_b[6],
     uint8_t wire_ctr,
+    const uint8_t boot_salt[GATT_BOOT_SALT_BYTES],
     uint8_t key_out[GATT_KEY_BYTES],
     uint8_t nonce_out[GATT_NONCE_BYTES])
 {
     CEEPEW_ASSERT(session_code != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(id_a != NULL && id_b != NULL, CEEPEW_ERR_NULL_PTR);
+    CEEPEW_ASSERT(boot_salt != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(key_out != NULL && nonce_out != NULL, CEEPEW_ERR_NULL_PTR);
 
     /* ── salt = SHA256("CEEPEW_GATT_SALT_v2") ── */
@@ -92,11 +147,23 @@ static CeePewErr_t gatt_crypto_derive_key_and_nonce(
         return err;
     }
 
-    /* ── nonce = SHA256("CEEPEW_GATT_NONCE_v2" || session_code || wire_ctr)[:16] ── */
-    uint8_t nonce_input[GATT_NONCE_LABEL_LEN + 32U + 1U];
-    memcpy(&nonce_input[0], GATT_NONCE_LABEL, GATT_NONCE_LABEL_LEN);
-    memcpy(&nonce_input[GATT_NONCE_LABEL_LEN], session_code, 32U);
-    nonce_input[GATT_NONCE_LABEL_LEN + 32U] = wire_ctr;
+    /* ── nonce = SHA256("CEEPEW_GATT_NONCE_v2" || session_code || boot_salt || wire_ctr)[:16] ──
+     *
+     * boot_salt changes on every device reboot, so even if wire_ctr
+     * restarts at 0 after a reboot and the session code is unchanged,
+     * the (key, nonce) pair differs from any previous boot. Within a
+     * single boot, wire_ctr only increases, so consecutive pairings
+     * between the same two devices with the same code also produce
+     * distinct nonces. */
+    uint8_t nonce_input[GATT_NONCE_LABEL_LEN + 32U + GATT_BOOT_SALT_BYTES + 1U];
+    uint8_t *cursor = nonce_input;
+    memcpy(cursor, GATT_NONCE_LABEL, GATT_NONCE_LABEL_LEN);
+    cursor += GATT_NONCE_LABEL_LEN;
+    memcpy(cursor, session_code, 32U);
+    cursor += 32U;
+    memcpy(cursor, boot_salt, GATT_BOOT_SALT_BYTES);
+    cursor += GATT_BOOT_SALT_BYTES;
+    *cursor = wire_ctr;
 
     uint8_t nonce_full[CEEPEW_SHA256_BYTES];
     err = crypto_sha256_compute(nonce_input, (uint32_t)sizeof(nonce_input),
@@ -150,41 +217,67 @@ CeePewErr_t gatt_crypto_encrypt_with_ids(const uint8_t session_code[32],
     uint8_t nonce[GATT_NONCE_BYTES];
     uint8_t lo[6];
     uint8_t hi[6];
+    uint8_t aad[GATT_COUNTER_BYTES];   /* [ctr][boot_salt] = 9 bytes */
     gatt_crypto_sort_ids(id_self, id_peer, lo, hi);
 
-    /* Read the monotonic counter before incrementing — this value is
-     * prepended to the wire format and used for nonce derivation on
-     * both sides. */
-    uint8_t wire_ctr = s_gatt_nonce_ctr;
-    s_gatt_nonce_ctr++;
-
-    CeePewErr_t err = gatt_crypto_derive_key_and_nonce(session_code,
-                                                       lo, hi,
-                                                       wire_ctr,
-                                                       key, nonce);
+    /* Ensure per-boot salt is initialised before any encrypt call. */
+    CeePewErr_t err = gatt_crypto_ensure_boot_salt();
     if (err != CEEPEW_OK) {
-        ceepew_secure_zero(key, sizeof(key));
-        ceepew_secure_zero(nonce, sizeof(nonce));
         return err;
     }
 
-    /* Ascon-128 AEAD with the counter byte as AAD — the plaintext (sign_pk ||
-     * box_pubkey || wifi_mac) is bound to the key (derived from session_code)
-     * and the counter is authenticated by the AEAD tag. Wire format:
-     * out[0] = counter, out[1..86] = ciphertext || tag. */
+    /* Enforce fail-closed exhaustion policy: the 1-byte volatile counter
+     * permits 255 encryptions per boot. At ctr == 255, refuse further
+     * encryption to prevent counter wraparound and duplicate nonce derivation
+     * under the same (Kboot, boot_salt). A physical reboot is required to
+     * sample a fresh TRNG boot_salt and reset the counter. */
+    if (s_gatt_nonce_ctr >= 255U) {
+        return CEEPEW_ERR_NONCE_EXHAUSTED;
+    }
+
+    /* Read the monotonic counter before incrementing. */
+    uint8_t wire_ctr = s_gatt_nonce_ctr;
+    s_gatt_nonce_ctr++;
+
+    /* Write [ctr (1B) || boot_salt (8B)] prefix directly into wire format at out[0..8] */
+    out[0] = wire_ctr;
+    memcpy(&out[1], s_gatt_boot_salt, GATT_BOOT_SALT_BYTES);
+
+    /* Build combined AAD: [ctr (1B) || boot_salt (8B)] = 9 bytes. */
+    aad[0] = wire_ctr;
+    memcpy(&aad[1], s_gatt_boot_salt, GATT_BOOT_SALT_BYTES);
+
+    err = gatt_crypto_derive_key_and_nonce(session_code,
+                                           lo, hi,
+                                           wire_ctr,
+                                           s_gatt_boot_salt,
+                                           key, nonce);
+    if (err != CEEPEW_OK) {
+        ceepew_secure_zero(key, sizeof(key));
+        ceepew_secure_zero(nonce, sizeof(nonce));
+        ceepew_secure_zero(aad, sizeof(aad));
+        ceepew_secure_zero(out, GATT_CRYPTO_TOTAL_BYTES);
+        return err;
+    }
+
+    /* Ascon-128 AEAD with [ctr || boot_salt] as AAD — the plaintext is
+     * bound to the key (derived from session_code) and the counter+boot
+     * salt are authenticated by the AEAD tag. Wire format:
+     * out[0]     = counter, out[1..8] = boot salt,
+     * out[9..114] = ciphertext || tag. */
     uint16_t ct_len = GATT_CRYPTO_TOTAL_BYTES - GATT_COUNTER_BYTES;
     err = crypto_ascon_aead_encrypt(key, nonce,
-                                    &wire_ctr, GATT_COUNTER_BYTES,
+                                    aad, GATT_COUNTER_BYTES,
                                     plaintext, GATT_PLAINTEXT_BYTES,
                                     out + GATT_COUNTER_BYTES, &ct_len);
     ceepew_secure_zero(key, sizeof(key));
     ceepew_secure_zero(nonce, sizeof(nonce));
+    ceepew_secure_zero(aad, sizeof(aad));
     if (err != CEEPEW_OK) {
         ceepew_secure_zero(out, GATT_CRYPTO_TOTAL_BYTES);
         return err;
     }
     CEEPEW_ASSERT(ct_len == GATT_CRYPTO_TOTAL_BYTES - GATT_COUNTER_BYTES, CEEPEW_ERR_CRYPTO);
-    out[0] = wire_ctr;
     return CEEPEW_OK;
 }
 
@@ -200,9 +293,15 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
     CEEPEW_ASSERT(in != NULL, CEEPEW_ERR_NULL_PTR);
     CEEPEW_ASSERT(plaintext_out != NULL, CEEPEW_ERR_NULL_PTR);
 
-    /* The first byte of the wire payload is the counter used for
-     * nonce derivation — extract it before decrypting. */
+    /* The first byte of the wire payload is the counter; bytes 1..8 are the
+     * encrypting device's per-boot salt. Both are needed for nonce derivation
+     * and are bound as AAD. Extract them before decrypting. */
     uint8_t wire_ctr = in[0];
+    uint8_t boot_salt[GATT_BOOT_SALT_BYTES];
+    memcpy(boot_salt, &in[1], GATT_BOOT_SALT_BYTES);
+    uint8_t aad[GATT_COUNTER_BYTES];
+    aad[0] = wire_ctr;
+    memcpy(&aad[1], boot_salt, GATT_BOOT_SALT_BYTES);
     const uint8_t *ct_tag = in + GATT_COUNTER_BYTES;
 
     uint8_t key[GATT_KEY_BYTES];
@@ -214,20 +313,25 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
     CeePewErr_t err = gatt_crypto_derive_key_and_nonce(session_code,
                                                        lo, hi,
                                                        wire_ctr,
+                                                       boot_salt,
                                                        key, nonce);
     if (err != CEEPEW_OK) {
         ceepew_secure_zero(key, sizeof(key));
         ceepew_secure_zero(nonce, sizeof(nonce));
+        ceepew_secure_zero(boot_salt, sizeof(boot_salt));
+        ceepew_secure_zero(aad, sizeof(aad));
         return err;
     }
 
     uint16_t pt_len = GATT_PLAINTEXT_BYTES;
     err = crypto_ascon_aead_decrypt(key, nonce,
-                                    &wire_ctr, GATT_COUNTER_BYTES,
+                                    aad, GATT_COUNTER_BYTES,
                                     ct_tag, GATT_CRYPTO_TOTAL_BYTES - GATT_COUNTER_BYTES,
                                     plaintext_out, &pt_len);
     ceepew_secure_zero(key, sizeof(key));
     ceepew_secure_zero(nonce, sizeof(nonce));
+    ceepew_secure_zero(boot_salt, sizeof(boot_salt));
+    ceepew_secure_zero(aad, sizeof(aad));
     if (err == CEEPEW_ERR_CRYPTO) {
         /* Ascon returns CRYPTO on tag mismatch — re-map to AUTH_FAIL so
          * the caller (GATTS write handler) can react specifically
@@ -242,3 +346,16 @@ CeePewErr_t gatt_crypto_decrypt_with_ids(const uint8_t session_code[32],
     CEEPEW_ASSERT(pt_len == GATT_PLAINTEXT_BYTES, CEEPEW_ERR_CRYPTO);
     return CEEPEW_OK;
 }
+
+#ifdef CONFIG_CEEPEW_DEVELOPMENT_MODE
+void gatt_crypto_test_set_state(uint8_t ctr, const uint8_t boot_salt[GATT_BOOT_SALT_BYTES])
+{
+    s_gatt_nonce_ctr = ctr;
+    if (boot_salt != NULL) {
+        memcpy(s_gatt_boot_salt, boot_salt, GATT_BOOT_SALT_BYTES);
+        s_gatt_boot_salt_ready = true;
+    } else {
+        s_gatt_boot_salt_ready = false;
+    }
+}
+#endif

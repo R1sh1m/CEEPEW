@@ -108,6 +108,16 @@ typedef struct {
      * the AEAD payload sealed under the same session-code-derived key) this
      * binds the key to the human-entered code. */
     bool     peer_commitment_verified;
+
+    /* P0: Pairing-specific randomness exchanged over GATT during Phase 2.
+     * Each device contributes 16 bytes of fresh TRNG randomness. Both
+     * values are mixed into the HKDF salt so that every pairing — even
+     * with the same session code — produces unique Ascon key/nonce material.
+     * pairing_random_self is generated locally; pairing_random_peer is
+     * received from the peer in the GATT identity exchange payload. */
+    uint8_t  pairing_random_self[16];
+    uint8_t  pairing_random_peer[16];
+    bool     pairing_random_received;  /* true once peer's randomness stored */
 } SessionCtx_t;
 
 /* Global session context (per-device; single active session at a time) */
@@ -364,6 +374,13 @@ CeePewErr_t session_phase2_initiate(const uint8_t session_code[32]){
     s_session.phase = 2U;
     memcpy(s_session.session_code, session_code, 32U);
 
+    /* P0: Generate fresh pairing-specific randomness for this pairing session.
+     * Mixed into the HKDF salt below so every pairing produces unique
+     * Ascon key/nonce material even with identical session codes. */
+    err = crypto_rng_fill(s_session.pairing_random_self, 16U);
+    if (err != CEEPEW_OK) { s_session_fsm_locked = false; return err; }
+    s_session.pairing_random_received = false;
+
     /* Full power for pairing (fast BLE + low latency) */
     (void)hal_radio_set_power_save(CEEPEW_WIFI_PS_ACTIVE_CHAT);
     (void)transport_ble_set_scan_duty_cycle(CEEPEW_BLE_SCAN_INTERVAL_PAIR_MS,
@@ -488,7 +505,7 @@ CeePewErr_t session_phase2_derive_key(void){
 
     /* Declare all intermediate values needed for error cleanup */
     uint8_t ds_mix[32] = {0};
-    uint8_t salt_input[64U] = {0};
+    uint8_t salt_input[96U] = {0};
     uint8_t hkdf_salt[32] = {0};
     uint8_t commitment[CEEPEW_COMMITMENT_BYTES] = {0};
     uint8_t hkdf_info[96U] = {0};
@@ -498,17 +515,36 @@ CeePewErr_t session_phase2_derive_key(void){
     digital_sum_mix(s_session.session_code, 32U, ds_mix);
 
     /* Step 2: Derive HKDF salt.
-     * If eFuse identity is provisioned, use device-bound derivation:
-     *   salt = SHA-256( HMAC(efuse_key, ds_mix) || SHA256(ds_mix || code) )
-     * Otherwise, fallback to the original:
-     *   salt = SHA-256(ds_mix || code) */
+     * P0: Mix in pairing-specific randomness so every pairing produces
+     * unique Ascon key/nonce material even with identical session codes.
+     *   Without eFuse:
+     *     salt = SHA-256(ds_mix || code || pairing_random_self || pairing_random_peer)
+     *   With eFuse:
+     *     salt = SHA-256(HMAC(efuse_key, ds_mix) || SHA256(ds_mix || code ||
+     *                          pairing_random_self || pairing_random_peer))
+     * Both peers exchange pairing_random values over GATT during Phase 2,
+     * so both compute identical salt → identical HKDF output → identical keys.
+     * pairing_random_received is set once the peer's GATT payload is
+     * decrypted (see transport_ble.c GATTS handler). */
 #ifdef CONFIG_CEEPEW_EFUSE_HMAC_KEY
     err = crypto_hmac_efuse_derive_salt(ds_mix, s_session.session_code, hkdf_salt);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 #else
     memcpy(salt_input, ds_mix, 32U);
     memcpy(salt_input + 32U, s_session.session_code, 32U);
-    err = crypto_sha256_compute(salt_input, 64U, hkdf_salt);
+    /* P0: Append pairing randomness in canonical initiator-then-responder order
+     * so both peers compute an identical salt. is_initiator is true iff local
+     * MAC < peer MAC; both peers derive the same role from the same MAC ordering. */
+    CEEPEW_ASSERT(s_session.pairing_random_received,
+                  CEEPEW_ERR_PARAM);
+    if (s_session.is_initiator) {
+        memcpy(salt_input + 64U, s_session.pairing_random_self, 16U);
+        memcpy(salt_input + 80U, s_session.pairing_random_peer, 16U);
+    } else {
+        memcpy(salt_input + 64U, s_session.pairing_random_peer, 16U);
+        memcpy(salt_input + 80U, s_session.pairing_random_self, 16U);
+    }
+    err = crypto_sha256_compute(salt_input, 96U, hkdf_salt);
     if (err != CEEPEW_OK) { goto error_cleanup; }
 #endif
 
@@ -842,6 +878,25 @@ CeePewErr_t session_get_local_box_pubkey(uint8_t pk_out[32])
     CEEPEW_ASSERT(pk_out != NULL, CEEPEW_ERR_NULL_PTR);
 
     memcpy(pk_out, g_crypto_ctx.box_pubkey, 32U);
+    return CEEPEW_OK;
+}
+
+CeePewErr_t session_get_pairing_random_self(uint8_t out[16])
+{
+    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(out != NULL, CEEPEW_ERR_NULL_PTR);
+
+    memcpy(out, s_session.pairing_random_self, 16U);
+    return CEEPEW_OK;
+}
+
+CeePewErr_t session_set_pairing_random_peer(const uint8_t peer_random[16])
+{
+    CEEPEW_ASSERT(s_session.phase >= 2U, CEEPEW_ERR_PARAM);
+    CEEPEW_ASSERT(peer_random != NULL, CEEPEW_ERR_NULL_PTR);
+
+    memcpy(s_session.pairing_random_peer, peer_random, 16U);
+    s_session.pairing_random_received = true;
     return CEEPEW_OK;
 }
 
