@@ -1,12 +1,12 @@
 # Remaining Tests — Execution & Evidence Summary
 
-**Last Updated**: 2026-11-17  
-**Status**: **COMPLETE** — All tests (B, C1, C2, E, A1, A2, A3, D) completed with 100% PASS on physical hardware  
+**Last Updated**: 2026-11-18  
+**Status**: **PENDING** — Core campaigns (B, C1, C2, E, A1, A2, A3, D) completed with 100% PASS on physical hardware. ESP-IDF v6.1 standardization pending re-run.  
 **Evidence Goal**: All gaps closed for IEEE archival paper (`docs/paper/The Paper/FINAL/ceepew_unrestricted.tex`)
 
 ---
 
-## Executive Summary
+## Executive Summary — Completed Tests
 
 | Test | Description | Result | Evidence Class | Script / Artifact |
 |------|-------------|--------|----------------|-------------------|
@@ -18,6 +18,14 @@
 | **A2** | OTA replay-gate: 8 edge cases | ✅ 8/8 PASS (100% rejection/delivery) | `M-HW` | `data/derived/A2_edge.json` |
 | **A3** | ARQ duplicate vs. replay bitmap | ✅ 5/5 PASS (dual-gate verified) | `M-HW` | `data/derived/A3_arq.json` |
 | **D** | FEC controlled corruption | ✅ PASS (100% 1-bit correct, 100% 2/3/burst drop) | `M-HW` / `M-HOST` | `data/derived/D_fec_results.json` |
+
+---
+
+## Pending — ESP-IDF v6.1 Standardization
+
+| Test | Description | Status | Evidence Class | Notes |
+|------|-------------|--------|----------------|-------|
+| **F** | Re-run key timing campaigns under ESP-IDF v6.1 | ⏳ PENDING | `M-HW` | All campaigns (X1, X5, X6, X8, X9, E-series) will be re-run under v6.1 as a single controlled toolchain. Codebase is cross-compatible across v6.0.2/v6.0.3/v6.1. Historical data was captured under mixed versions (v6.0.2 for E1--E3/X1--X12; v6.1-dirty for A--D). |
 
 ---
 
@@ -45,6 +53,13 @@
 3. **Stack Safety & Pairing Resilience (B, C1, C2, E)**:
    - Stack high-water mark demonstrates ≥7936 B headroom across both cores with zero stack overflows and zero canary trips.
    - BLE pairing achieved 10/10 consecutive successful pairing cycles under stress.
+
+4. **ESP-IDF Version Drift (Pending)**:
+   - Historical campaigns (E1--E3, X1--X12): ESP-IDF v6.0.2
+   - Follow-up campaigns (A--D, diagnostics): ESP-IDF v6.1-dirty
+   - Production target: ESP-IDF v6.0.3
+   - **Decision**: Standardize all timing campaigns to v6.1 (backwards-compatible across v6.x series)
+   - **Action**: Re-run key timing campaigns under v6.1 before final submission
 
 ---
 
